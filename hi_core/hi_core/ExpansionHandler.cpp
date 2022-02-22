@@ -404,7 +404,7 @@ bool ExpansionHandler::installFromResourceFile(const File& resourceFile, const F
 			samplesDir.createDirectory();
 
 			if (sampleDirectoryToUse != getExpansionFolder() && 
-				sampleDirectoryToUse != getMainController()->getCurrentFileHandler().getSubDirectory(FileHandlerBase::Samples))
+				sampleDirectoryToUse != samplesDir)
 				FileHandlerBase::createLinkFileInFolder(samplesDir, sampleDirectoryToUse);
 			else
 				FileHandlerBase::getLinkFile(samplesDir).deleteFile();
