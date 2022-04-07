@@ -292,9 +292,6 @@ public:
 	/** Overwrite this method and update the value of the component. */
 	virtual void updateValue(var newValue) {};
 
-	/** Call this in your listener callback with the new value. */
-	void changed(var newValue);
-
 	bool setMouseCursorFromParentPanel(ScriptComponent* sc, MouseCursor& c);
 
 	Component *getComponent() { return component; }
@@ -370,6 +367,8 @@ protected:
 
 	void globalFocusChanged(Component* focusedComponent) override;
 
+    ScopedPointer<LookAndFeel> localLookAndFeel;
+    
 private:
 
 	bool wasFocused = false;
@@ -413,7 +412,7 @@ private:
 
 	const int index;
 
-	ScopedPointer<LookAndFeel> localLookAndFeel;
+	
 	
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ScriptCreatedComponentWrapper)
 };
@@ -723,7 +722,7 @@ public:
 		
 		void updateValue(var newValue) override;
 
-		void sliderPackChanged(SliderPackData *, int newIndex) override { changed(newIndex); };
+		void sliderPackChanged(SliderPackData *, int newIndex) override { /*changed(newIndex);*/ };
 
 		void sourceHasChanged(ComplexDataUIBase* oldSource, ComplexDataUIBase* newSource) override
 		{
