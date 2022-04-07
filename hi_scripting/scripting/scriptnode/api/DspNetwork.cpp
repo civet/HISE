@@ -445,6 +445,9 @@ void DspNetwork::process(AudioSampleBuffer& b, HiseEventBuffer* e)
 
 void DspNetwork::process(ProcessDataDyn& data)
 {
+    if(!isInitialised())
+        return;
+    
 	if (projectNodeHolder.isActive())
 	{
 		projectNodeHolder.process(data);
@@ -506,6 +509,8 @@ void DspNetwork::prepareToPlay(double sampleRate, double blockSize)
 				if (projectNodeHolder.isActive())
 					projectNodeHolder.prepare(currentSpecs);
 			}
+            
+            initialised = true;
 		}
 		catch (String& errorMessage)
 		{
@@ -1382,7 +1387,7 @@ void DspNetwork::SelectionUpdater::changeListenerCallback(ChangeBroadcaster*)
 #if HISE_INCLUDE_SNEX
 juce::File DspNetwork::CodeManager::getCodeFolder() const
 {
-	File f = parent.getScriptProcessor()->getMainController_()->getActiveFileHandler()->getSubDirectory(FileHandlerBase::DspNetworks).getChildFile("CodeLibrary");
+	File f = parent.getScriptProcessor()->getMainController_()->getCurrentFileHandler().getSubDirectory(FileHandlerBase::DspNetworks).getChildFile("CodeLibrary");
 	f.createDirectory();
 	return f;
 }

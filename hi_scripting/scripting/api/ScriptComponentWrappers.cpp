@@ -79,13 +79,6 @@ void ScriptCreatedComponentWrapper::updateComponent(int propertyIndex, var newVa
 	}
 }
 
-void ScriptCreatedComponentWrapper::changed(var newValue)
-{
-	getScriptComponent()->value = newValue;
-
-	dynamic_cast<ProcessorWithScriptingContent*>(getProcessor())->controlCallback(getScriptComponent(), newValue);
-}
-
 bool ScriptCreatedComponentWrapper::setMouseCursorFromParentPanel(ScriptComponent* sc, MouseCursor& c)
 {
 	if (sc == nullptr)
@@ -478,23 +471,7 @@ void ScriptCreatedComponentWrappers::SliderWrapper::updateValue(var newValue)
 
 void ScriptCreatedComponentWrappers::SliderWrapper::sliderValueChanged(Slider *s)
 {
-	if (s->getSliderStyle() == Slider::TwoValueHorizontal)
-	{
-		if (s->getThumbBeingDragged() == 1)
-		{
-			dynamic_cast<ScriptingApi::Content::ScriptSlider*>(getScriptComponent())->setMinValue(s->getMinValue());
-			changed(s->getMinValue());
-		}
-		else
-		{
-			dynamic_cast<ScriptingApi::Content::ScriptSlider*>(getScriptComponent())->setMaxValue(s->getMaxValue());
-			changed(s->getMaxValue());
-		}
-	}
-	else
-	{
-		/*changed(s->getValue());*/ // setInternalAttribute handles this for .
-	}
+	
 }
 
 void ScriptCreatedComponentWrappers::SliderWrapper::updateTooltip(Slider * s)
@@ -1209,7 +1186,11 @@ ScriptCreatedComponentWrapper(content, index)
     
     auto slaf = &mc->getGlobalLookAndFeel();
 
-    if (auto s = dynamic_cast<TableEditor::LookAndFeelMethods*>(slaf))
+    if(auto l = dynamic_cast<TableEditor::LookAndFeelMethods*>(localLookAndFeel.get()))
+    {
+        t->setSpecialLookAndFeel(localLookAndFeel, false);
+    }
+    else if (auto s = dynamic_cast<TableEditor::LookAndFeelMethods*>(slaf))
     {
         t->setSpecialLookAndFeel(slaf, false);
     }
@@ -1669,7 +1650,7 @@ void ScriptCreatedComponentWrappers::ImageWrapper::updatePopupMenu(ScriptingApi:
 
 void ScriptCreatedComponentWrappers::ImageWrapper::mouseCallback(const var &mouseInformation)
 {
-    changed(mouseInformation);
+    
 }
 
 ScriptCreatedComponentWrappers::PanelWrapper::PanelWrapper(ScriptContentComponent *content, ScriptingApi::Content::ScriptPanel *panel, int index) :
@@ -2347,6 +2328,17 @@ ScriptCreatedComponentWrappers::FloatingTileWrapper::FloatingTileWrapper(ScriptC
 	ft->setOpaque(false);
 	ft->setContent(floatingTile->getContentData());
 	ft->refreshRootLayout();
+
+    if (auto l = floatingTile->createLocalLookAndFeel())
+    {
+        localLookAndFeel = l;
+        
+        Component::callRecursive<Component>(ft, [l](Component* c)
+        {
+            c->setLookAndFeel(l);
+            return false;
+        });
+    }
 }
 
 
@@ -2653,7 +2645,9 @@ void ScriptedControlAudioParameter::setParameterNotifyingHostInternal(int index,
 
 	auto sanitizedValue = jlimit<float>(range.start, range.end, newValue);
 
+	parentProcessor->beginParameterChangeGesture(index);
 	parentProcessor->setParameterNotifyingHost(index, range.convertTo0to1(sanitizedValue));
+	parentProcessor->endParameterChangeGesture(index);
 }
 
 
@@ -2682,7 +2676,8 @@ int ScriptCreatedComponentWrappers::ViewportWrapper::ColumnListBoxModel::getNumR
 
 void ScriptCreatedComponentWrappers::ViewportWrapper::ColumnListBoxModel::listBoxItemClicked(int row, const MouseEvent &)
 {
-	parent->changed(row);
+	parent->getScriptComponent()->setValue(row);
+	parent->getScriptComponent()->changed();
 }
 
 void ScriptCreatedComponentWrappers::ViewportWrapper::ColumnListBoxModel::paintListBoxItem(int rowNumber, Graphics &g, int width, int height, bool rowIsSelected)
@@ -2706,7 +2701,8 @@ void ScriptCreatedComponentWrappers::ViewportWrapper::ColumnListBoxModel::paintL
 
 void ScriptCreatedComponentWrappers::ViewportWrapper::ColumnListBoxModel::returnKeyPressed(int row)
 {
-	parent->changed(row);
+	parent->getScriptComponent()->setValue(row);
+	parent->getScriptComponent()->changed();
 }
 
 

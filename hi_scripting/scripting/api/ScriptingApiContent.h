@@ -541,6 +541,9 @@ public:
         /** Returns the absolute y-position relative to the interface. */
         int getGlobalPositionY();
         
+		/** Returns list of component's children */
+		var getChildComponents();
+				
 		/** Returns a [x, y, w, h] array that was reduced by the given amount. */
 		var getLocalBounds(float reduceAmount);
 
@@ -569,7 +572,7 @@ public:
 		void setControlCallback(var controlFunction);
 
 		/** Call this to indicate that the value has changed (the onControl callback will be executed. */
-		void changed();
+		virtual void changed();
 
 		/** Returns a list of all property IDs as array. */
 		var getAllProperties();
@@ -618,6 +621,10 @@ public:
 
 		bool isConnectedToProcessor() const;;
 
+		bool isConnectedToGlobalCable() const;
+
+		void sendGlobalCableValue(var v);
+
 		Processor* getConnectedProcessor() const { return connectedProcessor.get(); };
 
 		int getConnectedParameterIndex() { return connectedParameterIndex; };
@@ -663,6 +670,10 @@ public:
 		{
 			return scriptChangedProperties.contains(id);
 		}
+
+		void repaintThisAndAllChildren();
+
+
 
 		void setPropertyToLookFor(const Identifier& id)
 		{
@@ -778,6 +789,8 @@ public:
             ProcessorWithScriptingContent* p;
         };
         
+		struct GlobalCableConnection;
+
 		AsyncControlCallbackSender controlSender;
 
 		bool isPositionProperty(Identifier id) const;
@@ -809,6 +822,8 @@ public:
 
 		WeakReference<Processor> connectedProcessor;
 		int connectedParameterIndex = -1;
+
+		ScopedPointer<GlobalCableConnection> globalConnection;
 
         int connectedMacroIndex = -1;
         bool macroRecursionProtection = false;
@@ -874,6 +889,7 @@ public:
 		/** Set the value from a 0.0 to 1.0 range */
 		void setValueNormalized(double normalizedValue) override;
 
+		/** Returns the normalized value. */
 		double getValueNormalized() const override;
 
 		/** Sets the range and the step size of the knob. */
@@ -1145,7 +1161,8 @@ public:
 
 
 	struct ComplexDataScriptComponent : public ScriptComponent,
-										public ExternalDataHolder
+										public ExternalDataHolder,
+										public ComplexDataUIUpdaterBase::EventListener
 	{
 		ComplexDataScriptComponent(ProcessorWithScriptingContent* base, Identifier name, snex::ExternalData::DataType type_);;
 			
@@ -1236,11 +1253,22 @@ public:
 
 		var registerComplexDataObjectAtParent(int index = -1);
 
+		void onComplexDataEvent(ComplexDataUIUpdaterBase::EventType t, var data) override
+		{
+			
+		}
+
 	protected:
 
 		void updateCachedObjectReference()
 		{
+			if (cachedObjectReference != nullptr)
+				cachedObjectReference->getUpdater().removeEventListener(this);
+
 			cachedObjectReference = getComplexBaseType(type, 0);
+
+			if (cachedObjectReference != nullptr)
+				cachedObjectReference->getUpdater().addEventListener(this);
 		}
 
 	private:
@@ -1295,8 +1323,8 @@ public:
 			setScriptObjectProperty(getIndexPropertyId(), index, sendNotification);
 		}
 
-		/** Returns the table value from 0.0 to 1.0 according to the input value from 0 to 127. */
-		float getTableValue(int inputValue);
+		/** Returns the table value from 0.0 to 1.0 according to the input value from 0.0 to 1.0. */
+		float getTableValue(float inputValue);
 
 		/** Connects the table to an existing Processor. */
 		/** Makes the table snap to the given x positions (from 0.0 to 1.0). */
@@ -1385,7 +1413,11 @@ public:
 		/** Registers this sliderpack to the script processor to be acessible from the outside. */
 		var registerAtParent(int pIndex);
 
+		void onComplexDataEvent(ComplexDataUIUpdaterBase::EventType t, var data) override;
+
 		// ========================================================================================================
+
+		void changed() override;
 
 		struct Wrapper;
 
@@ -1748,20 +1780,7 @@ public:
 
 		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor=sendNotification) override
 		{
-			if (id == getIdFor((int)ScriptComponent::Properties::visible))
-			{
-				const bool wasVisible = (bool)getScriptObjectProperty(visible);
-
-				const bool isNowVisible = (bool)newValue;
-
-				setScriptObjectProperty(visible, newValue);
-
-				if (wasVisible != isNowVisible)
-				{
-					repaintThisAndAllChildren();
-
-				}
-			}
+			
 
 			ScriptComponent::setScriptObjectPropertyWithChangeMessage(id, newValue, notifyEditor);
 
@@ -1777,8 +1796,6 @@ public:
 			}
 #endif
 		}
-
-		void repaintThisAndAllChildren();
 
 		struct Wrapper;
 
