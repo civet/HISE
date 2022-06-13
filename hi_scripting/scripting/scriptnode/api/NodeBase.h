@@ -127,18 +127,14 @@ public:
 	/** Sets the value immediately and stores it asynchronously. */
 	void setValueAsync(double newValue);
 
+	/** Returns the range properties as JSON object. */
+	var getRangeObject() const;
 
+	/** Updates the parameter range from the given object. */
+	void setRangeFromObject(var propertyObject);
 
     /** Sets a range property. */
-    void setRangeProperty(String id, var newValue)
-    {
-        Identifier i(id);
-        
-        if(RangeHelpers::isRangeId(i))
-        {
-            data.setProperty(i, newValue, nullptr);
-        }
-    }
+    void setRangeProperty(String id, var newValue);
     
 	/** Stores the value synchronously and calls the callback. */
 	void setValueSync(double newValue);
@@ -409,6 +405,12 @@ public:
 	/** Returns a reference to a parameter.*/
 	var getParameter(var indexOrId) const;
 
+	/** Returns the number of parameters. */
+	int getNumParameters() const;;
+
+	/** Returns a list of child nodes if this node is a container. */
+	var getChildNodes(bool recursive);
+
 	// ============================================================================================= END NODE API
 
 	void setValueTreeProperty(const Identifier& id, const var value);
@@ -490,7 +492,7 @@ public:
 		int index = 0;
 	};
 	
-	int getNumParameters() const;;
+	
 	Parameter* getParameterFromName(const String& id) const;
 	Parameter* getParameterFromIndex(int index) const;
 
@@ -534,6 +536,19 @@ public:
 
 	int getCurrentBlockRate() const { return lastBlockSize; }
 
+    void setSignalPeaks(float* p, int numChannels, bool postSignal)
+    {
+		auto& s = signalPeaks[(int)postSignal];
+
+        for(int i = 0; i < numChannels; i++)
+        {
+            s[i] *= 0.5f;
+            s[i] += 0.5f * p[i];
+        }
+    }
+    
+    float getSignalPeak(int channel, bool post) const { return signalPeaks[(int)post][channel]; }
+    
 protected:
 
 	ValueTree v_data;
@@ -541,11 +556,15 @@ protected:
 
 private:
 
+    span<span<float, NUM_MAX_CHANNELS>, 2> signalPeaks;
+    
 	void updateBypassState(Identifier, var newValue)
 	{
 		auto shouldBeBypassed = (bool)newValue;
 		setBypassed((bool)newValue);
 
+        ignoreUnused(shouldBeBypassed);
+        
 		// This needs to be set in the virtual method above
 		jassert(shouldBeBypassed == bypassState);
 	}
@@ -594,6 +613,33 @@ struct DummyNodeProfiler
 	}
 };
 
+struct ProcessDataPeakChecker
+{
+    ProcessDataPeakChecker(NodeBase* n, ProcessDataDyn& d_);
+    ~ProcessDataPeakChecker();
+    
+	void check(bool post);
+    
+    NodeBase& p;
+    ProcessDataDyn& d;
+};
+
+#ifndef ALLOW_FRAME_SIGNAL_CHECK
+#define ALLOW_FRAME_SIGNAL_CHECK 1
+#endif
+
+struct FrameDataPeakChecker
+{
+	FrameDataPeakChecker(NodeBase* n, float* d, int s);
+
+	~FrameDataPeakChecker();
+
+	void check(bool post);
+
+	NodeBase& p;
+	dyn<float> b;
+};
+
 struct RealNodeProfiler
 {
 	RealNodeProfiler(NodeBase* n, int numSamples);
@@ -639,6 +685,8 @@ struct ConnectionSourceManager
 
 		~CableRemoveListener();
 
+        bool initListeners();
+        
 		ValueTree data;
 		ValueTree sourceNode;
 		ValueTree targetNode;
@@ -650,6 +698,7 @@ struct ConnectionSourceManager
 		valuetree::RemoveListener sourceRemoveUpdater;
 		valuetree::PropertyListener targetRangeListener;
 
+        JUCE_DECLARE_WEAK_REFERENCEABLE(CableRemoveListener);
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CableRemoveListener);
 	};
 

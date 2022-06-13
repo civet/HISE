@@ -146,6 +146,7 @@ ValueTree BaseExporter::collectAllSampleMapsInDirectory()
 
 bool CompileExporter::globalCommandLineExport = false;
 bool CompileExporter::useCIMode = false;
+int CompileExporter::forcedVSTVersion = 0;
 
 void CompileExporter::printErrorMessage(const String& title, const String &message)
 {
@@ -311,6 +312,10 @@ CompileExporter::ErrorCodes CompileExporter::compileFromCommandLine(const String
 
 		BuildOption b = exporter.getBuildOptionFromCommandLine(args);
 
+		
+
+
+
 		pluginFile = HelperClasses::getFileNameForCompiledPlugin(exporter.dataObject, mainSynthChain, b);
 
 		exporter.setRawExportMode(exportType == "export_raw");
@@ -355,7 +360,27 @@ int CompileExporter::getBuildOptionPart(const String& argument)
 	{
 	case 'p':
 	{
-		const String pluginName = argument.fromFirstOccurrenceOf("-p:", false, true);
+		const String pluginName = argument.fromFirstOccurrenceOf("-p:", false, true).toUpperCase();
+
+		if (pluginName == "VST23AU")
+		{
+			CompileExporter::forcedVSTVersion = 23; // you now, 2 + 3...
+			return 0x0010;
+		}
+
+		if (pluginName == "VST2")
+		{
+			CompileExporter::forcedVSTVersion = 2;
+			return 0x0010;
+		}
+			
+		else if (pluginName == "VST3")
+		{
+			CompileExporter::forcedVSTVersion = 3;
+			return 0x0010;
+		}
+		else
+			CompileExporter::forcedVSTVersion = 0;
 
 		if (pluginName == "VST") return 0x0010;
 		else if (pluginName == "AU") return 0x0020;
@@ -1572,7 +1597,7 @@ hise::CompileExporter::ErrorCodes CompileExporter::createPluginProjucerFile(Targ
 	{
 		REPLACE_WILDCARD_WITH_STRING("%BUILD_AUV3%", "0");
 
-		const bool buildAU = BuildOptionHelpers::isAU(option);
+		bool buildAU = BuildOptionHelpers::isAU(option);
 		bool buildVST = BuildOptionHelpers::isVST(option);
 		const bool headlessLinux = BuildOptionHelpers::isHeadlessLinuxPlugin(option);
 
@@ -1580,8 +1605,22 @@ hise::CompileExporter::ErrorCodes CompileExporter::createPluginProjucerFile(Targ
 
 		auto vst3 = GET_SETTING(HiseSettings::Project::VST3Support) == "1";
 
-		const bool buildVST2 = buildVST && !vst3;
-		const bool buildVST3 = buildVST && vst3;
+		bool buildVST2 = buildVST && !vst3;
+		bool buildVST3 = buildVST && vst3;
+
+		if (forcedVSTVersion != 0)
+		{
+			// Only possible in command line export...
+			jassert(isExportingFromCommandLine());
+			jassert(isUsingCIMode());
+			jassert(BuildOptionHelpers::isVST(option));
+			buildVST2 = forcedVSTVersion == 2 || forcedVSTVersion == 23;
+			buildVST3 = forcedVSTVersion == 3 || forcedVSTVersion == 23;
+
+#if JUCE_MAC
+			buildAU = forcedVSTVersion == 23;
+#endif
+		}
 
 #if JUCE_LINUX
 		const bool buildAAX = false;
@@ -1629,6 +1668,9 @@ hise::CompileExporter::ErrorCodes CompileExporter::createPluginProjucerFile(Targ
 			aaxIdentifier << "." << GET_SETTING(HiseSettings::Project::Name).removeCharacters(" -_.,;");
 
 			REPLACE_WILDCARD_WITH_STRING("%AAX_IDENTIFIER%", aaxIdentifier);
+            
+            // Only build 64bit Intel binaries for AAX
+            REPLACE_WILDCARD_WITH_STRING("%ARM_ARCH%", "x86_64");
 		}
 		else
 		{
@@ -1636,6 +1678,7 @@ hise::CompileExporter::ErrorCodes CompileExporter::createPluginProjucerFile(Targ
 			REPLACE_WILDCARD_WITH_STRING("%AAX_RELEASE_LIB%", String());
 			REPLACE_WILDCARD_WITH_STRING("%AAX_DEBUG_LIB%", String());
 			REPLACE_WILDCARD_WITH_STRING("%AAX_IDENTIFIER%", String());
+            REPLACE_WILDCARD_WITH_STRING("%ARM_ARCH%", "arm64,arm64e,x86_64");
 		}
 	}
 
@@ -2015,7 +2058,14 @@ String CompileExporter::ProjectTemplateHelpers::getTargetFamilyString(BuildOptio
 
 juce::String CompileExporter::ProjectTemplateHelpers::getPluginChannelAmount(ModulatorSynthChain* chain)
 {
-	return "HISE_NUM_PLUGIN_CHANNELS=" + String(chain->getMatrix().getNumSourceChannels());
+    auto& dataObject = dynamic_cast<BackendProcessor*>(chain->getMainController())->getSettingsObject();
+    
+    int numChannels = chain->getMatrix().getNumSourceChannels();
+    
+    if(IS_SETTING_TRUE(HiseSettings::Project::ForceStereoOutput))
+        numChannels = 2;
+    
+	return "HISE_NUM_PLUGIN_CHANNELS=" + String(numChannels);
 }
 
 CompileExporter::ErrorCodes CompileExporter::copyHISEImageFiles()
@@ -2366,19 +2416,18 @@ void CompileExporter::BatchFileCreator::createBatchFile(CompileExporter* exporte
     }
     else
     {
+        // Allow the errorcode to flow through xcpretty
+        ADD_LINE("set -o pipefail");
+        
         ADD_LINE("echo Compiling " << projectType << " " << projectName << " ...");
 
 		int threads = SystemStats::getNumCpus() - 2;
 		String xcodeLine;
+        
 		xcodeLine << "xcodebuild -project \"Builds/MacOSX/" << projectName << ".xcodeproj\" -configuration \"" << exporter->configurationName << "\" -jobs \"" << threads << "\"";
-
-		if (!isUsingCIMode())
-		{
-			xcodeLine << " | xcpretty";
-		}
-
+		xcodeLine << " | xcpretty";
+		
         ADD_LINE(xcodeLine);
-        ADD_LINE("echo Compiling finished. Cleaning up...");
     }
     
     File tempFile = batchFile.getSiblingFile("tempBatch");

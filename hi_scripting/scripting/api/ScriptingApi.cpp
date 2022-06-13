@@ -920,6 +920,8 @@ struct ScriptingApi::Engine::Wrapper
 	API_VOID_METHOD_WRAPPER_0(Engine, clearSampleMapPool);
 	API_METHOD_WRAPPER_2(Engine, getSampleFilesFromDirectory);
 	API_VOID_METHOD_WRAPPER_1(Engine, setLatencySamples);
+	API_VOID_METHOD_WRAPPER_1(Engine, setGlobalPitchFactor);
+	API_METHOD_WRAPPER_0(Engine, getGlobalPitchFactor);
 	API_METHOD_WRAPPER_0(Engine, getLatencySamples);
 	API_METHOD_WRAPPER_2(Engine, getDspNetworkReference);
 	API_METHOD_WRAPPER_1(Engine, getSystemTime);
@@ -928,6 +930,7 @@ struct ScriptingApi::Engine::Wrapper
 	API_METHOD_WRAPPER_1(Engine, loadAudioFileIntoBufferArray);
 	API_METHOD_WRAPPER_0(Engine, getClipboardContent);
 	API_VOID_METHOD_WRAPPER_1(Engine, copyToClipboard);
+	API_METHOD_WRAPPER_1(Engine, decodeBase64ValueTree);
 };
 
 
@@ -983,6 +986,8 @@ parentMidiProcessor(dynamic_cast<ScriptBaseMidiProcessor*>(p))
 	ADD_API_METHOD_1(setCurrentExpansion);
 	ADD_API_METHOD_1(setUserPresetTagList);
 	ADD_API_METHOD_0(getCurrentUserPresetName);
+	ADD_API_METHOD_0(getGlobalPitchFactor);
+	ADD_API_METHOD_1(setGlobalPitchFactor);
 	ADD_API_METHOD_1(saveUserPreset);
 	ADD_API_METHOD_1(loadUserPreset);
 	ADD_API_METHOD_0(getUserPresetList);
@@ -1055,6 +1060,7 @@ parentMidiProcessor(dynamic_cast<ScriptBaseMidiProcessor*>(p))
 	ADD_API_METHOD_1(copyToClipboard);
 	ADD_API_METHOD_0(isHISE);
 	ADD_API_METHOD_0(reloadAllSamples);
+	ADD_API_METHOD_1(decodeBase64ValueTree);
 }
 
 
@@ -1106,16 +1112,27 @@ void ScriptingApi::Engine::addModuleStateToUserPreset(var moduleId)
 {
 	if (auto jmp = dynamic_cast<JavascriptMidiProcessor*>(getProcessor()))
 	{
-		auto newId = moduleId.toString();
+		String newId;
 
 		auto& ids = jmp->getListOfModuleIds();
 
-		if (newId.isEmpty())
+		if (moduleId.isString())
 		{
-			ids.clear();
-			debugToConsole(getProcessor(), "Removed all stored modules");
-			return;
+			newId = moduleId.toString();
+
+			if (newId.isEmpty())
+			{
+				ids.clear();
+				debugToConsole(getProcessor(), "Removed all stored modules");
+				return;
+			}
+
 		}
+		else
+			newId = moduleId["ID"].toString();
+
+		if (newId.isEmpty())
+			reportScriptError("Invalid ID");
 
 		auto p = ProcessorHelpers::getFirstProcessorWithName(getProcessor()->getMainController()->getMainSynthChain(), newId);
 
@@ -1136,9 +1153,23 @@ void ScriptingApi::Engine::addModuleStateToUserPreset(var moduleId)
 			}
 		}
 
-		if (!ids.contains(newId))
+		bool wasRemoved = false;
+
+		for (auto ms : ids)
 		{
-			ids.add(newId);
+			if (ms->id == newId)
+			{
+				ids.removeObject(ms);
+				wasRemoved = true;
+				
+				break;
+			}
+		}
+
+		ids.add(new MainController::UserPresetHandler::StoredModuleData(moduleId, p));
+
+		if (!wasRemoved)
+		{
 			debugToConsole(getProcessor(), "Added " + newId + " to user preset system");
 		}
 	}
@@ -1305,7 +1336,7 @@ void ScriptingApi::Engine::setFrontendMacros(var nameList)
 	{
 		mm.setEnableMacroOnFrontend(!ar->isEmpty());
 		
-		for (int i = 0; i < 8; i++)
+		for (int i = 0; i < HISE_NUM_MACROS; i++)
 		{
 			auto macroName = (*ar)[i].toString();
 			mm.getMacroChain()->getMacroControlData(i)->setMacroName(macroName);
@@ -1571,6 +1602,38 @@ void ScriptingApi::Engine::showYesNoWindow(String title, String markdownMessage,
 	MessageManager::callAsync(f);
 }
 
+String ScriptingApi::Engine::decodeBase64ValueTree(const String& b64Data)
+{
+	zstd::ZDefaultCompressor comp;
+
+	
+
+	auto v = ValueTreeConverters::convertBase64ToValueTree(b64Data, true);
+
+	if (!v.isValid())
+	{
+		auto r = comp.expand(b64Data, v);
+
+		if (!r.wasOk())
+		{
+			MemoryBlock mb;
+			mb.fromBase64Encoding(b64Data);
+
+			v = ValueTree::readFromData(mb.getData(), mb.getSize());
+		}
+	}
+
+	
+
+	if (v.isValid())
+	{
+		auto xml = v.createXml();
+		return xml->createDocument("");
+	}
+
+	return {};
+}
+
 var ScriptingApi::Engine::createGlobalScriptLookAndFeel()
 {
 	auto mc = getScriptProcessor()->getMainController_();
@@ -1678,6 +1741,17 @@ void ScriptingApi::Engine::setKeyColour(int keyNumber, int colourAsHex) { getPro
 void ScriptingApi::Engine::extendTimeOut(int additionalMilliseconds)
 {
 	dynamic_cast<JavascriptProcessor*>(getScriptProcessor())->getScriptEngine()->extendTimeout(additionalMilliseconds);
+}
+
+void ScriptingApi::Engine::setGlobalPitchFactor(double pitchFactorInSemitones)
+{
+	pitchFactorInSemitones = jlimit(-12.0, 12.0, pitchFactorInSemitones);
+	getScriptProcessor()->getMainController_()->setGlobalPitchFactor(pitchFactorInSemitones);
+}
+
+double ScriptingApi::Engine::getGlobalPitchFactor() const
+{
+	return getScriptProcessor()->getMainController_()->getGlobalPitchFactorSemiTones();
 }
 
 void ScriptingApi::Engine::setLowestKeyToDisplay(int keyNumber) { getProcessor()->getMainController()->setLowestKeyToDisplay(keyNumber); }
@@ -2579,8 +2653,8 @@ String ScriptingApi::Engine::doubleToString(double value, int digits)
 
 void ScriptingApi::Engine::quit()
 {
-	#if IS_STANDALONE_APP
-		quit();
+    #if IS_STANDALONE_APP
+    JUCEApplication::quit();
 	#endif
 }
                 
@@ -4689,21 +4763,24 @@ ScriptingObjects::ScriptingAudioSampleProcessor * ScriptingApi::Synth::getAudioS
 {
 	WARN_IF_AUDIO_THREAD(true, ScriptGuard::ObjectCreation);
 
-	Processor::Iterator<AudioSampleProcessor> it(owner);
+	Processor::Iterator<ProcessorWithExternalData> it(owner);
 
-		AudioSampleProcessor *asp;
+	ProcessorWithExternalData *asp;
 
 
-		while ((asp = it.getNextProcessor()) != nullptr)
+	while ((asp = it.getNextProcessor()) != nullptr)
+	{
+		if (dynamic_cast<Processor*>(asp)->getId() == name)
 		{
-			if (dynamic_cast<Processor*>(asp)->getId() == name)
+			if (asp->getNumDataObjects(ExternalData::DataType::AudioFile) > 0)
 			{
-				return new ScriptAudioSampleProcessor(getScriptProcessor(), asp);
+				return new ScriptAudioSampleProcessor(getScriptProcessor(), dynamic_cast<Processor*>(asp));
 			}
 		}
+	}
 
-        reportScriptError(name + " was not found. ");
-		RETURN_IF_NO_THROW(new ScriptAudioSampleProcessor(getScriptProcessor(), nullptr))
+    reportScriptError(name + " was not found. ");
+	RETURN_IF_NO_THROW(new ScriptAudioSampleProcessor(getScriptProcessor(), nullptr))
 }
 
 
@@ -4824,13 +4901,12 @@ ScriptingApi::Synth::ScriptSlotFX* ScriptingApi::Synth::getSlotFX(const String& 
 
 	if (getScriptProcessor()->objectsCanBeCreated())
 	{
-		Processor::Iterator<SlotFX> it(owner);
+		Processor::Iterator<HotswappableProcessor> it(owner);
 
-		while (SlotFX *s = it.getNextProcessor())
+		while (auto s = dynamic_cast<EffectProcessor*>(it.getNextProcessor()))
 		{
 			if (s->getId() == name)
 			{
-
 				return new ScriptSlotFX(getScriptProcessor(), s);
 			}
 		}
@@ -5506,6 +5582,7 @@ struct ScriptingApi::Colours::Wrapper
 	API_METHOD_WRAPPER_2(Colours, withMultipliedSaturation);
 	API_METHOD_WRAPPER_1(Colours, fromVec4);
 	API_METHOD_WRAPPER_1(Colours, toVec4);
+	API_METHOD_WRAPPER_3(Colours, mix);
 };
 
 ScriptingApi::Colours::Colours() :
@@ -5658,6 +5735,7 @@ ApiClass(139)
 	ADD_API_METHOD_2(withMultipliedAlpha);
 	ADD_API_METHOD_2(withMultipliedBrightness);
 	ADD_API_METHOD_2(withMultipliedSaturation);
+	ADD_API_METHOD_3(mix);
 	ADD_API_METHOD_1(toVec4);
 	ADD_API_METHOD_1(fromVec4);
 }
@@ -5732,6 +5810,14 @@ int ScriptingApi::Colours::fromVec4(var vec4)
 	return 0;
 }
 
+int ScriptingApi::Colours::mix(int colour1, int colour2, float alpha)
+{
+	Colour c1((uint32)colour1);
+	Colour c2((uint32)colour2);
+
+	return c1.interpolatedWith(c2, alpha).getARGB();
+}
+
 ScriptingApi::ModuleIds::ModuleIds(ModulatorSynth* s):
 	ApiClass(getTypeList(s).size()),
 	ownerSynth(s)
@@ -5783,6 +5869,8 @@ struct ScriptingApi::FileSystem::Wrapper
 	API_VOID_METHOD_WRAPPER_4(FileSystem, browse);
 	API_VOID_METHOD_WRAPPER_2(FileSystem, browseForDirectory);
 	API_METHOD_WRAPPER_1(FileSystem, getBytesFreeOnVolume);
+    API_METHOD_WRAPPER_2(FileSystem, encryptWithRSA);
+    API_METHOD_WRAPPER_2(FileSystem, decryptWithRSA);
 };
 
 ScriptingApi::FileSystem::FileSystem(ProcessorWithScriptingContent* pwsc):
@@ -5811,6 +5899,9 @@ ScriptingApi::FileSystem::FileSystem(ProcessorWithScriptingContent* pwsc):
 	ADD_API_METHOD_2(browseForDirectory);
 	ADD_API_METHOD_1(fromAbsolutePath);
 	ADD_API_METHOD_1(getBytesFreeOnVolume);
+    ADD_API_METHOD_2(encryptWithRSA);
+    ADD_API_METHOD_2(decryptWithRSA);
+    
 }
 
 ScriptingApi::FileSystem::~FileSystem()
@@ -5944,6 +6035,44 @@ void ScriptingApi::FileSystem::browseInternally(File f, bool forSaving, bool isD
 
 	MessageManager::callAsync(cb);
 }
+
+
+String ScriptingApi::FileSystem::encryptWithRSA(const String& dataToEncrypt, const String& privateKey)
+{
+    juce::RSAKey key(privateKey);
+    
+    MemoryOutputStream text;
+    text << dataToEncrypt;
+
+    BigInteger val;
+    val.loadFromMemoryBlock (text.getMemoryBlock());
+
+    key.applyToValue (val);
+
+    return val.toString(16);
+}
+
+
+String ScriptingApi::FileSystem::decryptWithRSA(const String& dataToDecrypt, const String& publicKey)
+{
+    BigInteger val;
+    val.parseString (dataToDecrypt, 16);
+
+    RSAKey key (publicKey);
+    
+    if(key.isValid())
+    {
+        key.applyToValue (val);
+
+        auto mb = val.toMemoryBlock();
+
+        if (CharPointer_UTF8::isValidString (static_cast<const char*> (mb.getData()), (int) mb.getSize()))
+            return mb.toString();
+    }
+    
+    return {};
+}
+
 
 juce::File ScriptingApi::FileSystem::getFile(SpecialLocations l)
 {
@@ -6219,10 +6348,11 @@ ScriptingApi::TransportHandler::Callback::Callback(TransportHandler* p, const va
 	
 }
 
-void ScriptingApi::TransportHandler::Callback::call(var arg1, var arg2, bool forceSync)
+void ScriptingApi::TransportHandler::Callback::call(var arg1, var arg2, var arg3, bool forceSync)
 {
 	args[0] = arg1;
 	args[1] = arg2;
+	args[2] = arg3;
 
 	if (synchronous || forceSync)
 		callSync();
@@ -6249,20 +6379,38 @@ struct ScriptingApi::TransportHandler::Wrapper
 {
 	API_VOID_METHOD_WRAPPER_2(TransportHandler, setOnTempoChange);
 	API_VOID_METHOD_WRAPPER_2(TransportHandler, setOnBeatChange);
+	API_VOID_METHOD_WRAPPER_2(TransportHandler, setOnGridChange);
 	API_VOID_METHOD_WRAPPER_2(TransportHandler, setOnSignatureChange);
 	API_VOID_METHOD_WRAPPER_2(TransportHandler, setOnTransportChange);
+	API_VOID_METHOD_WRAPPER_1(TransportHandler, setSyncMode);
+	API_VOID_METHOD_WRAPPER_2(TransportHandler, setEnableGrid);
+	API_VOID_METHOD_WRAPPER_1(TransportHandler, startInternalClock);
+	API_VOID_METHOD_WRAPPER_1(TransportHandler, stopInternalClock);
 };
 
 ScriptingApi::TransportHandler::TransportHandler(ProcessorWithScriptingContent* sp) :
-	ConstScriptingObject(sp, 0),
+	ConstScriptingObject(sp, (int)MasterClock::SyncModes::numSyncModes),
 	ControlledObject(sp->getMainController_())
 {
+	addConstant("Inactive", (int)MasterClock::SyncModes::Inactive);
+	addConstant("ExternalOnly", (int)MasterClock::SyncModes::ExternalOnly);
+	addConstant("InternalOnly", (int)MasterClock::SyncModes::InternalOnly);
+	addConstant("PreferInternal", (int)MasterClock::SyncModes::PreferInternal);
+	addConstant("PreferExternal", (int)MasterClock::SyncModes::PreferExternal);
+	addConstant("SyncInternal", (int)MasterClock::SyncModes::SyncInternal);
+
 	getMainController()->addTempoListener(this);
 
 	ADD_API_METHOD_2(setOnTempoChange);
 	ADD_API_METHOD_2(setOnBeatChange);
+	ADD_API_METHOD_2(setOnGridChange);
 	ADD_API_METHOD_2(setOnSignatureChange);
 	ADD_API_METHOD_2(setOnTransportChange);
+	ADD_API_METHOD_1(setSyncMode);
+	ADD_API_METHOD_1(startInternalClock);
+	ADD_API_METHOD_1(stopInternalClock);
+	ADD_API_METHOD_2(setEnableGrid);
+	
 }
 
 ScriptingApi::TransportHandler::~TransportHandler()
@@ -6278,14 +6426,14 @@ void ScriptingApi::TransportHandler::setOnTempoChange(bool sync, var f)
 		clearIf(tempoChangeCallbackAsync, f);
 
 		tempoChangeCallback = new Callback(this, f, sync, 1);
-		tempoChangeCallback->call(bpm, {}, true);
+		tempoChangeCallback->call(bpm, {}, {}, true);
 	}
 	else
 	{
 		clearIf(tempoChangeCallback, f);
 
 		tempoChangeCallbackAsync = new Callback(this, f, sync, 1);
-		tempoChangeCallbackAsync->call(bpm, {}, true);
+		tempoChangeCallbackAsync->call(bpm, {}, {}, true);
 	}
 }
 
@@ -6296,14 +6444,14 @@ void ScriptingApi::TransportHandler::setOnTransportChange(bool sync, var f)
 		clearIf(tempoChangeCallbackAsync, f);
 
 		transportChangeCallback = new Callback(this, f, sync, 1);
-		transportChangeCallback->call(play, {}, true);
+		transportChangeCallback->call(play, {}, {}, true);
 	}
 	else
 	{
 		clearIf(transportChangeCallback, f);
 
 		transportChangeCallbackAsync = new Callback(this, f, sync, 1);
-		transportChangeCallbackAsync->call(play, {}, true);
+		transportChangeCallbackAsync->call(play, {}, {}, true);
 	}
 	
 }
@@ -6315,15 +6463,76 @@ void ScriptingApi::TransportHandler::setOnSignatureChange(bool sync, var f)
 		clearIf(timeSignatureCallbackAsync, f);
 
 		timeSignatureCallback = new Callback(this, f, sync, 2);
-		timeSignatureCallback->call(nom, denom, true);
+		timeSignatureCallback->call(nom, denom, {}, true);
 	}
 	else
 	{
 		clearIf(timeSignatureCallback, f);
 
 		timeSignatureCallbackAsync = new Callback(this, f, sync, 2);
-		timeSignatureCallbackAsync->call(nom, denom, true);
+		timeSignatureCallbackAsync->call(nom, denom, {}, true);
 	}
+}
+
+void ScriptingApi::TransportHandler::tempoChanged(double newTempo)
+{
+	bpm = newTempo;
+
+	if (tempoChangeCallback != nullptr)
+		tempoChangeCallback->call(newTempo);
+
+	if (tempoChangeCallbackAsync != nullptr)
+		tempoChangeCallbackAsync->call(newTempo);
+}
+
+
+
+void ScriptingApi::TransportHandler::onTransportChange(bool isPlaying)
+{
+	play = isPlaying;
+
+	if (transportChangeCallback != nullptr)
+		transportChangeCallback->call(isPlaying);
+
+	if (transportChangeCallbackAsync != nullptr)
+		transportChangeCallbackAsync->call(isPlaying);
+}
+
+void ScriptingApi::TransportHandler::onBeatChange(int newBeat, bool isNewBar)
+{
+	beat = newBeat;
+	newBar = isNewBar;
+
+	if (beatCallback != nullptr)
+		beatCallback->call(newBeat, newBar);
+
+	if (beatCallbackAsync != nullptr)
+		beatCallbackAsync->call(newBeat, newBar);
+}
+
+void ScriptingApi::TransportHandler::onSignatureChange(int newNominator, int numDenominator)
+{
+	nom = newNominator;
+	denom = numDenominator;
+
+	if (timeSignatureCallback != nullptr)
+		timeSignatureCallback->call(newNominator, numDenominator);
+
+	if (timeSignatureCallbackAsync != nullptr)
+		timeSignatureCallbackAsync->call(newNominator, numDenominator);
+}
+
+void ScriptingApi::TransportHandler::onGridChange(int gridIndex_, uint16 timestamp, bool firstGridInPlayback_)
+{
+	gridIndex = gridIndex_;
+	gridTimestamp = timestamp;
+	firstGridInPlayback = firstGridInPlayback_;
+
+	if (gridCallback != nullptr)
+		gridCallback->call(gridIndex, gridTimestamp, firstGridInPlayback);
+
+	if (gridCallbackAsync != nullptr)
+		gridCallbackAsync->call(gridIndex, gridTimestamp, firstGridInPlayback);
 }
 
 void ScriptingApi::TransportHandler::setOnBeatChange(bool sync, var f)
@@ -6345,6 +6554,55 @@ void ScriptingApi::TransportHandler::setOnBeatChange(bool sync, var f)
 			beatCallbackAsync = new Callback(this, f, sync, 2);
 		}
 	}
+}
+
+void ScriptingApi::TransportHandler::setOnGridChange(bool sync, var f)
+{
+	if (f.isUndefined())
+		getMainController()->removeMusicalUpdateListener(this);
+	else
+	{
+		getMainController()->addMusicalUpdateListener(this);
+
+		if (sync)
+		{
+			clearIf(gridCallbackAsync, f);
+			gridCallback = new Callback(this, f, sync, 3);
+		}
+		else
+		{
+			clearIf(gridCallback, f);
+			gridCallbackAsync = new Callback(this, f, sync, 3);
+		}
+	}
+}
+
+void ScriptingApi::TransportHandler::setEnableGrid(bool shouldBeEnabled, int tempoFactor)
+{
+	if (isPositiveAndBelow(tempoFactor, (int)TempoSyncer::numTempos))
+	{
+		auto t = (TempoSyncer::Tempo)tempoFactor;
+		getMainController()->getMasterClock().setClockGrid(shouldBeEnabled, t);
+	}
+	else
+	{
+		reportScriptError("Illegal tempo value. Use 1-18");
+	}
+}
+
+void ScriptingApi::TransportHandler::startInternalClock(int timestamp)
+{
+	getMainController()->getMasterClock().changeState(timestamp, true, true);
+}
+
+void ScriptingApi::TransportHandler::stopInternalClock(int timestamp)
+{
+	getMainController()->getMasterClock().changeState(timestamp, true, false);
+}
+
+void ScriptingApi::TransportHandler::setSyncMode(int syncMode)
+{
+	getMainController()->getMasterClock().setSyncMode((MasterClock::SyncModes)syncMode);
 }
 
 } // namespace hise

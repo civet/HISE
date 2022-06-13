@@ -775,13 +775,41 @@ DspNetworkCompileExporter::DspNetworkCompileExporter(Component* e, BackendProces
 {
 	addComboBox("build", { "Debug", "CI", "Release" }, "Build Configuration");
 
+#if !JUCE_DEBUG
+    getComboBoxComponent("build")->setText("Release", dontSendNotification);
+#endif
+    
 	if (auto n = getNetwork())
 		n->createAllNodesOnce();
+
+	auto customProperties = bp->dllManager->getSubFolder(getMainController(), BackendDllManager::FolderSubType::ThirdParty).getChildFile("node_properties.json");
+
+	if (customProperties.existsAsFile())
+	{
+		auto obj = JSON::parse(customProperties);
+		
+		if (auto o = obj.getDynamicObject())
+		{
+			for (auto& nv : o->getProperties())
+			{
+				if (auto ar = nv.value.getArray())
+				{
+					for (const auto& prop : *ar)
+					{
+						cppgen::CustomNodeProperties::addNodeIdManually(nv.name, prop.toString());
+					}
+				}
+			}
+		}
+	}
 
 	addBasicComponents(true);
 
 	String s;
 	s << "Nodes to compile:\n";
+
+	for (auto f : bp->dllManager->getThirdPartyFiles(bp, false))
+		s << " - " << f.getFileNameWithoutExtension() << " [external C++]\n";
 
 	for (auto f : bp->dllManager->getNetworkFiles(bp, false))
 		s << " - " << f.getFileNameWithoutExtension() << "\n";
@@ -791,6 +819,29 @@ DspNetworkCompileExporter::DspNetworkCompileExporter(Component* e, BackendProces
 	addTextBlock(s);
 
 	showStatusMessage("Press OK to compile the nodes into a DLL");
+}
+
+hise::DspNetworkCompileExporter::CppFileLocationType DspNetworkCompileExporter::getLocationType(const File& f) const
+{
+	if (f.getParentDirectory().getFileNameWithoutExtension() == "src")
+		return ThirdPartySourceFile;
+
+	if (f.getFileNameWithoutExtension() == "embedded_audiodata")
+		return EmbeddedDataFile;
+
+	for (auto& incF : includedFiles)
+	{
+		if (incF.getFileNameWithoutExtension() == f.getFileNameWithoutExtension())
+			return CompiledNetworkFile;
+	}
+
+	for (auto& itf : includedThirdPartyFiles)
+	{
+		if (itf.getFileNameWithoutExtension() == f.getFileNameWithoutExtension())
+			return ThirdPartyFile;
+	}
+
+	return UnknownFileType;
 }
 
 scriptnode::DspNetwork* DspNetworkCompileExporter::getNetwork()
@@ -841,6 +892,8 @@ void DspNetworkCompileExporter::run()
 	getSourceDirectory(true).deleteRecursively();
 	getSourceDirectory(true).createDirectory();
 
+	
+
 	showStatusMessage("Unload DLL");
 
 	if (auto ed = getEditorWorkbench())
@@ -858,6 +911,8 @@ void DspNetworkCompileExporter::run()
 	auto unsortedList = BackendDllManager::getNetworkFiles(getMainController(), false);
 
 	auto unsortedListU = BackendDllManager::getNetworkFiles(getMainController(), true);
+
+	
 
 	for (auto s : unsortedList)
 		unsortedListU.removeAllInstancesOf(s);
@@ -903,7 +958,12 @@ void DspNetworkCompileExporter::run()
 
 	auto sourceDir = getFolder(BackendDllManager::FolderSubType::ProjucerSourceFolder);
 
+	
+
 	using namespace snex::cppgen;
+
+	ValueTreeBuilder::SampleList externalSamples;
+	
 
 	for (auto e : list)
 	{
@@ -914,6 +974,16 @@ void DspNetworkCompileExporter::run()
 
 			auto id = v[scriptnode::PropertyIds::ID].toString();
 
+			auto cr = ValueTreeBuilder::cleanValueTreeIds(v);
+
+            if(!cr.wasOk())
+            {
+                errorMessage = "";
+                errorMessage << id << ": " << cr.getErrorMessage();
+                ok = ErrorCodes::ProjectXmlInvalid;
+                return;
+            }
+            
 			if(cppgen::StringHelpers::makeValidCppName(id).compareIgnoreCase(id) != 0)
 			{
 				errorMessage << "Illegal ID: `" << id << "`  \n> The network ID must be a valid C++ identifier";
@@ -921,25 +991,98 @@ void DspNetworkCompileExporter::run()
 				return;
 			}
 				
+            showStatusMessage("Creating C++ file for Network " + id);
+            
 			ValueTreeBuilder b(v, ValueTreeBuilder::Format::CppDynamicLibrary);
 
 			b.setCodeProvider(new BackendDllManager::FileCodeProvider(getMainController()));
+			b.addAudioFileProvider(new PooledAudioFileDataProvider(getMainController()));
 
 			auto f = sourceDir.getChildFile(id).withFileExtension(".h");
 
 			auto r = b.createCppCode();
+
+			externalSamples.addArray(b.getExternalSampleList());
+			
 
 			if (r.r.wasOk())
 				f.replaceWithText(r.code);
 			else
             {
                 ok = ErrorCodes::ProjectXmlInvalid;
-                errorMessage = r.r.getErrorMessage();
+
+				errorMessage = "";
+				errorMessage << f.getFileNameWithoutExtension() << ": " << r.r.getErrorMessage();
+
+                
                 return;
             };
 
 			includedFiles.add(f);
 		}
+	}
+
+	auto thirdPartyFiles = BackendDllManager::getThirdPartyFiles(getMainController(), false);
+
+	if (!thirdPartyFiles.isEmpty())
+	{
+		showStatusMessage("Copying third party files");
+
+		for (auto tpf : thirdPartyFiles)
+		{
+			auto target = sourceDir.getChildFile(tpf.getFileName());
+			tpf.copyFileTo(target);
+			includedThirdPartyFiles.insert(0, target);
+		}
+
+		auto srcDir = BackendDllManager::getThirdPartyFiles(getMainController(), true).getFirst();
+
+		if (srcDir.isDirectory())
+		{
+			showStatusMessage("Copying /src folder");
+
+			auto targetSrc = sourceDir.getChildFile(srcDir.getFileName());
+			auto additionalSrc = BackendDllManager::getSubFolder(getMainController(), BackendDllManager::FolderSubType::AdditionalCode);
+
+			targetSrc.deleteRecursively();
+			additionalSrc.deleteRecursively();
+
+			srcDir.copyDirectoryTo(targetSrc);
+			srcDir.copyDirectoryTo(additionalSrc);
+		}		
+	}
+
+	if (!externalSamples.isEmpty())
+	{
+        showStatusMessage("Writing embedded audio data file");
+        
+		auto eadFile = getSourceDirectory(true).getChildFile("embedded_audiodata.h");
+		eadFile.deleteFile();
+
+		FileOutputStream fos(eadFile);
+
+		fos << "// Embedded audiodata" << "\n";
+
+        fos << "#pragma once\n\n";
+        
+		fos << "namespace audiodata {\n";
+
+		for (const auto& es : externalSamples)
+		{
+			auto& bf = es.data->buffer;
+
+			for (int i = 0; i < bf.getNumChannels(); i++)
+			{
+				fos << "static const uint32 " << es.className << i << "[] = { \n";
+				cppgen::IntegerArray<uint32, float>::writeToStream(fos, reinterpret_cast<uint32*>(bf.getWritePointer(i)), bf.getNumSamples());
+				fos << "};\n";
+			}
+		}
+
+		fos << "}\n";
+		fos.flush();
+
+		eadFile.copyFileTo(getSourceDirectory(false).getChildFile("embedded_audiodata.h"));
 	}
 
 	for (auto u : unsortedListU)
@@ -1161,13 +1304,65 @@ void DspNetworkCompileExporter::createIncludeFile(const File& sourceDir)
 
 	cppgen::Base i(cppgen::Base::OutputType::AddTabs);
 
-	i.setHeader([]() { return "/* Include file. */"; });
+	i.setHeader([]() { return "/* Autogenerated include file. */"; });
 
-	for (auto f : sourceDir.findChildFiles(File::findFiles, false, "*.h"))
+    i << "#pragma clang diagnostic push";
+    i << "#pragma clang diagnostic ignored \"-Wunused-variable\"";
+    
+    i.addEmptyLine();
+    
+
+    auto fileList = sourceDir.findChildFiles(File::findFiles, false, "*.h");
+
+	for (auto& f : fileList)
 	{
-		cppgen::Include m(i, sourceDir, f);
+		if (getLocationType(f) == EmbeddedDataFile)
+		{
+			i.addComment("Include embedded audio data", cppgen::Base::CommentType::FillTo80Light);
+			cppgen::Include m(i, sourceDir, f);
+			break;
+		}
 	}
 
+	bool somethingFound = false;
+
+	for (auto& f : fileList)
+	{
+		if (getLocationType(f) == ThirdPartyFile)
+		{
+			if (!somethingFound)
+			{
+				i.addComment("Include third party header files", cppgen::Base::CommentType::FillTo80Light);
+				somethingFound = true;
+			}
+
+			cppgen::Include m(i, sourceDir, f);
+		}
+	}
+
+	if (somethingFound)
+		i.addEmptyLine();
+
+	somethingFound = false;
+
+	for (auto& f : fileList)
+	{
+		if (getLocationType(f) == CompiledNetworkFile)
+		{
+			if (!somethingFound)
+			{
+				i.addComment("Include compiled network files", cppgen::Base::CommentType::FillTo80Light);
+				somethingFound = true;
+			}
+
+			cppgen::Include m(i, sourceDir, f);
+		}
+	}
+
+    i.addEmptyLine();
+    
+    i << "#pragma clang diagnostic pop";
+    
 	includeFile.replaceWithText(i.toString());
 }
 
@@ -1260,6 +1455,17 @@ void DspNetworkCompileExporter::createMainCppFile(bool isDllMainFile)
 
 			b.addComment("Node registrations", snex::cppgen::Base::CommentType::FillTo80Light);
 
+			for (int i = 0; i < includedThirdPartyFiles.size(); i++)
+			{
+				String def;
+
+				String nid;
+				nid << "project::" << includedThirdPartyFiles[i].getFileNameWithoutExtension();
+
+				def << "registerPolyNode<" << nid << "<1>, " << nid << "<NUM_POLYPHONIC_VOICES>>();";
+				b << def;
+			}
+
 			for (int i = 0; i < includedFiles.size(); i++)
 			{
 				auto networkFile = getFolder(BackendDllManager::FolderSubType::Networks).getChildFile(includedFiles[i].getFileNameWithoutExtension()).withFileExtension("xml");
@@ -1319,6 +1525,16 @@ void DspNetworkCompileExporter::createMainCppFile(bool isDllMainFile)
 		b.addEmptyLine();
 
 		{
+			b << "DLL_EXPORT bool isThirdPartyNode(int index)";
+			StatementBlock bk(b);
+			String def;
+			def << "return index < " << String(includedThirdPartyFiles.size()) << ";";
+			b << def;
+		}
+
+		b.addEmptyLine();
+
+		{
 			b << "DLL_EXPORT int getNumDataObjects(int nodeIndex, int dataTypeAsInt)";
 			StatementBlock bk(b);
 			b << "return f.getNumDataObjects(nodeIndex, dataTypeAsInt);";
@@ -1350,6 +1566,10 @@ void DspNetworkCompileExporter::createMainCppFile(bool isDllMainFile)
 			}
 			else
 			{
+				String def1;
+				def1 << "static const int thirdPartyOffset = " << String(includedThirdPartyFiles.size()) << ";";
+				b << def1;
+
 				String def;
 
 				def << "static const int hashIndexes[" << includedFiles.size() << "] =";
@@ -1381,7 +1601,7 @@ void DspNetworkCompileExporter::createMainCppFile(bool isDllMainFile)
 					}
 				}
 
-				b << "return hashIndexes[index];";
+				b << "return (index >= thirdPartyOffset) ? hashIndexes[index - thirdPartyOffset] : 0;";
 			}
 		}
 		{

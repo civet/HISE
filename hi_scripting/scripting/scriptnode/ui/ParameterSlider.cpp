@@ -743,11 +743,11 @@ struct ParameterSlider::RangeComponent : public Component,
 			{
 				auto cr = getParentRange();
 
-				auto sourceParameterTree = connectionSource.getParent().getParent();
+				auto parameterTrees = ParameterSlider::getValueTreesForSourceConnection(connectionSource);
 
-				if (sourceParameterTree.isValid() && sourceParameterTree.getType() == PropertyIds::Parameter)
+				for (auto ptree : parameterTrees)
 				{
-					RangeHelpers::storeDoubleRange(sourceParameterTree, cr, getParent().node->getUndoManager());
+					RangeHelpers::storeDoubleRange(ptree, cr, getParent().node->getUndoManager());
 				}
 			}
 			if (r > 9000)
@@ -860,6 +860,31 @@ struct ParameterSlider::RangeComponent : public Component,
 	ScopedPointer<TextEditor> editor;
 };
 
+Array<juce::ValueTree> ParameterSlider::getValueTreesForSourceConnection(const ValueTree& connectionSourceTree)
+{
+	Array<ValueTree> parameterTrees;
+
+	auto sourceParameterTree = connectionSourceTree.getParent().getParent();
+
+	ValueTree thisParameter;
+
+	if (sourceParameterTree.isValid())
+	{
+		if (sourceParameterTree.getType() == PropertyIds::Parameter)
+		{
+			thisParameter = sourceParameterTree;
+		}
+		else if (sourceParameterTree.getType() == PropertyIds::Node)
+		{
+			auto nodeType = Identifier(sourceParameterTree[PropertyIds::FactoryPath].toString());
+			thisParameter = sourceParameterTree.getChildWithName(PropertyIds::Parameters).getChildWithProperty(PropertyIds::ID, "Value");
+		}
+	}
+
+	parameterTrees.add(thisParameter);
+
+	return parameterTrees;
+}
 
 ParameterSlider::ParameterSlider(NodeBase* node_, int index_) :
 	SimpleTimer(node_->getScriptProcessor()->getMainController_()->getGlobalUIUpdater()),
@@ -873,6 +898,8 @@ ParameterSlider::ParameterSlider(NodeBase* node_, int index_) :
 	setName(pTree[PropertyIds::ID].toString());
     setLearnable(node->getRootNetwork()->getRootNode() == node);
 
+    setTooltip(node->getId() + "." + getName());
+    
 	connectionListener.setTypesToWatch({ PropertyIds::Connections, PropertyIds::ModulationTargets, PropertyIds::Nodes });
 	connectionListener.setCallback(pTree.getRoot(), valuetree::AsyncMode::Asynchronously,
 		BIND_MEMBER_FUNCTION_2(ParameterSlider::updateOnConnectionChange));
@@ -940,8 +967,7 @@ void ParameterSlider::checkEnabledState()
 	else
 		stop();
 
-	if (auto g = findParentComponentOfClass<DspNetworkGraph>())
-		g->repaint();
+	repaintParentGraph();
 }
 
 void ParameterSlider::updateRange(Identifier, var)
@@ -950,6 +976,8 @@ void ParameterSlider::updateRange(Identifier, var)
 
 	setRange(range.rng.getRange(), range.rng.interval);
 	setSkewFactor(range.rng.skew);
+
+	
 
 	repaint();
 }
@@ -1016,6 +1044,28 @@ void ParameterSlider::paint(Graphics& g)
 {
 	Slider::paint(g);
 
+	if (cppgen::CustomNodeProperties::isUnscaledParameter(pTree))
+	{
+		ParameterIcons pi;
+		auto p = pi.createPath("unscaled");
+		pi.scalePath(p, getLocalBounds().removeFromTop(10).removeFromRight(10).toFloat());
+		g.setColour(Colours::white.withAlpha(0.4f));
+		g.fillPath(p);
+	}
+
+    if(blinkAlpha > 0.0f && modulationActive)
+    {
+        auto b = getLocalBounds().toFloat();
+        b = b.removeFromTop(48);
+        b = b.withSizeKeepingCentre(48, 48).translated(0.0f, 3.0f);
+        g.setColour(Colours::white.withAlpha(blinkAlpha * JUCE_LIVE_CONSTANT_OFF(0.7f)));
+        
+        auto m = JUCE_LIVE_CONSTANT_OFF(8.8f);
+        auto r = JUCE_LIVE_CONSTANT_OFF(4.0f);
+        
+        g.drawEllipse(b.reduced(m), r);
+    }
+    
 	if (macroHoverIndex != -1)
 	{
 		g.setColour(Colour(SIGNAL_COLOUR));
@@ -1046,9 +1096,26 @@ void ParameterSlider::timerCallback()
 {
 	auto thisDisplayValue = getValueToDisplay();
 
-	if (thisDisplayValue != lastDisplayValue)
+	if (thisDisplayValue != lastDisplayValue || blinkAlpha > 0.0f)
 	{
-		lastDisplayValue = thisDisplayValue;
+        auto sl = getRange().getLength();
+        auto delta = std::abs(thisDisplayValue - lastDisplayValue);
+        
+        if(delta / sl > 0.01)
+        {
+            blinkAlpha = 1.0f;
+            lastDisplayValue = thisDisplayValue;
+            
+            if(auto l = dynamic_cast<ParameterKnobLookAndFeel::SliderLabel*>(getTextBox()))
+            {
+                l->updateText();
+            }
+        }
+        else
+        {
+            blinkAlpha = jmax(0.0f, blinkAlpha - 0.08f);
+        }
+        
 		repaint();
 	}
 }
@@ -1146,7 +1213,9 @@ void ParameterSlider::mouseDown(const MouseEvent& e)
     
 	if (e.mods.isShiftDown())
 	{
+        ScopedValueSetter<bool> svs(skipTextUpdate, true);
 		Slider::showTextBox();
+        
 		return;
 	}
 
@@ -1156,20 +1225,23 @@ void ParameterSlider::mouseDown(const MouseEvent& e)
 
 		pe->setName("Edit Parameter");
 
-		auto g = findParentComponentOfClass<ZoomableViewport>();
-		auto b = g->getLocalArea(this, getLocalBounds());
+		if (auto g = findParentComponentOfClass<ZoomableViewport>())
+		{
+			auto b = g->getLocalArea(this, getLocalBounds());
 
-		g->setCurrentModalWindow(pe, b);
+			g->setCurrentModalWindow(pe, b);
+		}
 	}
 	else
 	{
-		auto dp = findParentComponentOfClass<DspNetworkGraph>();
-
-		if (dp->probeSelectionEnabled && isEnabled())
+		if (auto dp = findParentComponentOfClass<DspNetworkGraph>())
 		{
-			parameterToControl->isProbed = !parameterToControl->isProbed;
-			dp->repaint();
-			return;
+			if (dp->probeSelectionEnabled && isEnabled())
+			{
+				parameterToControl->isProbed = !parameterToControl->isProbed;
+				dp->repaint();
+				return;
+			}
 		}
 
 		Slider::mouseDown(e);
@@ -1181,9 +1253,14 @@ void ParameterSlider::mouseDown(const MouseEvent& e)
 
 void ParameterSlider::mouseEnter(const MouseEvent& e)
 {
+    if(auto l = dynamic_cast<ParameterKnobLookAndFeel::SliderLabel*>(getTextBox()))
+    {
+        l->updateText();
+    }
+    
 	if (!isEnabled())
 	{
-		findParentComponentOfClass<DspNetworkGraph>()->repaint();
+		repaintParentGraph();
 	}
 
 	if (e.mods.isAltDown())
@@ -1210,9 +1287,15 @@ void ParameterSlider::mouseMove(const MouseEvent& e)
 
 void ParameterSlider::mouseExit(const MouseEvent& e)
 {
+    if(auto l = dynamic_cast<ParameterKnobLookAndFeel::SliderLabel*>(getTextBox()))
+    {
+        if(!skipTextUpdate)
+            l->updateText();
+    }
+    
 	if (!isEnabled())
 	{
-		findParentComponentOfClass<DspNetworkGraph>()->repaint();
+		repaintParentGraph();
 	}
 
 	Slider::mouseExit(e);
@@ -1345,6 +1428,12 @@ bool ParameterSlider::isControllingFrozenNode() const
 	return false;
 }
 
+void ParameterSlider::repaintParentGraph()
+{
+	if (auto dp = findParentComponentOfClass<DspNetworkGraph>())
+		dp->repaint();
+}
+
 ParameterKnobLookAndFeel::ParameterKnobLookAndFeel()
 {
 	//cachedImage_smalliKnob_png = ImageProvider::getImage(ImageProvider::ImageType::KnobEmpty); // ImageCache::getFromMemory(BinaryData::knob_empty_png, BinaryData::knob_empty_pngSize);
@@ -1389,6 +1478,10 @@ juce::Label* ParameterKnobLookAndFeel::createSliderTextBox(Slider& slider)
 void ParameterKnobLookAndFeel::drawRotarySlider(Graphics& g, int , int , int width, int height, float , float , float , Slider& s)
 {
 	auto ps = dynamic_cast<ParameterSlider*>(&s);
+
+	if (ps->parameterToControl == nullptr)
+		return;
+
     auto modValue = ps->getValueToDisplay();
     const double normalisedModValue = (modValue - s.getMinimum()) / (s.getMaximum() - s.getMinimum());
 	float modProportion = jlimit<float>(0.0f, 1.0f, pow((float)normalisedModValue, (float)s.getSkewFactor()));
@@ -1400,6 +1493,8 @@ void ParameterKnobLookAndFeel::drawRotarySlider(Graphics& g, int , int , int wid
 	b = b.removeFromTop(48);
 	b = b.withSizeKeepingCentre(48, 48).translated(0.0f, 3.0f);
 
+    
+    
 	drawVectorRotaryKnob(g, b.toFloat(), modProportion, isBipolar, s.isMouseOverOrDragging(true) || ps->parameterToControl->isModulated(), s.isMouseButtonDown(), s.isEnabled(), modProportion);
 }
 
@@ -1436,14 +1531,29 @@ void MacroParameterSlider::mouseDrag(const MouseEvent& )
 
 			container->startDragging(details, &slider, ScaledImage(ModulationSourceBaseComponent::createDragImageStatic(false)));
 
-			findParentComponentOfClass<DspNetworkGraph>()->repaint();
+			slider.repaintParentGraph();
 		}
 	}
 }
 
 void MacroParameterSlider::mouseUp(const MouseEvent& e)
 {
-	findParentComponentOfClass<DspNetworkGraph>()->repaint();
+	slider.repaintParentGraph();
+}
+
+void MacroParameterSlider::mouseEnter(const MouseEvent& e)
+{
+	slider.repaintParentGraph();
+}
+
+void MacroParameterSlider::mouseExit(const MouseEvent& e)
+{
+	slider.repaintParentGraph();
+}
+
+WeakReference<NodeBase::Parameter> MacroParameterSlider::getParameter()
+{
+	return slider.parameterToControl;
 }
 
 void MacroParameterSlider::paintOverChildren(Graphics& g)
@@ -1501,6 +1611,31 @@ void MacroParameterSlider::setEditEnabled(bool shouldBeEnabled)
 
 bool MacroParameterSlider::keyPressed(const KeyPress& key)
 {
+	if (key == KeyPress::F11Key)
+	{
+		NodeBase::List newSelection;
+		auto network = getParameter()->parent->getRootNetwork();
+
+		network->deselectAll();
+
+		for (auto c : getParameter()->data.getChildWithName(PropertyIds::Connections))
+		{
+			auto nId = c[PropertyIds::NodeId].toString();
+			if (auto n = network->getNodeWithId(nId))
+				network->addToSelection(n, ModifierKeys::commandModifier);
+		}
+
+		if (!newSelection.isEmpty())
+		{
+			if (auto g = findParentComponentOfClass<DspNetworkGraph>())
+			{
+				DspNetworkGraph::Actions::foldUnselectedNodes(*g);
+			}
+			
+		}
+
+		return true;
+	}
 	if (key == KeyPress::deleteKey || key == KeyPress::backspaceKey)
 	{
 		auto treeToRemove = slider.parameterToControl->data;
@@ -1530,14 +1665,16 @@ void ParameterSlider::showRangeComponent(bool temporary)
 {
 	if (temporary)
 	{
-		auto dng = findParentComponentOfClass<DspNetworkGraph>();
-		Array<RangeComponent*> list;
-		DspNetworkGraph::fillChildComponentList<RangeComponent>(list, dng);
-		
-		for (auto c : list)
+		if (auto dng = findParentComponentOfClass<DspNetworkGraph>())
 		{
-			if(c->temporary)
-				c->close(100);
+			Array<RangeComponent*> list;
+			DspNetworkGraph::fillChildComponentList<RangeComponent>(list, dng);
+
+			for (auto c : list)
+			{
+				if (c->temporary)
+					c->close(100);
+			}
 		}
 	}
 
@@ -1548,6 +1685,55 @@ void ParameterSlider::showRangeComponent(bool temporary)
 }
 
 
+
+void ParameterKnobLookAndFeel::SliderLabel::updateText()
+{
+	if (!enableTextSwitch)
+		return;
+
+	if (parent->isMouseOverOrDragging(true))
+	{
+		auto value = parent->getValue();
+		auto p = dynamic_cast<ParameterSlider*>(parent.getComponent())->parameterToControl;
+
+		if (!parent->isEnabled() && p != nullptr)
+			value = p->getValue();
+
+		setText(parent->getTextFromValue(value), dontSendNotification);
+	}
+	else
+		setText(parent->getName(), dontSendNotification);
+
+	repaint();
+}
+
+juce::Path ParameterSlider::ParameterIcons::createPath(const String& path) const
+{
+	Path p;
+
+	if (path == "range")
+	{
+		static const unsigned char pathData[] = { 110,109,246,40,170,65,102,102,214,65,108,246,40,170,65,240,39,42,66,108,0,0,0,0,246,40,170,65,108,246,40,170,65,0,0,0,0,108,246,40,170,65,242,210,123,65,108,147,24,34,66,242,210,123,65,108,147,24,34,66,0,0,0,0,108,14,45,119,66,246,40,170,65,108,147,24,
+34,66,240,39,42,66,108,147,24,34,66,102,102,214,65,108,246,40,170,65,102,102,214,65,99,101,0,0 };
+
+		p.loadPathFromData(pathData, sizeof(pathData));
+	}
+	if (path == "unscaled")
+	{
+		static const unsigned char pathData[] = { 110,109,123,204,59,68,236,201,154,68,108,123,204,59,68,174,135,158,68,98,123,204,59,68,184,198,158,68,70,102,59,68,154,249,158,68,98,232,58,68,154,249,158,68,108,92,199,51,68,154,249,158,68,98,121,73,51,68,154,249,158,68,68,227,50,68,184,198,158,68,68,
+227,50,68,174,135,158,68,108,68,227,50,68,225,130,154,68,98,68,227,50,68,41,68,154,68,121,73,51,68,246,16,154,68,92,199,51,68,246,16,154,68,108,98,232,58,68,246,16,154,68,98,70,102,59,68,246,16,154,68,123,204,59,68,41,68,154,68,123,204,59,68,225,130,
+154,68,108,123,204,59,68,0,200,154,68,108,35,99,58,68,0,200,154,68,108,35,99,58,68,51,163,154,68,108,254,252,56,68,51,163,154,68,108,254,252,56,68,92,255,156,68,98,254,252,56,68,174,79,157,68,231,219,56,68,225,138,157,68,219,153,56,68,0,176,157,68,98,
+190,87,56,68,31,213,157,68,47,237,55,68,174,231,157,68,12,90,55,68,174,231,157,68,98,57,196,54,68,174,231,157,68,131,88,54,68,31,213,157,68,233,22,54,68,82,176,157,68,98,63,213,53,68,51,139,157,68,106,180,53,68,164,80,157,68,106,180,53,68,0,0,157,68,
+108,106,180,53,68,51,163,154,68,108,238,76,52,68,51,163,154,68,108,238,76,52,68,10,15,157,68,98,238,76,52,68,236,129,157,68,152,142,52,68,51,219,157,68,219,17,53,68,61,26,158,68,98,31,149,53,68,154,89,158,68,162,85,54,68,72,121,158,68,100,83,55,68,72,
+121,158,68,98,12,82,56,68,72,121,158,68,90,20,57,68,154,89,158,68,61,154,57,68,61,26,158,68,98,49,32,58,68,51,219,157,68,35,99,58,68,143,130,157,68,35,99,58,68,82,16,157,68,108,35,99,58,68,236,201,154,68,108,123,204,59,68,236,201,154,68,99,101,0,0 };
+
+		
+		p.loadPathFromData(pathData, sizeof(pathData));
+
+	}
+
+	return p;
+}
 
 }
 

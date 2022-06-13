@@ -103,7 +103,7 @@ class ScriptCreatedComponentWrapper;
 class ScriptContentComponent;
 class ScriptedControlAudioParameter;
 class AudioProcessorWrapper;
-class SlotFX;
+class HotswappableProcessor;
 
 /** This class wrapps all available objects that can be created by a script.
 *	@ingroup scripting
@@ -328,6 +328,12 @@ namespace ScriptingObjects
 
 		/** Writes the given data (either a Buffer or Array of Buffers) to a audio file. */
 		bool writeAudioFile(var audioData, double sampleRate, int bitDepth);
+
+		/** Writes the array of MessageHolders as MIDI file using the metadataObject to determine time signature, tempo, etc. */
+		bool writeMidiFile(var eventList, var metadataObject);
+
+		/** Loads the track (zero-based) of the MIDI file. If successful, it returns an object containing the time signature and a list of all events. */
+		var loadAsMidiFile(int trackIndex);
 
 		/** Replaces the file content with the given text. */
 		bool writeString(String text);
@@ -1398,6 +1404,12 @@ namespace ScriptingObjects
 		/** Returns the Type of the modulator. */
 		String getType() const;
 		
+		/** Connects a receive modulator to a global modulator. */
+		bool connectToGlobalModulator(String globalModulationContainerId, String modulatorId);
+		
+		/** Returns the id of the global modulation container and global modulator this modulator is connected to */
+		String getGlobalModulatorId();
+		
 		/** Sets the attribute of the Modulator. You can look up the specific parameter indexes in the manual. */
 		void setAttribute(int index, float value);
 
@@ -1625,13 +1637,13 @@ namespace ScriptingObjects
 		ScriptingEffect* getCurrentEffect();
 
 		/** Swaps the effect with the other slot. */
-		void swap(var otherSlot);
+		bool swap(var otherSlot);
 
 		// ============================================================================================================
 
 		struct Wrapper;
 
-		SlotFX* getSlotFX();
+		HotswappableProcessor* getSlotFX();
 
 	private:
 
@@ -1878,7 +1890,7 @@ namespace ScriptingObjects
 
 		// ============================================================================================================
 
-		ScriptingAudioSampleProcessor(ProcessorWithScriptingContent *p, AudioSampleProcessor *sampleProcessor);
+		ScriptingAudioSampleProcessor(ProcessorWithScriptingContent *p, Processor *sampleProcessor);
 		~ScriptingAudioSampleProcessor() {};
 
 		Identifier getObjectName() const override { RETURN_STATIC_IDENTIFIER("AudioSampleProcessor"); };
@@ -2100,6 +2112,9 @@ namespace ScriptingObjects
 		/** Registers a function that will be executed whenever a value is sent through the cable. */
 		void registerCallback(var callbackFunction, bool synchronous);
 
+		/** Connects the cable to a macro control. */
+		void connectToMacroControl(int macroIndex, bool macroIsTarget, bool filterRepetitions);
+
 		// =============================================================================================
 
 	private:
@@ -2205,11 +2220,12 @@ namespace ScriptingObjects
 		ScriptedMidiPlayer(ProcessorWithScriptingContent* p, MidiPlayer* player_);
 		~ScriptedMidiPlayer();
 
+		
+		static Identifier getClassName() { RETURN_STATIC_IDENTIFIER("MidiPlayer"); };
+
 		Identifier getObjectName() const override { RETURN_STATIC_IDENTIFIER("MidiPlayer"); }
 
 		String getDebugValue() const override;
-
-		String getDebugName() const override;
 
 		void sequenceLoaded(HiseMidiSequence::Ptr newSequence) override;
 		void trackIndexChanged() override;
@@ -2229,6 +2245,12 @@ namespace ScriptingObjects
 		/** Returns the playback position in the current loop between 0.0 and 1.0. */
 		var getPlaybackPosition();
 
+		/** Returns the position of the last played note. */
+		var getLastPlayedNotePosition() const;
+
+		/** Syncs the playback of this MIDI player to the master clock (external or internal). */
+		void setSyncToMasterClock(bool shouldSyncToMasterClock);
+
 		/** If true, the panel will get a repaint() call whenever the playback position changes. 
 		
 			Otherwise it will only be updated when the sequence changes. */
@@ -2242,6 +2264,12 @@ namespace ScriptingObjects
 
 		/** Writes the given array of MessageHolder objects into the current sequence. This is undoable. */
 		void flushMessageList(var messageList);
+
+		/** Uses Ticks instead of samples when editing the MIDI data. */
+		void setUseTimestampInTicks(bool shouldUseTicksAsTimestamps);
+
+		/** Returns the tick resolution for a quarter note. */
+		int getTicksPerQuarter() const;
 
 		/** Creates an empty sequence with the given length. */
 		void create(int nominator, int denominator, int barLength);
@@ -2294,11 +2322,26 @@ namespace ScriptingObjects
 		/** Sets the timing information of the current sequence using the given object. */
 		bool setTimeSignature(var timeSignatureObject);
 
+		/** This will send any CC messages from the MIDI file to the global MIDI handler. */
+		void setAutomationHandlerConsumesControllerEvents(bool shouldBeEnabled);
+
+		/** Attaches a callback that gets executed whenever the sequence was changed. */
+		void setSequenceCallback(var updateFunction);
+
+		/** Returns a typed MIDI processor reference (for setting attributes etc). */
+		var asMidiProcessor();
+
 		// ============================================================================================================
 
 		struct Wrapper;
 
 	private:
+
+		void callUpdateCallback();
+
+		WeakCallbackHolder updateCallback;
+
+		bool useTicks = false;
 
 		bool repaintOnPlaybackChange = false;
 

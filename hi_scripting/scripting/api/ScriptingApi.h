@@ -286,6 +286,9 @@ public:
 		/** Shows a message with a question and executes the function after the user has selected his choice. */
 		void showYesNoWindow(String title, String markdownMessage, var callback);
 
+		/** Decodes an Base64 encrypted valuetree (eg. HiseSnippets). */
+		String decodeBase64ValueTree(const String& b64Data);
+
 		/** Creates a (or returns an existing ) script look and feel object. */
 		var createGlobalScriptLookAndFeel();
 
@@ -341,6 +344,12 @@ public:
 
 		/** Extends the compilation timeout. Use this if you have a long task that would get cancelled otherwise. This is doing nothing in compiled plugins. */
 		void extendTimeOut(int additionalMilliseconds);
+
+		/** Sets the global pitch factor (in semitones). */
+		void setGlobalPitchFactor(double pitchFactorInSemitones);
+
+		/** Returns the global pitch factor (in semitones). */
+		double getGlobalPitchFactor() const;
 
 		/** Changes the lowest visible key on the on screen keyboard. */
 		void setLowestKeyToDisplay(int keyNumber);
@@ -1231,6 +1240,8 @@ public:
 	{
 	public:
 
+		
+
 		TransportHandler(ProcessorWithScriptingContent* sp);;
 		~TransportHandler();
 
@@ -1241,7 +1252,8 @@ public:
 		{
 			Callback(TransportHandler* p, const var& f, bool sync, int numArgs);
 
-			void call(var arg1, var arg2 = {}, bool forceSynchronous=false);
+			void call(var arg1, var arg2 = {}, var arg3 = {}, bool forceSynchronous = false);
+
 
 			void callAsync();
 
@@ -1252,7 +1264,7 @@ public:
 			void callSync();
 
 			const int numArgs;
-			var args[2];
+			var args[3];
 
 			JavascriptProcessor* jp;
 			WeakReference<TransportHandler> th;
@@ -1274,6 +1286,21 @@ public:
 		/** Registers a callback to changes in the musical position (bars / beats). */
 		void setOnBeatChange(bool sync, var f);
 
+		/** Registers a callback to changes in the grid. */
+		void setOnGridChange(bool sync, var f);
+
+		/** Enables a high precision grid timer. */
+		void setEnableGrid(bool shouldBeEnabled, int tempoFactor);
+
+		/** Starts the internal master clock. */
+		void startInternalClock(int timestamp);
+
+		/** Stops the internal master clock. */
+		void stopInternalClock(int timestamp);
+
+		/** Sets the sync mode for the global clock. */
+		void setSyncMode(int syncMode);
+
 	private:
 
 		void clearIf(ScopedPointer<Callback>& cb, const var& f)
@@ -1288,6 +1315,9 @@ public:
 		int denom = 4;
 		int beat = 0;
 		bool newBar = true;
+		int gridIndex = 0;
+		int gridTimestamp = 0;
+		bool firstGridInPlayback = false;
 
 		struct Wrapper;
 
@@ -1295,57 +1325,24 @@ public:
 		ScopedPointer<Callback> transportChangeCallback;
 		ScopedPointer<Callback> timeSignatureCallback;
 		ScopedPointer<Callback> beatCallback;
+		ScopedPointer<Callback> gridCallback;
 
 		ScopedPointer<Callback> tempoChangeCallbackAsync;
 		ScopedPointer<Callback> transportChangeCallbackAsync;
 		ScopedPointer<Callback> timeSignatureCallbackAsync;
 		ScopedPointer<Callback> beatCallbackAsync;
+		ScopedPointer<Callback> gridCallbackAsync;
+		
 
-		void tempoChanged(double newTempo) override
-		{
-			bpm = newTempo;
+		void tempoChanged(double newTempo) override;
 
-			if (tempoChangeCallback != nullptr)
-				tempoChangeCallback->call(newTempo);
+		void onTransportChange(bool isPlaying) override;
 
-			if (tempoChangeCallbackAsync != nullptr)
-				tempoChangeCallbackAsync->call(newTempo);
-		}
+		void onBeatChange(int newBeat, bool isNewBar) override;
 
-		void onTransportChange(bool isPlaying) override
-		{
-			play = isPlaying;
+		void onSignatureChange(int newNominator, int numDenominator) override;
 
-			if (transportChangeCallback != nullptr)
-				transportChangeCallback->call(isPlaying);
-
-			if (transportChangeCallbackAsync != nullptr)
-				transportChangeCallbackAsync->call(isPlaying);
-		}
-
-		void onBeatChange(int newBeat, bool isNewBar) override
-		{
-			beat = newBeat;
-			newBar = isNewBar;
-
-			if (beatCallback != nullptr)
-				beatCallback->call(newBeat, newBar);
-
-			if (beatCallbackAsync != nullptr)
-				beatCallbackAsync->call(newBeat, newBar);
-		}
-
-		void onSignatureChange(int newNominator, int numDenominator) override
-		{
-			nom = newNominator;
-			denom = numDenominator;
-
-			if (timeSignatureCallback != nullptr)
-				timeSignatureCallback->call(newNominator, numDenominator);
-
-			if (timeSignatureCallbackAsync != nullptr)
-				timeSignatureCallbackAsync->call(newNominator, numDenominator);
-		}
+		void onGridChange(int gridIndex_, uint16 timestamp, bool firstGridInPlayback_) override;
 
 		void handlePooledMessage(PooledUIUpdater::Broadcaster* b) override
 		{
@@ -1507,6 +1504,12 @@ public:
 		/** Returns the number of free bytes on the volume of a given folder. */
 		int64 getBytesFreeOnVolume(var folder);
 
+        /** Encrypts the given string using a RSA private key. */
+        String encryptWithRSA(const String& dataToEncrypt, const String& privateKey);
+        
+        /** Decrypts the given string using a RSA public key. */
+        String decryptWithRSA(const String& dataToDecrypt, const String& publicKey);
+        
 		// ========================================================= End of API calls
 
 		ProcessorWithScriptingContent* p;
@@ -1561,6 +1564,9 @@ public:
 
 		/** Converts a colour from a [r, g, b, a] float array to a uint32 value. */
 		int fromVec4(var vec4);
+
+		/** Linear interpolation between two colours. */
+		int mix(int colour1, int colour2, float alpha);
 
 		// ============================================================================================================
 

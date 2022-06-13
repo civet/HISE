@@ -1056,6 +1056,8 @@ void HiseJavascriptEngine::extendTimeout(int milliSeconds)
 
 void HiseJavascriptEngine::abortEverything()
 {
+    preCompileListeners.sendMessage(sendNotificationSync, true);
+    
 	if(root != nullptr)
 		root->timeout = Time(0);
 }
@@ -1569,6 +1571,8 @@ void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& 
 
 		if (WeakReference<HiseJavascriptEngine> e = jp->getScriptEngine())
 		{
+            e->preCompileListeners.addListener(*this, TokenProvider::precompileCallback, false);
+            
 			auto numObjects = e->getNumDebugObjects();
 
 			if (true)
@@ -1608,63 +1612,67 @@ void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& 
 
 				tokens.add(new DebugInformationToken(ptr, v, c2));
 
-				Identifier cid(ptr->getTextForDataType());
+				auto t = ptr->getTextForDataType();
 
-				if (ApiHelpers::getGlobalApiClasses().contains(cid))
+				if (t.isNotEmpty())
 				{
-					auto classTree = v.getChildWithName(cid);
+					Identifier cid(ptr->getTextForDataType());
 
-					for (auto methodTree : classTree)
+					if (ApiHelpers::getGlobalApiClasses().contains(cid))
 					{
-						if (Thread::currentThreadShouldExit() || jp->shouldReleaseDebugLock())
-							return;
+						auto classTree = v.getChildWithName(cid);
 
-						tokens.add(new ApiToken(cid, methodTree));
-					}
-						
-				}
-				else
-				{
-					Identifier oid(ptr->getTextForType());
-
-					auto classTree = v.getChildWithName(oid);
-
-					
-
-					if (classTree.isValid())
-					{
-						for (auto method : classTree)
+						for (auto methodTree : classTree)
 						{
 							if (Thread::currentThreadShouldExit() || jp->shouldReleaseDebugLock())
 								return;
 
-							tokens.add(new ObjectMethodToken(method, ptr));
+							tokens.add(new ApiToken(cid, methodTree));
 						}
 
-						if (auto a = dynamic_cast<ApiClass*>(ptr->getObject()))
-						{
-							Array<Identifier> ids;
-							a->getAllConstants(ids);
+					}
+					else
+					{
+						Identifier oid(ptr->getTextForType());
 
-							int i = 0;
-							for (const auto& id : ids)
+						auto classTree = v.getChildWithName(oid);
+
+
+
+						if (classTree.isValid())
+						{
+							for (auto method : classTree)
 							{
-								tokens.add(new ObjectConstantToken(ptr, id, a->getConstantValue(i++)));
+								if (Thread::currentThreadShouldExit() || jp->shouldReleaseDebugLock())
+									return;
+
+								tokens.add(new ObjectMethodToken(method, ptr));
+							}
+
+							if (auto a = dynamic_cast<ApiClass*>(ptr->getObject()))
+							{
+								Array<Identifier> ids;
+								a->getAllConstants(ids);
+
+								int i = 0;
+								for (const auto& id : ids)
+								{
+									tokens.add(new ObjectConstantToken(ptr, id, a->getConstantValue(i++)));
+								}
 							}
 						}
+
+						if (auto slaf = dynamic_cast<ScriptingObjects::ScriptedLookAndFeel*>(ptr->getObject()))
+						{
+							auto l = ScriptingObjects::ScriptedLookAndFeel::getAllFunctionNames();
+
+							for (auto id : l)
+								tokens.add(new LookAndFeelToken(ptr->getTextForName(), id));
+						}
 					}
 
-					if (auto slaf = dynamic_cast<ScriptingObjects::ScriptedLookAndFeel*>(ptr->getObject()))
-					{
-						auto l = ScriptingObjects::ScriptedLookAndFeel::getAllFunctionNames();
-
-						for (auto id : l)
-							tokens.add(new LookAndFeelToken(ptr->getTextForName(), id));
-					}
+					addRecursive(jp, tokens, ptr, c2, v);
 				}
-
-				addRecursive(jp, tokens, ptr, c2, v);
-
 			}
 		}
 

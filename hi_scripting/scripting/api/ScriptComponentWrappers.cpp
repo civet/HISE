@@ -74,6 +74,14 @@ void ScriptCreatedComponentWrapper::updateComponent(int propertyIndex, var newVa
 	case hise::ScriptingApi::Content::ScriptComponent::width:
 	case hise::ScriptingApi::Content::ScriptComponent::height: contentComponent->updateComponentPosition(this); break;
 	case hise::ScriptingApi::Content::ScriptComponent::parentComponent: contentComponent->updateComponentParent(this); break;
+	case hise::ScriptingApi::Content::ScriptComponent::automationId:
+	{
+		if (auto mco = dynamic_cast<MacroControlledObject*>(getComponent()))
+		{
+			auto id = newValue.toString();
+			mco->connectToCustomAutomation(id.isNotEmpty() ? Identifier(id) : Identifier());
+		}
+	}
 	default:
 		break;
 	}
@@ -96,7 +104,12 @@ bool ScriptCreatedComponentWrapper::setMouseCursorFromParentPanel(ScriptComponen
 	{
 		auto cursor = sp->getMouseCursorPath();
 
-		if (!cursor.path.isEmpty())
+		if (cursor.path.isEmpty() && cursor.defaultCursorType != MouseCursor::NumStandardCursorTypes)
+		{
+			c = MouseCursor(cursor.defaultCursorType);
+			return true;
+		}
+		else if (!cursor.path.isEmpty())
 		{
 #if JUCE_WINDOWS
 			auto s = 80;
@@ -150,6 +163,8 @@ ScriptCreatedComponentWrapper::ScriptCreatedComponentWrapper(ScriptContentCompon
 {
 	scriptComponent = content->contentData->getComponent(index_);
 
+	scriptComponent->repaintBroadcaster.addListener(*this, ScriptCreatedComponentWrapper::repaintComponent, false);
+
 	scriptComponent->addZLevelListener(this);
 }
 
@@ -161,6 +176,7 @@ ScriptCreatedComponentWrapper::ScriptCreatedComponentWrapper(ScriptContentCompon
 	scriptComponent(sc)
 {
 	scriptComponent->addZLevelListener(this);
+	scriptComponent->repaintBroadcaster.addListener(*this, ScriptCreatedComponentWrapper::repaintComponent, false);
 }
 
 Processor * ScriptCreatedComponentWrapper::getProcessor()
@@ -1195,13 +1211,9 @@ ScriptCreatedComponentWrapper(content, index)
     auto slaf = &mc->getGlobalLookAndFeel();
 
     if(auto l = dynamic_cast<TableEditor::LookAndFeelMethods*>(localLookAndFeel.get()))
-    {
         t->setSpecialLookAndFeel(localLookAndFeel, false);
-    }
     else if (auto s = dynamic_cast<TableEditor::LookAndFeelMethods*>(slaf))
-    {
         t->setSpecialLookAndFeel(slaf, false);
-    }
 }
 
 ScriptCreatedComponentWrappers::TableWrapper::~TableWrapper()
@@ -1873,6 +1885,19 @@ void ScriptCreatedComponentWrappers::PanelWrapper::subComponentRemoved(ScriptCom
 
 
 
+void ScriptCreatedComponentWrappers::PanelWrapper::cursorChanged(PanelWrapper& p, ScriptingApi::Content::ScriptPanel::MouseCursorInfo newInfo)
+{
+	MouseCursor cursor;
+
+	auto panel = p.getScriptComponent();
+	auto bp = p.getComponent();
+
+	if (p.setMouseCursorFromParentPanel(panel, cursor))
+	{
+		bp->setMouseCursor(cursor);
+	}
+}
+
 void ScriptCreatedComponentWrappers::PanelWrapper::animationChanged()
 {
 #if HISE_INCLUDE_RLOTTIE
@@ -1904,14 +1929,11 @@ void ScriptCreatedComponentWrappers::PanelWrapper::initPanel(ScriptingApi::Conte
 
 	bp->setEnableFileDrop(panel->fileDropLevel, panel->fileDropExtension);
 
-	MouseCursor cursor;
+	
 
-	if (setMouseCursorFromParentPanel(panel, cursor))
-	{
-		bp->setMouseCursor(cursor);
-	}
 
 	component = bp;
+
 
 #if HISE_INCLUDE_RLOTTIE
 	animationChanged();
@@ -1923,6 +1945,7 @@ void ScriptCreatedComponentWrappers::PanelWrapper::initPanel(ScriptingApi::Conte
 
 	panel->repaint();
 
+	panel->getCursorUpdater().addListener(*this, cursorChanged);
 }
 
 void ScriptCreatedComponentWrappers::PanelWrapper::rebuildChildPanels()
@@ -1955,6 +1978,17 @@ ScriptCreatedComponentWrapper(content, index)
 	component = sp;
 
 	initAllProperties();
+
+	auto slaf = &pack->getScriptProcessor()->getMainController_()->getGlobalLookAndFeel();
+
+	if (auto l = dynamic_cast<SliderPack::LookAndFeelMethods*>(localLookAndFeel.get()))
+	{
+		sp->setSpecialLookAndFeel(localLookAndFeel, false);
+	}
+	else if (auto s = dynamic_cast<SliderPack::LookAndFeelMethods*>(slaf))
+	{
+		sp->setSpecialLookAndFeel(slaf, false);
+	}
 }
 
 ScriptCreatedComponentWrappers::SliderPackWrapper::~SliderPackWrapper()
@@ -2007,9 +2041,6 @@ void ScriptCreatedComponentWrappers::SliderPackWrapper::updateColours(SliderPack
 
 void ScriptCreatedComponentWrappers::SliderPackWrapper::updateRange(SliderPackData* data)
 {
-	return;
-
-#if 0
 	ScriptingApi::Content::ScriptSliderPack *ssp = dynamic_cast<ScriptingApi::Content::ScriptSliderPack*>(getScriptComponent());
 
 	double min = GET_SCRIPT_PROPERTY(min);
@@ -2020,9 +2051,8 @@ void ScriptCreatedComponentWrappers::SliderPackWrapper::updateRange(SliderPackDa
 	{
 		data->setRange(min, max, stepSize);
 		SliderPack *sp = dynamic_cast<SliderPack*>(component.get());
-		sp->updateSliders();
+		sp->updateSliderRange();
 	}
-#endif
 }
 
 void ScriptCreatedComponentWrappers::SliderPackWrapper::updateValue(var newValue)
@@ -2202,8 +2232,6 @@ ScriptCreatedComponentWrappers::AudioWaveformWrapper::AudioWaveformWrapper(Scrip
 {
     auto slaf = &form->getScriptProcessor()->getMainController_()->getGlobalLookAndFeel();
     
-    
-    
 	if (auto s = form->getSampler())
 	{
 		SamplerSoundWaveform* ssw = new SamplerSoundWaveform(s);
@@ -2215,11 +2243,6 @@ ScriptCreatedComponentWrappers::AudioWaveformWrapper::AudioWaveformWrapper(Scrip
 
 		component = ssw;
 
-        if (auto s = dynamic_cast<HiseAudioThumbnail::LookAndFeelMethods*>(slaf))
-        {
-            ssw->getThumbnail()->setLookAndFeel(slaf);
-        }
-        
 		samplerListener = new SamplerListener(s, ssw);
 	}
 	else
@@ -2227,18 +2250,20 @@ ScriptCreatedComponentWrappers::AudioWaveformWrapper::AudioWaveformWrapper(Scrip
 		auto asb = new MultiChannelAudioBufferDisplay();
 		asb->setName(form->name.toString());
         
-        
-        if (auto s = dynamic_cast<HiseAudioThumbnail::LookAndFeelMethods*>(slaf))
-        {
-            asb->getThumbnail()->setLookAndFeel(slaf);
-        }
-        
 		component = asb;
 	}
 
 	form->getSourceWatcher().addSourceListener(this);
 
 	initAllProperties();
+
+	if (auto adc = dynamic_cast<AudioDisplayComponent*>(component.get()))
+	{
+		if (auto l = dynamic_cast<HiseAudioThumbnail::LookAndFeelMethods*>(localLookAndFeel.get()))
+			adc->getThumbnail()->setLookAndFeel(localLookAndFeel);
+		else if (auto s = dynamic_cast<HiseAudioThumbnail::LookAndFeelMethods*>(slaf))
+			adc->getThumbnail()->setLookAndFeel(slaf);
+	}
 }
 
 

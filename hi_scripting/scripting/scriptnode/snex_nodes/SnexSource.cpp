@@ -49,8 +49,6 @@ void SnexSource::recompiled(WorkbenchData::Ptr wb)
 
 	lastResult = wb->getLastResult().compileResult;
 
-	
-
 	throwScriptnodeErrorIfCompileFail();
 
 	if (auto objPtr = wb->getLastResult().mainClassPtr)
@@ -615,6 +613,9 @@ snex::jit::FunctionData SnexSource::HandlerBase::getFunctionAsObjectCallback(con
 		{
 			auto numChannels = parent.getParentNode()->getCurrentChannelAmount();
 
+			if (numChannels == 0)
+				numChannels = 2;
+
 			auto f = obj->getNodeCallback(Identifier(id), numChannels, checkProcessFunctions);
 
 			if (f.isResolved())
@@ -624,7 +625,7 @@ snex::jit::FunctionData SnexSource::HandlerBase::getFunctionAsObjectCallback(con
 			}
 			else
 			{
-				
+				return f;
 			}
 		}
 	}

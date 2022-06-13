@@ -54,7 +54,7 @@ struct ParameterKnobLookAndFeel : public GlobalHiseLookAndFeel
 		SliderLabel(Slider& s) :
 			parent(&s)
 		{
-			auto tmp = Component::SafePointer<SliderLabel>(this);
+            auto tmp = Component::SafePointer<SliderLabel>(this);
 			auto n = parent->getName();
 
 			auto f = [tmp, n]()
@@ -76,10 +76,19 @@ struct ParameterKnobLookAndFeel : public GlobalHiseLookAndFeel
 			updateText();
 		}
 
+        void textEditorReturnKeyPressed(TextEditor& t) override
+        {
+            NiceLabel::textEditorReturnKeyPressed(t);
+            
+            enableTextSwitch = true;
+        }
+        
 		void editorShown(TextEditor* ed)
 		{
+            enableTextSwitch = false;
 			Label::editorShown(ed);
 
+            ed->setJustification(Justification::centred);
 			ed->setText(parent->getTextFromValue(parent->getValue()), dontSendNotification);
 			ed->selectAll();
 			ed->setBounds(getLocalBounds());
@@ -96,14 +105,8 @@ struct ParameterKnobLookAndFeel : public GlobalHiseLookAndFeel
             
 		}
 
-		void updateText()
-		{
-			if (parent->isMouseButtonDown(true))
-				setText(parent->getTextFromValue(parent->getValue()), dontSendNotification);
-			else
-				setText(parent->getName(), dontSendNotification);
-		}
-
+		void updateText();
+        
 		void startDrag()
 		{
 			setText(parent->getTextFromValue(parent->getValue()), dontSendNotification);
@@ -114,6 +117,8 @@ struct ParameterKnobLookAndFeel : public GlobalHiseLookAndFeel
 			setText(parent->getName(), dontSendNotification);
 		}
 
+        
+        bool enableTextSwitch = true;
         Component::SafePointer<Slider> parent;
 	};
 
@@ -131,6 +136,20 @@ struct ParameterSlider : public Slider,
     public hise::Learnable,
 	public PooledUIUpdater::SimpleTimer
 {
+	
+	/** This function will find all valuetrees that are connected to the given connection source tree. 
+		
+		This is used by the `Copy range to source` function as well as the warning display on 
+		unscaled modulation draggers.
+
+	*/
+	static Array<ValueTree> getValueTreesForSourceConnection(const ValueTree& connectionSourceTree);
+
+	struct ParameterIcons : public PathFactory
+	{
+		Path createPath(const String& path) const override;
+	};
+
 	struct RangeButton : public Component
 	{
 		RangeButton()
@@ -145,14 +164,13 @@ struct ParameterSlider : public Slider,
 
 		void paint(Graphics& g) override
 		{
-			static const unsigned char pathData[] = { 110,109,246,40,170,65,102,102,214,65,108,246,40,170,65,240,39,42,66,108,0,0,0,0,246,40,170,65,108,246,40,170,65,0,0,0,0,108,246,40,170,65,242,210,123,65,108,147,24,34,66,242,210,123,65,108,147,24,34,66,0,0,0,0,108,14,45,119,66,246,40,170,65,108,147,24,
-34,66,240,39,42,66,108,147,24,34,66,102,102,214,65,108,246,40,170,65,102,102,214,65,99,101,0,0 };
+			auto p = ParameterIcons().createPath("range");
+
+			
 
 			auto over = isMouseOver(true);
 			auto down = isMouseButtonDown(true);
 
-			Path p;
-			p.loadPathFromData(pathData, sizeof(pathData));
 			PathFactory::scalePath(p, getLocalBounds().toFloat().reduced(isMouseButtonDown() ? 2.0f : 1.0f));
 
 			float alpha = 0.0f;
@@ -229,6 +247,10 @@ struct ParameterSlider : public Slider,
 
 	bool isControllingFrozenNode() const;
 
+	void repaintParentGraph();
+
+
+
 	int macroHoverIndex = -1;
 	double lastModValue = 0.0f;
 	bool modulationActive = false;
@@ -243,6 +265,10 @@ struct ParameterSlider : public Slider,
 	const int index;
 	double lastDisplayValue = -1.0;
 	bool illegal = false;
+    
+    bool skipTextUpdate = false;
+    
+    float blinkAlpha = 0.0f;
 
 };
 
@@ -257,7 +283,10 @@ struct MacroParameterSlider : public Component
 
 	void mouseUp(const MouseEvent& e) override;
 
-	
+	void mouseEnter(const MouseEvent& e) override;
+	void mouseExit(const MouseEvent& e) override;
+
+	WeakReference<NodeBase::Parameter> getParameter();
 
 	void paintOverChildren(Graphics& g) override;
 

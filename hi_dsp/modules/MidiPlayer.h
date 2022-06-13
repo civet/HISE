@@ -59,6 +59,13 @@ class HiseMidiSequence : public ReferenceCountedObject,
 {
 public:
 
+	enum class TimestampEditFormat
+	{
+		Samples,
+		Ticks,
+		numTimestampFormats
+	};
+
 	struct TimeSignature: public RestorableObject
 	{
 		double numBars = 0.0;
@@ -158,9 +165,11 @@ public:
 	double getLength() const;
 
 	/** Returns the length of the MIDI sequence in quarter beats. */
-	double getLengthInQuarters();
+	double getLengthInQuarters() const;
 
 	double getLengthInSeconds(double bpm);
+
+	double getLastPlayedNotePosition() const;
 
 	/** Forces the length of the sequence to this value. If you want to use the original length, pass in -1.0. */
 	void setLengthInQuarters(double newLength);
@@ -241,7 +250,16 @@ public:
 	/** Creates an empty track and selects it. */
 	void createEmptyTrack();
 
+	TimestampEditFormat getTimestampEditFormat() const { return timestampFormat; }
+
+	void setTimeStampEditFormat(TimestampEditFormat formatToUse)
+	{
+		timestampFormat = formatToUse;
+	}
+
 private:
+
+	TimestampEditFormat timestampFormat = TimestampEditFormat::Samples;
 
 	TimeSignature signature;
 
@@ -431,6 +449,9 @@ public:
 	/**@ internal */
 	void tempoChanged(double newTempo) override;
 
+	void onGridChange(int gridIndex, uint16 timestamp, bool firstGridEventInPlayback) override;
+
+	void onTransportChange(bool isPlaying) override;
 	
 	enum class RecordState
 	{
@@ -514,6 +535,12 @@ public:
 
 	/** Returns the normalised playback position inside the current loop. This will never be outside the bounds of the loop. */
 	double getPlayPackPositionInLoop() const;
+
+	/** This will send any CC messages from the MIDI file to the global MIDI handler. */
+	void setMidiControlAutomationHandlerConsumesControllerEvents(bool shouldBeEnabled)
+	{
+		globalMidiHandlerConsumesCC = shouldBeEnabled;
+	}
 
 	void swapCurrentSequence(MidiMessageSequence* newSequence);
 	void enableInternalUndoManager(bool shouldBeEnabled);
@@ -627,7 +654,32 @@ public:
 		forcedReference = r;
 	}
 
+	void setSyncToMasterClock(bool shouldSyncToMasterClock);
+
 private:
+
+	struct Updater : private PooledUIUpdater::SimpleTimer
+	{
+		Updater(MidiPlayer& mp);;
+
+		void timerCallback() override;
+
+		bool handleUpdate(HiseMidiSequence::Ptr seq, NotificationType n);
+
+		bool dirty = false;
+
+		HiseMidiSequence::Ptr sequenceToUpdate;
+
+		MidiPlayer& parent;
+	} updater;
+
+	bool stopInternal(int timestamp);
+
+	bool startInternal(int timestamp);
+
+	bool recordInternal(int timestamp);
+
+	bool syncToMasterClock = false;
 
 	PoolReference forcedReference;
 
@@ -648,13 +700,14 @@ private:
 
 	bool isRecording() const noexcept { return getPlayState() == PlayState::Record; }
 
-	
+	bool globalMidiHandlerConsumesCC = false;
 
 	ScopedPointer<UndoManager> ownedUndoManager;
     UndoManager* undoManager = nullptr;
 
 	Array<PoolReference> currentlyLoadedFiles;
 
+	SimpleReadWriteLock listenerLock;
 	Array<WeakReference<SequenceListener>> sequenceListeners;
 	void changeTransportState(PlayState newState);
 

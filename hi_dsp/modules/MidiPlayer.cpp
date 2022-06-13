@@ -244,7 +244,7 @@ double HiseMidiSequence::getLength() const
 	return maxLength;
 }
 
-double HiseMidiSequence::getLengthInQuarters()
+double HiseMidiSequence::getLengthInQuarters() const
 {
 	SimpleReadWriteLock::ScopedReadLock sl(swapLock);
 
@@ -264,6 +264,23 @@ double HiseMidiSequence::getLengthInQuarters()
 double HiseMidiSequence::getLengthInSeconds(double bpm)
 {
 	return getLengthInQuarters() * 60.0 / bpm;
+}
+
+double HiseMidiSequence::getLastPlayedNotePosition() const
+{
+	if (auto seq = getReadPointer(currentTrackIndex))
+	{
+		if (auto h = seq->getEventPointer(lastPlayedIndex))
+		{
+			auto lastTimestamp = h->message.getTimeStamp();
+
+			auto lengthInTicks = getLengthInQuarters() * TicksPerQuarter;
+
+			return lastTimestamp / lengthInTicks;
+		}
+	}
+
+	return 0.0;
 }
 
 void HiseMidiSequence::setLengthInQuarters(double newLength)
@@ -494,8 +511,6 @@ juce::RectangleList<float> HiseMidiSequence::getRectangleList(Rectangle<float> t
 
 Array<HiseEvent> HiseMidiSequence::getEventList(double sampleRate, double bpm)
 {
-	
-
 	Array<HiseEvent> newBuffer;
 	newBuffer.ensureStorageAllocated(getNumEvents());
 
@@ -527,11 +542,19 @@ Array<HiseEvent> HiseMidiSequence::getEventList(double sampleRate, double bpm)
 				if (onTsTicks == offTsTicks) // note on lies after the end of the sequence
 					continue;
 
-				auto onTs = (int)(samplePerQuarter * onTsTicks / (double)HiseMidiSequence::TicksPerQuarter);
-				auto offTs = (int)(samplePerQuarter * offTsTicks / (double)HiseMidiSequence::TicksPerQuarter);
-				
-				on.setTimeStamp(onTs);
-				off.setTimeStamp(offTs);
+				if (timestampFormat == TimestampEditFormat::Samples)
+				{
+					auto onTs = (int)(samplePerQuarter * onTsTicks / (double)HiseMidiSequence::TicksPerQuarter);
+					auto offTs = (int)(samplePerQuarter * offTsTicks / (double)HiseMidiSequence::TicksPerQuarter);
+
+					on.setTimeStamp(onTs);
+					off.setTimeStamp(offTs);
+				}
+				else
+				{
+					on.setTimeStamp(onTsTicks);
+					off.setTimeStamp(offTsTicks);
+				}
 
 				newBuffer.add(on);
 				newBuffer.add(off);
@@ -633,21 +656,33 @@ void MidiPlayer::EditAction::writeArrayToSequence(HiseMidiSequence::Ptr destinat
 	if (destination == nullptr)
 		return;
 
+	auto format = destination->getTimestampEditFormat();
+
+
+
 	ScopedPointer<MidiMessageSequence> newSeq = new MidiMessageSequence();
 
 	auto samplePerQuarter = (double)TempoSyncer::getTempoInSamples(bpm, sampleRate, TempoSyncer::Quarter);
 
 	auto maxLength = destination->getLength();
 
-	for (const auto& e : arrayToWrite)
+	for (auto& e : arrayToWrite)
 	{
 		if (e.isEmpty())
 			continue;
 
-		auto timeStamp = ((double)e.getTimeStamp() / samplePerQuarter) * (double)HiseMidiSequence::TicksPerQuarter;
+		double timeStamp;
+
+		if (format == HiseMidiSequence::TimestampEditFormat::Samples)
+			timeStamp = ((double)e.getTimeStamp() / samplePerQuarter) * (double)HiseMidiSequence::TicksPerQuarter;
+		else
+			timeStamp = e.getTimeStamp();
 
 		if (maxLength != 0.0)
 			timeStamp = jmin(maxLength, timeStamp);
+
+		if (e.getChannel() == 0)
+			e.setChannel(1);
 
 		if (e.isNoteOn() && e.getTransposeAmount() != 0)
 		{
@@ -679,7 +714,8 @@ void MidiPlayer::EditAction::writeArrayToSequence(HiseMidiSequence::Ptr destinat
 
 MidiPlayer::MidiPlayer(MainController *mc, const String &id, ModulatorSynth* ) :
 	MidiProcessor(mc, id),
-	ownedUndoManager(new UndoManager())
+	ownedUndoManager(new UndoManager()),
+	updater(*this)
 {
 	addAttributeID(Stop);
 	addAttributeID(Play);
@@ -691,7 +727,6 @@ MidiPlayer::MidiPlayer(MainController *mc, const String &id, ModulatorSynth* ) :
 	addAttributeID(PlaybackSpeed);
 
 	mc->addTempoListener(this);
-
 }
 
 MidiPlayer::~MidiPlayer()
@@ -702,6 +737,30 @@ MidiPlayer::~MidiPlayer()
 void MidiPlayer::tempoChanged(double newTempo)
 {
 	ticksPerSample = MidiPlayerHelpers::samplesToTicks(1, newTempo, getSampleRate());
+}
+
+void MidiPlayer::onGridChange(int gridIndex, uint16 timestamp, bool firstGridEventInPlayback)
+{
+	if (syncToMasterClock && firstGridEventInPlayback)
+	{
+		startInternal(timestamp);
+
+		if (gridIndex != 0)
+		{
+			auto t = getMainController()->getMasterClock().getCurrentClockGrid();
+			auto quarterPos = (double)gridIndex * TempoSyncer::getTempoFactor(t);
+			auto tickPos = quarterPos * (double)HiseMidiSequence::TicksPerQuarter;
+			setPositionWithTicksFromPlaybackStart(tickPos);
+		}
+	}
+}
+
+void MidiPlayer::onTransportChange(bool isPlaying)
+{
+	if (syncToMasterClock && !isPlaying)
+	{
+		stopInternal(0);
+	}
 }
 
 juce::ValueTree MidiPlayer::exportAsValueTree() const
@@ -1062,7 +1121,20 @@ void MidiPlayer::preprocessBuffer(HiseEventBuffer& buffer, int numSamples)
 			newEvent.setArtificial();
 			newEvent.setChannel(currentTrackIndex + 1);
 
-			if (newEvent.isNoteOn() && !isBypassed())
+			if (newEvent.isController())
+			{
+				bool consumed = false;
+
+				if (globalMidiHandlerConsumesCC)
+				{
+					auto handler = getMainController()->getMacroManager().getMidiControlAutomationHandler();
+					consumed = handler->handleControllerMessage(newEvent);
+				}
+				
+				if(!consumed)
+					buffer.addEvent(newEvent);
+			}
+			else if (newEvent.isNoteOn() && !isBypassed())
 			{
 				getMainController()->getEventHandler().pushArtificialNoteOn(newEvent);
 
@@ -1151,11 +1223,13 @@ void MidiPlayer::processHiseEvent(HiseEvent &m) noexcept
 
 void MidiPlayer::addSequenceListener(SequenceListener* newListener)
 {
+	SimpleReadWriteLock::ScopedWriteLock sl(listenerLock);
 	sequenceListeners.addIfNotAlreadyThere(newListener);
 }
 
 void MidiPlayer::removeSequenceListener(SequenceListener* listenerToRemove)
 {
+	SimpleReadWriteLock::ScopedWriteLock sl(listenerLock);
 	sequenceListeners.removeAllInstancesOf(listenerToRemove);
 }
 
@@ -1199,6 +1273,24 @@ void MidiPlayer::swapSequenceListWithIndex(HiseMidiSequence::List listToSwapWith
 	sendSequenceUpdateMessage(sendNotificationAsync);
 }
 
+void MidiPlayer::setSyncToMasterClock(bool shouldSyncToMasterClock)
+{
+	// You can't sync to the clock if the grid is not enabled...
+	jassert(!shouldSyncToMasterClock || getMainController()->getMasterClock().isGridEnabled());
+
+	if (syncToMasterClock != shouldSyncToMasterClock)
+	{
+		syncToMasterClock = shouldSyncToMasterClock;
+
+		if (syncToMasterClock)
+			getMainController()->addMusicalUpdateListener(this);
+		else
+			getMainController()->removeMusicalUpdateListener(this);
+	}
+
+	stopInternal(0);
+}
+
 void MidiPlayer::sendPlaybackChangeMessage(int timestamp)
 {
 	if (!playbackListeners.isEmpty())
@@ -1210,35 +1302,7 @@ void MidiPlayer::sendPlaybackChangeMessage(int timestamp)
 
 void MidiPlayer::sendSequenceUpdateMessage(NotificationType notification)
 {
-	WeakReference<MidiPlayer> mp = this;
-
-	auto update = [mp]()
-	{
-		if (mp.get() == nullptr)
-			return;
-
-		if (auto seq = mp->getCurrentSequence())
-		{
-			for (auto l : mp->sequenceListeners)
-			{
-				if (l != nullptr)
-					l->sequenceLoaded(seq);
-			}
-		}
-		else
-		{
-			for (auto l : mp->sequenceListeners)
-			{
-				if (l != nullptr)
-					l->sequencesCleared();
-			}
-		}
-	};
-
-	if (notification == sendNotificationAsync)
-		MessageManager::callAsync(update);
-	else
-		update();
+	updater.handleUpdate(getCurrentSequence(), notification);
 }
 
 void MidiPlayer::changeTransportState(PlayState newState)
@@ -1254,6 +1318,9 @@ void MidiPlayer::changeTransportState(PlayState newState)
 
 double MidiPlayer::getPlaybackPositionFromTicksSinceStart() const
 {
+	if (playState == PlayState::Stop)
+		return 0.0;
+
 	if (auto seq = getCurrentSequence())
 	{
 		auto range = seq->getTimeSignature().normalisedLoopRange;
@@ -1425,35 +1492,7 @@ hise::PoolReference MidiPlayer::getPoolReference(int index /*= -1*/)
 	return currentlyLoadedFiles[index];
 }
 
-bool MidiPlayer::play(int timestamp)
-{
-	sendAllocationFreeChangeMessage();
-
-	if (auto seq = getCurrentSequence())
-	{
-		if (isRecording())
-			finishRecording();
-		else
-		{
-			// This allows switching from record to play while maintaining the position
-			currentPosition = 0.0;
-			seq->resetPlayback();
-		}
-			
-		playState = PlayState::Play;
-		timeStampForNextCommand = timestamp;
-		
-		sendPlaybackChangeMessage(timestamp);
-
-		ticksSincePlaybackStart = 0.0;
-
-		return true;
-	}
-		
-	return false;
-}
-
-bool MidiPlayer::stop(int timestamp)
+bool MidiPlayer::stopInternal(int timestamp)
 {
 	sendAllocationFreeChangeMessage();
 
@@ -1467,27 +1506,49 @@ bool MidiPlayer::stop(int timestamp)
 			addNoteOffsToPendingNoteOns();
 		}
 
-		
-		
-
 		seq->resetPlayback();
 		playState = PlayState::Stop;
 
-		
-
 		timeStampForNextCommand = timestamp;
 		currentPosition = -1.0;
-		
-		sendPlaybackChangeMessage(timestamp);
 
+		sendPlaybackChangeMessage(timestamp);
 
 		return true;
 	}
-		
+
 	return false;
 }
 
-bool MidiPlayer::record(int timestamp)
+bool MidiPlayer::startInternal(int timestamp)
+{
+	sendAllocationFreeChangeMessage();
+
+	if (auto seq = getCurrentSequence())
+	{
+		if (isRecording())
+			finishRecording();
+		else
+		{
+			// This allows switching from record to play while maintaining the position
+			currentPosition = 0.0;
+			seq->resetPlayback();
+		}
+
+		playState = PlayState::Play;
+		timeStampForNextCommand = timestamp;
+
+		sendPlaybackChangeMessage(timestamp);
+
+		ticksSincePlaybackStart = 0.0;
+
+		return true;
+	}
+
+	return false;
+}
+
+bool MidiPlayer::recordInternal(int timestamp)
 {
 	sendAllocationFreeChangeMessage();
 
@@ -1496,7 +1557,7 @@ bool MidiPlayer::record(int timestamp)
 		currentPosition = 0.0;
 		ticksSincePlaybackStart = 0.0;
 
-		if(auto seq = getCurrentSequence())
+		if (auto seq = getCurrentSequence())
 			seq->resetPlayback();
 	}
 
@@ -1507,12 +1568,36 @@ bool MidiPlayer::record(int timestamp)
 
 	useNextNoteAsRecordStartPos = true;
 
-	
+
 
 	if (recordState == RecordState::Idle)
 		prepareForRecording(true);
 
 	return false;
+}
+
+bool MidiPlayer::play(int timestamp)
+{
+	if (syncToMasterClock)
+		return false;
+
+	return startInternal(timestamp);
+}
+
+bool MidiPlayer::stop(int timestamp)
+{
+	if (syncToMasterClock)
+		return false;
+
+	return stopInternal(timestamp);
+}
+
+bool MidiPlayer::record(int timestamp)
+{
+	if (syncToMasterClock)
+		return false;
+
+	return recordInternal(timestamp);
 }
 
 
@@ -1605,8 +1690,7 @@ void MidiPlayer::finishRecording()
 					l->add(artificialNoteOff);
 				}
 			}
-
-			if (currentEvent.isNoteOff())
+			else if (currentEvent.isNoteOff())
 			{
 				bool found = false;
 
@@ -1887,6 +1971,63 @@ void MidiPlayerBaseType::changeListenerCallback(SafeChangeBroadcaster* )
 	{
 		lastTrackIndex = trackIndex;
 		trackIndexChanged();
+	}
+}
+
+
+
+MidiPlayer::Updater::Updater(MidiPlayer& mp) :
+	SimpleTimer(mp.getMainController()->getGlobalUIUpdater()),
+	parent(mp)
+{
+	start();
+}
+
+void MidiPlayer::Updater::timerCallback()
+{
+	if (dirty)
+	{
+		if (handleUpdate(sequenceToUpdate, sendNotificationSync))
+		{
+			dirty = false;
+			sequenceToUpdate = nullptr;
+		}
+	}
+}
+
+bool MidiPlayer::Updater::handleUpdate(HiseMidiSequence::Ptr seq, NotificationType n)
+{
+	if (n != sendNotificationAsync)
+	{
+		if (auto sl = SimpleReadWriteLock::ScopedTryReadLock(parent.listenerLock))
+		{
+			if (seq != nullptr)
+			{
+				for (auto l : parent.sequenceListeners)
+				{
+					if (l != nullptr)
+						l->sequenceLoaded(seq);
+				}
+			}
+			else
+			{
+				for (auto l : parent.sequenceListeners)
+				{
+					if (l != nullptr)
+						l->sequencesCleared();
+				}
+			}
+
+			return true;
+		}
+		else
+			return false;
+	}
+	else
+	{
+		sequenceToUpdate = seq;
+		dirty = true;
+		return true;
 	}
 }
 

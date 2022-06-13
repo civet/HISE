@@ -278,6 +278,27 @@ void SliderPack::setNumSliders(int numSliders)
 	data->setNumSliders(numSliders);
 }
 
+void SliderPack::updateSliderRange()
+{
+	auto rToUse = data->getRange();
+	auto stepSize = data->getStepSize();
+
+	for (int i = 0; i < sliders.size(); i++)
+	{
+		Slider *s = sliders[i];
+
+		s->setRange(rToUse, stepSize);
+
+		float v = (float)data->getValue(i);
+		v = FloatSanitizers::sanitizeFloatNumber(v);
+
+		s->setValue((double)v, dontSendNotification);
+		s->repaint();
+	}
+
+	repaint();
+}
+
 void SliderPack::updateSliders()
 {
 	for (int i = 0; i < sliders.size(); i++)
@@ -594,50 +615,18 @@ void SliderPack::paintOverChildren(Graphics &g)
 
 	if (rightClickLine.getLength() != 0)
 	{
-		g.setColour(Colours::white.withAlpha(0.6f));
-
-		g.drawLine(rightClickLine, 1.0f);
-
-		Rectangle<float> startDot(rightClickLine.getStart().getX() - 2.0f, rightClickLine.getStart().getY() - 2.0f, 4.0f, 4.0f);
-
-		Rectangle<float> endDot(rightClickLine.getEnd().getX() - 2.0f, rightClickLine.getEnd().getY() - 2.0f, 4.0f, 4.0f);
-
-		g.drawRoundedRectangle(startDot, 2.0f, 1.0f);
-
-		g.drawRoundedRectangle(endDot, 2.0f, 1.0f);
-
-		g.setColour(Colours::white.withAlpha(0.2f));
-
-		g.fillRoundedRectangle(startDot, 2.0f);
-		g.fillRoundedRectangle(endDot, 2.0f);
-
-		
+		if (auto l = getSpecialLookAndFeel<LookAndFeelMethods>())
+			l->drawSliderPackRightClickLine(g, *this, rightClickLine);
 	}
 
 	else if (currentlyDragged && data->isValueOverlayShown())
 	{
 		const double logFromStepSize = log10(data->getStepSize());
-
 		const int unit = -roundToInt(logFromStepSize);
-
-		g.setColour(Colours::white.withAlpha(0.3f));
-
 		String textToDraw = " #" + String(currentlyDraggedSlider) + ": " + String(currentlyDraggedSliderValue, unit) + suffix + " ";
 
-		const int w = GLOBAL_MONOSPACE_FONT().getStringWidth(textToDraw);
-
-		Rectangle<int> r(getWidth() - w, 0, w, 18);
-
-		g.fillRect(r);
-
-		g.setColour(Colours::white.withAlpha(0.4f));
-
-		g.drawRect(r, 1);
-
-		g.setColour(Colours::black);
-		g.setFont(GLOBAL_MONOSPACE_FONT());
-
-		g.drawText(textToDraw, r, Justification::centredRight, true);
+		if (auto l = getSpecialLookAndFeel<LookAndFeelMethods>())
+			l->drawSliderPackTextPopup(g, *this, textToDraw);
 	}
 }
 
@@ -687,8 +676,11 @@ void SliderPack::displayedIndexChanged(SliderPackData* d, int newIndex)
 	{
 		currentDisplayIndex = newIndex;
 
-		displayAlphas.set(newIndex, 0.4f);
-		startTimer(30);
+        if(newIndex != -1)
+        {
+            displayAlphas.set(newIndex, 0.4f);
+            startTimer(30);
+        }
 	}
 }
 
@@ -817,7 +809,8 @@ void SliderPack::rebuildSliders()
 			Slider *s = new Slider();
 			addAndMakeVisible(s);
 			sliders.add(s);
-			s->setLookAndFeel(getSpecialLookAndFeel<LookAndFeel>());
+			s->setComponentID(String(i));
+			//s->setLookAndFeel(getSpecialLookAndFeel<LookAndFeel>());
 			s->setInterceptsMouseClicks(false, false);
 			s->addListener(this);
 			s->setSliderStyle(Slider::SliderStyle::LinearBarVertical);
@@ -969,6 +962,43 @@ void SliderPack::LookAndFeelMethods::drawSliderPackFlashOverlay(Graphics& g, Sli
 {
 	g.setColour(Colours::white.withAlpha(intensity));
 	g.fillRect(sliderBounds);
+}
+
+void SliderPack::LookAndFeelMethods::drawSliderPackRightClickLine(Graphics& g, SliderPack& s, Line<float> lineToDraw)
+{
+	g.setColour(Colours::white.withAlpha(0.6f));
+	g.drawLine(lineToDraw, 1.0f);
+
+	Rectangle<float> startDot(lineToDraw.getStart().getX() - 2.0f, lineToDraw.getStart().getY() - 2.0f, 4.0f, 4.0f);
+	Rectangle<float> endDot(lineToDraw.getEnd().getX() - 2.0f, lineToDraw.getEnd().getY() - 2.0f, 4.0f, 4.0f);
+
+	g.drawRoundedRectangle(startDot, 2.0f, 1.0f);
+	g.drawRoundedRectangle(endDot, 2.0f, 1.0f);
+
+	g.setColour(Colours::white.withAlpha(0.2f));
+
+	g.fillRoundedRectangle(startDot, 2.0f);
+	g.fillRoundedRectangle(endDot, 2.0f);
+}
+
+void SliderPack::LookAndFeelMethods::drawSliderPackTextPopup(Graphics& g, SliderPack& s, const String& textToDraw)
+{
+	g.setColour(Colours::white.withAlpha(0.3f));
+
+	const int w = GLOBAL_MONOSPACE_FONT().getStringWidth(textToDraw);
+
+	Rectangle<int> r(s.getWidth() - w, 0, w, 18);
+
+	g.fillRect(r);
+
+	g.setColour(Colours::white.withAlpha(0.4f));
+
+	g.drawRect(r, 1);
+
+	g.setColour(Colours::black);
+	g.setFont(GLOBAL_MONOSPACE_FONT());
+
+	g.drawText(textToDraw, r, Justification::centredRight, true);
 }
 
 } // namespace hise

@@ -44,11 +44,6 @@ class AudioDisplayComponent;
 
 #define EDGE_WIDTH 8
 
-#ifndef HISE_USE_SYMMETRIC_WAVEFORMS
-#define HISE_USE_SYMMETRIC_WAVEFORMS 0
-#endif
-
-
 class HiseAudioThumbnail: public Component,
 						  public AsyncUpdater,
                           public Spectrum2D::Holder
@@ -63,7 +58,25 @@ public:
 		DownsampledCurve,
 		numDisplayModes
 	};
-
+    
+    
+    
+    struct RenderOptions
+    {
+        bool operator==(const RenderOptions& r)
+        {
+            return memcmp(this, &r, sizeof(RenderOptions)) == 0;
+        }
+        
+        DisplayMode displayMode = DisplayMode::SymmetricArea;
+        float manualDownSampleFactor = -1.0f;
+        bool drawHorizontalLines = false;
+        bool scaleVertically = false;
+        float displayGain = 1.0f;
+        bool useRectList = false;
+        int forceSymmetry = 0;
+    };
+    
 	struct LookAndFeelMethods
 	{
 		virtual ~LookAndFeelMethods() {};
@@ -73,6 +86,10 @@ public:
 		virtual void drawHiseThumbnailRectList(Graphics& g, HiseAudioThumbnail& th, bool areaIsEnabled, const RectangleListType& rectList);
 		virtual void drawTextOverlay(Graphics& g, HiseAudioThumbnail& th, const String& text, Rectangle<float> area);
         virtual void drawThumbnailRange(Graphics& g, HiseAudioThumbnail& te, Rectangle<float> area, int areaIndex, Colour c, bool areaEnabled);
+
+		virtual void drawThumbnailRuler(Graphics& g, HiseAudioThumbnail& te, int xPosition);
+        
+        virtual RenderOptions getThumbnailRenderOptions(HiseAudioThumbnail& te, const RenderOptions& defaultRenderOptions) { return defaultRenderOptions; }
 	};
 
 	struct DefaultLookAndFeel : public LookAndFeel_V3,
@@ -135,21 +152,21 @@ public:
 		return lengthInSeconds;
 	}
 	
-	bool shouldScaleVertically() const { return scaleVertically; };
+	bool shouldScaleVertically() const { return currentOptions.scaleVertically; };
 
 	void setShouldScaleVertically(bool shouldScale)
 	{
-		scaleVertically = shouldScale;
+		currentOptions.scaleVertically = shouldScale;
 	};
 
 	void setDisplayGain(float gainToApply, NotificationType notify=sendNotification)
 	{
 		if (gainToApply != 1.0f)
-			scaleVertically = false;
+			currentOptions.scaleVertically = false;
 
-		if (gainToApply != displayGain)
+		if (gainToApply != currentOptions.displayGain)
 		{
-			displayGain = gainToApply;
+			currentOptions.displayGain = gainToApply;
 
 			switch (notify)
 			{
@@ -178,18 +195,40 @@ public:
 			
 	}
 
+    void lookAndFeelChanged() override
+    {
+        auto prevOptions = currentOptions;
+        
+        if(auto laf = dynamic_cast<LookAndFeelMethods*>(&getLookAndFeel()))
+            currentOptions = laf->getThumbnailRenderOptions(*this, currentOptions);
+        
+        if(!(prevOptions == currentOptions))
+            rebuildPaths();
+    }
+    
 	void setDisplayMode(DisplayMode newDisplayMode)
 	{
-		if (newDisplayMode != displayMode)
+		if (newDisplayMode != currentOptions.displayMode)
 		{
-			displayMode = newDisplayMode;
+			currentOptions.displayMode = newDisplayMode;
 			rebuildPaths();
 		}
 	};
 
+	void setManualDownsampleFactor(float newDownSampleFactor)
+	{
+		FloatSanitizers::sanitizeFloatNumber(newDownSampleFactor);
+
+		if (newDownSampleFactor == -1)
+			currentOptions.manualDownSampleFactor = -1.0f;
+		else
+			currentOptions.manualDownSampleFactor = jlimit<float>(1.0f, 10.0f, newDownSampleFactor);
+
+	}
+
 	void setDrawHorizontalLines(bool shouldDrawHorizontalLines)
 	{
-		drawHorizontalLines = shouldDrawHorizontalLines;
+		currentOptions.drawHorizontalLines = shouldDrawHorizontalLines;
 		repaint();
 	}
 
@@ -235,12 +274,16 @@ public:
 
 private:
 
+    RenderOptions currentOptions;
+    
+	//float manualDownSampleFactor = -1.0f;
+
 	AudioDataProcessor sampleProcessor;
 
-	DisplayMode displayMode = DisplayMode::SymmetricArea;
+	//DisplayMode displayMode = DisplayMode::SymmetricArea;
 	AudioSampleBuffer downsampledValues;
 
-    bool useRectList = false;
+    //bool useRectList = false;
     
 	void createCurvePathForCurrentView(bool isLeft, Rectangle<int> area);
 
@@ -248,14 +291,14 @@ private:
     
 	float applyDisplayGain(float value)
 	{
-		return jlimit(-1.0f, 1.0f, value * displayGain);
+		return jlimit(-1.0f, 1.0f, value * currentOptions.displayGain);
 	}
 
 	double sampleRate = 44100.0;
 
-	float displayGain = 1.0f;
+	//float displayGain = 1.0f;
 
-	bool scaleVertically = false;
+	//bool scaleVertically = false;
 	bool rebuildOnResize = true;
 	bool repaintOnUpdate = false;
 	bool rebuildOnUpdate = false;
@@ -268,6 +311,10 @@ private:
 
 	void rebuildPaths(bool synchronously = false)
 	{
+        // refresh the options here...
+        if(auto laf = dynamic_cast<LookAndFeelMethods*>(&getLookAndFeel()))
+            currentOptions = laf->getThumbnailRenderOptions(*this, currentOptions);
+        
 		if (synchronously)
 		{
 			isClear = true;
@@ -335,7 +382,7 @@ private:
 	var rBuffer;
 
 	bool isClear = true;
-	bool drawHorizontalLines = false;
+	//bool drawHorizontalLines = false;
 
 	Path leftWaveform, rightWaveform;
 
@@ -1029,6 +1076,25 @@ struct MultiChannelAudioBuffer : public ComplexDataUIBase
 				setDataBuffer(nb);
 			}
 		}
+	}
+
+	void loadFromEmbeddedData(SampleReference::Ptr r)
+	{
+		referenceString = "{INTERNAL}";
+		
+		auto mag = r->buffer.getMagnitude(0, r->buffer.getNumSamples());
+
+        ignoreUnused(mag);
+		jassert(mag < 1.0f);
+
+		originalBuffer.makeCopyOf(r->buffer);
+
+		auto nb = createNewDataBuffer({ 0, originalBuffer.getNumSamples() });
+		SimpleReadWriteLock::ScopedWriteLock l(getDataLock());
+		sampleRate = r->sampleRate;
+		bufferRange = { 0, originalBuffer.getNumSamples() };
+		loopRange = r->loopRange;
+		setDataBuffer(nb);
 	}
 
 	void loadBuffer(const AudioSampleBuffer& b, double sr)

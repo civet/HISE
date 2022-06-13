@@ -37,141 +37,6 @@ using namespace hise;
 namespace control
 {
 
-	void pma_editor::resized()
-	{
-		setRepaintsOnMouseActivity(true);
-
-		dragPath.loadPathFromData(ColumnIcons::targetIcon, sizeof(ColumnIcons::targetIcon));
-
-		auto b = getLocalBounds().toFloat();
-		b = b.withSizeKeepingCentre(28.0f, 28.0f);
-
-		b = b.translated(0.0f, JUCE_LIVE_CONSTANT_OFF(5.0f));
-		
-		getProperties().set("circleOffsetY", -0.5f * (float)getHeight() +2.0f);
-
-		PathFactory::scalePath(dragPath, b);
-	}
-
-void pma_editor::paint(Graphics& g)
-{
-
-	
-	
-
-	g.setFont(GLOBAL_BOLD_FONT());
-
-	auto r = obj->currentRange;
-
-	String start, mid, end;
-
-	int numDigits = jmax<int>(1, -1 * roundToInt(log10(r.interval)));
-
-	start = String(r.start, numDigits);
-
-	mid = String(r.convertFrom0to1(0.5), numDigits);
-
-	end = String(r.end, numDigits);
-
-	auto b = getLocalBounds().toFloat();
-
-	float w = JUCE_LIVE_CONSTANT_OFF(85.0f);
-
-	auto midCircle = b.withSizeKeepingCentre(w, w).translated(0.0f, 5.0f);
-
-	float r1 = JUCE_LIVE_CONSTANT_OFF(3.0f);
-	float r2 = JUCE_LIVE_CONSTANT_OFF(5.0f);
-
-	float startArc = JUCE_LIVE_CONSTANT_OFF(-2.5f);
-	float endArc = JUCE_LIVE_CONSTANT_OFF(2.5f);
-
-	Colour trackColour = JUCE_LIVE_CONSTANT_OFF(Colour(0xff4f4f4f));
-
-	auto createArc = [startArc, endArc](Rectangle<float> b, float startNormalised, float endNormalised)
-	{
-		Path p;
-
-		auto s = startArc + jmin(startNormalised, endNormalised) * (endArc - startArc);
-		auto e = startArc + jmax(startNormalised, endNormalised) * (endArc - startArc);
-
-		s = jlimit(startArc, endArc, s);
-		e = jlimit(startArc, endArc, e);
-
-		p.addArc(b.getX(), b.getY(), b.getWidth(), b.getHeight(), s, e, true);
-
-		return p;
-	};
-
-	auto oc = midCircle;
-	auto mc = midCircle.reduced(5.0f);
-	auto ic = midCircle.reduced(10.0f);
-
-	auto outerTrack = createArc(oc, 0.0f, 1.0f);
-	auto midTrack = createArc(mc, 0.0f, 1.0f);
-	auto innerTrack = createArc(ic, 0.0f, 1.0f);
-
-	if (isMouseOver())
-		trackColour = trackColour.withMultipliedBrightness(1.1f);
-
-	if (isMouseButtonDown())
-		trackColour = trackColour.withMultipliedBrightness(1.1f);
-
-	g.setColour(trackColour);
-
-	g.strokePath(outerTrack, PathStrokeType(r1));
-	g.strokePath(midTrack, PathStrokeType(r2));
-	g.strokePath(innerTrack, PathStrokeType(r1));
-
-	g.fillPath(dragPath);
-
-	auto data = obj->getUIData();
-
-	auto nrm = [r](double v)
-	{
-		return r.convertTo0to1(v);
-	};
-
-	auto mulValue = nrm(data.value * data.mulValue);
-	auto totalValue = nrm(data.getValue());
-
-	auto outerRing = createArc(oc, mulValue, totalValue);
-	auto midRing = createArc(mc, 0.0f, totalValue);
-	auto innerRing = createArc(ic, 0.0f, mulValue);
-	auto valueRing = createArc(ic, 0.0f, nrm(data.value));
-
-	auto c1 = MultiOutputDragSource::getFadeColour(0, 2).withAlpha(0.8f);
-	auto c2 = MultiOutputDragSource::getFadeColour(1, 2).withAlpha(0.8f);
-
-	auto ab = getLocalBounds().removeFromBottom(5).toFloat();
-	ab.removeFromLeft(ab.getWidth() / 3.0f);
-	auto ar2 = ab.removeFromLeft(ab.getWidth() / 2.0f).withSizeKeepingCentre(5.0f, 5.0f);
-	auto ar1 = ab.withSizeKeepingCentre(5.0f, 5.0f);
-
-	g.setColour(Colour(c1));
-	g.strokePath(outerRing, PathStrokeType(r1-1.0f));
-	g.setColour(c1.withMultipliedAlpha(data.addValue == 0.0 ? 0.2f : 1.0f));
-	g.fillEllipse(ar1);
-	g.setColour(JUCE_LIVE_CONSTANT_OFF(Colour(0xffd7d7d7)));
-	g.strokePath(midRing, PathStrokeType(r2 - 1.0f));
-
-	g.setColour(c2.withMultipliedAlpha(JUCE_LIVE_CONSTANT_OFF(0.4f)));
-	g.strokePath(valueRing, PathStrokeType(r1-1.0f));
-	g.setColour(c2.withMultipliedAlpha(data.mulValue == 1.0 ? 0.2f : 1.0f));
-	g.fillEllipse(ar2);
-	g.setColour(c2);
-	g.strokePath(innerRing, PathStrokeType(r1));
-
-	b.removeFromTop(18.0f);
-
-	g.setColour(Colours::white.withAlpha(0.3f));
-
-	Rectangle<float> t((float)getWidth() / 2.0f - 35.0f, 0.0f, 70.0f, 15.0f);
-
-	g.drawText(start, t.translated(-70.0f, 80.0f), Justification::centred);
-	g.drawText(mid, t, Justification::centred);
-	g.drawText(end, t.translated(70.0f, 80.0f), Justification::centred);
-}
-
 logic_op_editor::logic_op_editor(LogicBase* b, PooledUIUpdater* u) :
 	ScriptnodeExtraComponent<LogicBase>(b, u),
 	dragger(u)
@@ -204,14 +69,15 @@ void logic_op_editor::paint(Graphics& g)
 	case multilogic::logic_op::LogicType::AND: w = "AND"; break;
 	case multilogic::logic_op::LogicType::OR: w = "OR"; break;
 	case multilogic::logic_op::LogicType::XOR: w = "XOR"; break;
+    default: jassertfalse; break;
 	}
 
 	g.drawText(w, l.getUnion(r), Justification::centred);
 
-	if (lastData.leftValue)
+	if (lastData.leftValue == multilogic::logic_op::LogicState::True)
 		g.fillEllipse(l.reduced(4.0f));
 
-	if (lastData.rightValue)
+	if (lastData.rightValue == multilogic::logic_op::LogicState::True)
 		g.fillEllipse(r.reduced(4.0f));
 
 	if (lastData.getValue() > 0.5)
@@ -437,9 +303,110 @@ void bipolar_editor::paint(Graphics& g)
 
 	PathStrokeType(2.0f * ps).createDashedStroke(dst, outlinePath, l, 2);
 
-	g.fillPath(dst);
 
+	g.fillPath(dst);
 	g.strokePath(valuePath, PathStrokeType(4.0f * ug.getPixelSize()));
+}
+
+intensity_editor::intensity_editor(IntensityBase* b, PooledUIUpdater* u):
+	ScriptnodeExtraComponent(b, u),
+	dragger(u)
+{
+	addAndMakeVisible(dragger);
+	setSize(256, 256);
+	start();
+}
+
+void intensity_editor::paint(Graphics& g)
+{
+	ScriptnodeComboBoxLookAndFeel::drawScriptnodeDarkBackground(g, pathArea, false);
+
+	UnblurryGraphics ug(g, *this, true);
+
+	g.setColour(Colours::white.withAlpha(0.1f));
+
+	auto pb = pathArea.reduced(UIValues::NodeMargin / 2);
+
+
+
+	ug.draw1PxHorizontalLine(pathArea.getCentreY(), pb.getX(), pb.getRight());
+	ug.draw1PxVerticalLine(pathArea.getCentreX(), pb.getY(), pb.getBottom());
+	ug.draw1PxRect(pb);
+
+	auto c = Colours::white.withAlpha(0.8f);
+
+	if (auto nc = findParentComponentOfClass<NodeComponent>())
+	{
+		auto c2 = nc->header.colour;
+		if (!c2.isTransparent())
+			c = c2;
+	}
+
+	g.setColour(c);
+
+	Path dst;
+
+	auto ps = ug.getPixelSize();
+	float l[2] = { 4.0f * ps, 4.0f * ps };
+
+	PathStrokeType(2.0f * ps).createDashedStroke(dst, fullPath, l, 2);
+
+
+	g.fillPath(dst);
+	g.strokePath(valuePath, PathStrokeType(4.0f * ug.getPixelSize()));
+}
+
+void intensity_editor::rebuildPaths()
+{
+	fullPath.clear();
+	valuePath.clear();
+
+	fullPath.startNewSubPath(1.0f, 0.0f);
+	valuePath.startNewSubPath(1.0f, 0.0f);
+
+	fullPath.startNewSubPath(0.0f, 1.0f);
+	valuePath.startNewSubPath(0.0f, 1.0f);
+
+	
+
+	fullPath.lineTo(0.0f, lastData.intensityValue);
+	valuePath.lineTo(0.0f, lastData.intensityValue);
+
+	fullPath.lineTo(1.0, 0.0f);
+
+	auto valuePos1 = lastData.intensityValue;
+	auto valuePos2 = 0.0;
+
+	valuePath.lineTo(lastData.value, (float)Interpolator::interpolateLinear(valuePos1, valuePos2, lastData.value));
+	
+	auto pb = pathArea.reduced(UIValues::NodeMargin);
+
+	fullPath.scaleToFit(pb.getX(), pb.getY(), pb.getWidth(), pb.getHeight(), false);
+	valuePath.scaleToFit(pb.getX(), pb.getY(), pb.getWidth(), pb.getHeight(), false);
+
+	repaint();
+}
+
+void intensity_editor::timerCallback()
+{
+	auto thisData = getObject()->getUIData();
+
+	if (!(thisData == lastData))
+	{
+		lastData = thisData;
+		rebuildPaths();
+	}
+}
+
+void intensity_editor::resized()
+{
+	auto b = getLocalBounds();
+
+	dragger.setBounds(b.removeFromBottom(28));
+
+	pathArea = b.toFloat();
+	pathArea = pathArea.withSizeKeepingCentre(pathArea.getHeight(), pathArea.getHeight()).reduced(10.0f);
+	rebuildPaths();
 }
 
 }

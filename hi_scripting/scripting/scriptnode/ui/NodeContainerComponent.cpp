@@ -112,6 +112,7 @@ void ContainerComponent::Updater::valueTreeParentChanged(ValueTree&)
 
 ContainerComponent::ContainerComponent(NodeContainer* b) :
 	NodeComponent(b->asNode()),
+    SimpleTimer(b->asNode()->getScriptProcessor()->getMainController_()->getGlobalUIUpdater()),
 	updater(*this),
 	parameters(new ParameterComponent(*this))
 {
@@ -244,9 +245,12 @@ void ContainerComponent::insertDraggedNode(NodeComponent* newNode, bool copyNode
 		auto newTree = newNode->node->getValueTree();
 		auto container = dynamic_cast<NodeContainer*>(node.get());
 
+        
+        
 		if (copyNode)
 		{
-			auto copy = node->getRootNetwork()->cloneValueTreeWithNewIds(newTree);
+            Array<DspNetwork::IdChange> changes;
+			auto copy = node->getRootNetwork()->cloneValueTreeWithNewIds(newTree, changes, true);
 			node->getRootNetwork()->createFromValueTree(container->isPolyphonic(), copy, true);
 			container->getNodeTree().addChild(copy, insertPosition, node->getUndoManager());
 		}
@@ -622,6 +626,33 @@ void SerialNodeComponent::resized()
 	}
 }
 
+void addCircleAtMidpoint(Path& p, Line<float> l, float offset, bool useTwo, float radius)
+{
+    if(radius == 0.0f)
+        return;
+    
+    auto lv = JUCE_LIVE_CONSTANT_OFF(12.0f);
+    
+    auto numDots = jmax(1, roundToInt(l.getLength() / jmax<float>(1.0f, lv)));
+    
+    float delta = l.getLength() / (float)numDots;
+    
+    radius *= JUCE_LIVE_CONSTANT_OFF(0.75f);
+    
+    offset *= JUCE_LIVE_CONSTANT_OFF(20.0f);
+    
+    for(int i = 0; i < numDots; i++)
+    {
+        auto pos = std::fmod(offset + (float)i * delta, l.getLength());
+        
+        auto p1 = l.getPointAlongLine(pos - radius, radius);
+        auto p2 = l.getPointAlongLine(pos - radius, -radius);
+        auto p3 = l.getPointAlongLine(jmin(l.getLength(), pos + radius), 0.0f);
+        
+        p.addTriangle(p1, p2, p3);
+    }
+}
+
 void SerialNodeComponent::paintSerialCable(Graphics& g, int cableIndex)
 {
 	auto xOffset = getCableXOffset(cableIndex);
@@ -677,6 +708,9 @@ void SerialNodeComponent::paintSerialCable(Graphics& g, int cableIndex)
         
         p.startNewSubPath(start);
         p.lineTo(start1);//  addLineSegment({ start, start1 }, 2.0f);
+        
+        addCircleAtMidpoint(p, {start, start1}, signalDotOffset, true, getCircleAmp(-1, cableIndex, false));
+        
     }
     
     if(shouldPaintCable(CableLocation::Output))
@@ -686,6 +720,8 @@ void SerialNodeComponent::paintSerialCable(Graphics& g, int cableIndex)
         
         p.startNewSubPath(end);
         p.lineTo(end1);
+        
+        addCircleAtMidpoint(p, {end1, end}, signalDotOffset, true, getCircleAmp(childNodeComponents.size() - 1, cableIndex, true));
     }
 
     DropShadow sh;
@@ -707,13 +743,15 @@ void SerialNodeComponent::paintSerialCable(Graphics& g, int cableIndex)
 
             p.startNewSubPath(l.getStart());
             p.lineTo(l.getEnd());
+            
+            addCircleAtMidpoint(p, l, signalDotOffset, false, getCircleAmp(i, cableIndex, true));
 
             //p.addLineSegment(l, 2.0f);
         }
     }
 
 	g.setColour(Colour(0xFF262626));
-	g.strokePath(p, PathStrokeType(4.0f, PathStrokeType::curved, PathStrokeType::rounded));
+	g.strokePath(p, PathStrokeType(4.0f, PathStrokeType::mitered, PathStrokeType::rounded));
 
 	auto c = header.colour.withMultipliedBrightness(0.7f);
 
@@ -721,13 +759,15 @@ void SerialNodeComponent::paintSerialCable(Graphics& g, int cableIndex)
 		c = Colour(0xFFAAAAAA);
 
 	g.setColour(c);
-	g.strokePath(p, PathStrokeType(2.0f, PathStrokeType::curved, PathStrokeType::rounded));
+	g.strokePath(p, PathStrokeType(2.0f, PathStrokeType::mitered, PathStrokeType::rounded));
 }
 
 void SerialNodeComponent::paint(Graphics& g)
 {
 	auto b = getLocalBounds().toFloat();
 
+    auto t = JUCE_LIVE_CONSTANT_OFF(1000.0f);
+    signalDotOffset = (double)Time::getMillisecondCounter() / jmax(1.0f, t);
 
 
 	Colour fc = getOutlineColour();
@@ -875,7 +915,9 @@ void ParallelNodeComponent::resized()
 
 void ParallelNodeComponent::paint(Graphics& g)
 {
-
+    auto t = JUCE_LIVE_CONSTANT_OFF(1000.0f);
+    signalDotOffset = (double)Time::getMillisecondCounter() / jmax(1.0f, t);
+    
     if (header.isDragging)
 		g.setOpacity(0.3f);
 
@@ -983,6 +1025,8 @@ void ParallelNodeComponent::paintCable(Graphics& g, int cableIndex)
 	{
 		if (childNodeComponents.size() < 8)
 		{
+            int idx = 0;
+            
             for (auto n : childNodeComponents)
             {
                 auto b = n->getBounds().toFloat();
@@ -991,10 +1035,18 @@ void ParallelNodeComponent::paintCable(Graphics& g, int cableIndex)
                 Point<float> p2(b.getCentreX() + xOffset, b.getBottom());
 
                 if(shouldPaintCable(CableLocation::Input))
+                {
                     p.addLineSegment({ start, p1 }, 2.0f);
+                    addCircleAtMidpoint(p, {start, p1}, signalDotOffset, true, getCircleAmp(-1, cableIndex, false));
+                }
                 
                 if(shouldPaintCable(CableLocation::Output))
+                {
                     p.addLineSegment({ p2, end }, 2.0f);
+                    addCircleAtMidpoint(p, {p2, end}, signalDotOffset, true, getCircleAmp(idx, cableIndex, true));
+                }
+                
+                idx++;
             }
 		}
 		else
@@ -1105,6 +1157,10 @@ void ParallelNodeComponent::paintCable(Graphics& g, int cableIndex)
 
 			p.addLineSegment({ start, p1 }, 2.0f);
 			p.addLineSegment({ p2, end }, 2.0f);
+            
+            addCircleAtMidpoint(p, {start, p1}, signalDotOffset, true, getCircleAmp(-1, cableIndex, false));
+            addCircleAtMidpoint(p, {p2, end}, signalDotOffset, true, getCircleAmp(-1, cableIndex, true));
+            
 		}
 	}
 	

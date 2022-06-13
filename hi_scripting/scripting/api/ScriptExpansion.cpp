@@ -38,14 +38,20 @@ struct ScriptUserPresetHandler::Wrapper
 	API_VOID_METHOD_WRAPPER_1(ScriptUserPresetHandler, setPreCallback);
 	API_VOID_METHOD_WRAPPER_1(ScriptUserPresetHandler, setPostCallback);
 	API_VOID_METHOD_WRAPPER_2(ScriptUserPresetHandler, setEnableUserPresetPreprocessing);
+	API_VOID_METHOD_WRAPPER_1(ScriptUserPresetHandler, setCustomAutomation);
+	API_VOID_METHOD_WRAPPER_3(ScriptUserPresetHandler, setUseCustomUserPresetModel);
 	API_METHOD_WRAPPER_1(ScriptUserPresetHandler, isOldVersion);
+	API_VOID_METHOD_WRAPPER_0(ScriptUserPresetHandler, clearAttachedCallbacks);
+	API_VOID_METHOD_WRAPPER_3(ScriptUserPresetHandler, attachAutomationCallback);
 };
 
 ScriptUserPresetHandler::ScriptUserPresetHandler(ProcessorWithScriptingContent* pwsc) :
 	ConstScriptingObject(pwsc, 0),
 	ControlledObject(pwsc->getMainController_()),
 	preCallback(pwsc, var(), 1),
-	postCallback(pwsc, var(), 1)
+	postCallback(pwsc, var(), 1),
+	customLoadCallback(pwsc, var(), 1),
+	customSaveCallback(pwsc, var(), 1)
 {
 	getMainController()->getUserPresetHandler().addListener(this);
 
@@ -53,12 +59,17 @@ ScriptUserPresetHandler::ScriptUserPresetHandler(ProcessorWithScriptingContent* 
 	ADD_API_METHOD_1(setPostCallback);
 	ADD_API_METHOD_1(setPreCallback);
 	ADD_API_METHOD_2(setEnableUserPresetPreprocessing);
+	ADD_API_METHOD_1(setCustomAutomation);
+	ADD_API_METHOD_3(setUseCustomUserPresetModel);
+	ADD_API_METHOD_3(attachAutomationCallback);
+	ADD_API_METHOD_0(clearAttachedCallbacks);
 }
-
-
 
 ScriptUserPresetHandler::~ScriptUserPresetHandler()
 {
+	clearAttachedCallbacks();
+	
+
 	getMainController()->getUserPresetHandler().removeListener(this);
 }
 
@@ -96,6 +107,127 @@ bool ScriptUserPresetHandler::isOldVersion(const String& version)
 }
 
 
+
+void ScriptUserPresetHandler::setUseCustomUserPresetModel(var loadCallback, var saveCallback, bool usePersistentObject)
+{
+	if (HiseJavascriptEngine::isJavascriptFunction(loadCallback) && HiseJavascriptEngine::isJavascriptFunction(saveCallback))
+	{
+		customLoadCallback = WeakCallbackHolder(getScriptProcessor(), loadCallback, 1);
+		customLoadCallback.incRefCount();
+		
+		customSaveCallback = WeakCallbackHolder(getScriptProcessor(), saveCallback, 1);
+		customSaveCallback.incRefCount();
+
+		getMainController()->getUserPresetHandler().setUseCustomDataModel(true, usePersistentObject);
+	}
+}
+
+
+
+void ScriptUserPresetHandler::setCustomAutomation(var automationData)
+{
+	if (automationData.isArray())
+	{
+		using CustomData = MainController::UserPresetHandler::CustomAutomationData;
+
+		CustomData::List newList;
+
+		int index = 0;
+
+		if (auto ar = automationData.getArray())
+		{
+			for (const auto& ad : *ar)
+			{
+				auto nd = new CustomData(getScriptProcessor()->getMainController_(), index++, ad);
+
+				newList.add(nd);
+			}
+		}
+
+		if (!getMainController()->getUserPresetHandler().setCustomAutomationData(newList))
+		{
+			reportScriptError("you need to enable setUseCustomDataModel() before calling this method");
+		}
+	}
+}
+
+ScriptUserPresetHandler::AttachedCallback::AttachedCallback(ProcessorWithScriptingContent* pwsc, MainController::UserPresetHandler::CustomAutomationData::Ptr cData_, var f, bool isSynchronous) :
+  cData(cData_),
+  customUpdateCallback(pwsc, var(), 2),
+  customAsyncUpdateCallback(pwsc, var(), 2)
+{
+	if (isSynchronous)
+	{
+		customUpdateCallback = WeakCallbackHolder(pwsc, f, 2);
+		cData->syncListeners.addListener(*this, AttachedCallback::onCallbackSync, false);
+	}
+	else
+	{
+		customAsyncUpdateCallback = WeakCallbackHolder(pwsc, f, 2);
+		cData->asyncListeners.addListener(*this, AttachedCallback::onCallbackAsync, false);
+	}
+}
+
+ScriptUserPresetHandler::AttachedCallback::~AttachedCallback()
+{
+	if (customUpdateCallback)
+		cData->syncListeners.removeListener(*this);
+
+	if (customAsyncUpdateCallback)
+		cData->asyncListeners.removeListener(*this);
+
+	cData = nullptr;
+}
+
+void ScriptUserPresetHandler::AttachedCallback::onCallbackSync(AttachedCallback& c, var* args)
+{
+	if (c.customUpdateCallback)
+		c.customUpdateCallback.callSync(args, 2, nullptr);
+}
+
+void ScriptUserPresetHandler::AttachedCallback::onCallbackAsync(AttachedCallback& c, int index, float newValue)
+{
+	if (c.customAsyncUpdateCallback)
+	{
+		var args[2];
+		args[0] = index;
+		args[1] = newValue;
+		c.customAsyncUpdateCallback.call(args, 2);
+	}
+}
+
+void ScriptUserPresetHandler::attachAutomationCallback(String automationId, var updateCallback, bool isSynchronous)
+{
+	if (HiseJavascriptEngine::isJavascriptFunction(updateCallback))
+	{
+		if (auto cData = getMainController()->getUserPresetHandler().getCustomAutomationData(Identifier(automationId)))
+		{
+			for (auto& c : attachedCallbacks)
+			{
+				if (automationId == c->id)
+				{
+					attachedCallbacks.removeObject(c);
+					debugToConsole(dynamic_cast<Processor*>(getScriptProcessor()), "removing old attached callback for " + automationId);
+					break;
+				}
+			}
+
+			attachedCallbacks.add(new AttachedCallback(getScriptProcessor(), cData, updateCallback, isSynchronous));
+
+
+			return;
+		}
+		else
+		{
+			reportScriptError(automationId + " not found");
+		}
+	}
+}
+
+void ScriptUserPresetHandler::clearAttachedCallbacks()
+{
+	attachedCallbacks.clear();
+}
 
 var ScriptUserPresetHandler::convertToJson(const ValueTree& d)
 {
@@ -2064,7 +2196,7 @@ juce::RSAKey ScriptUnlocker::getPublicKey()
 {
 	return juce::RSAKey(getMainController()->getSampleManager().getProjectHandler().getPublicKey());
 }
-#elif !USE_COPY_PROTECTION
+#elif !USE_COPY_PROTECTION || !USE_SCRIPT_COPY_PROTECTION
 juce::RSAKey ScriptUnlocker::getPublicKey()
 {
     return RSAKey();
@@ -2240,5 +2372,7 @@ String ScriptUnlocker::RefObject::getRegisteredMachineId()
 {
 	return unlocker->registeredMachineId;
 }
+
+
 
 } // namespace hise

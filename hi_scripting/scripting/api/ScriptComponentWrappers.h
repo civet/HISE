@@ -319,6 +319,12 @@ public:
 
 	ScopedPointer<ValuePopup> currentPopup;
 
+	static void repaintComponent(ScriptCreatedComponentWrapper& w, bool unused)
+	{
+		if (auto c = w.getComponent())
+			c->repaint();
+	}
+
 protected:
 
 	/** You need to do this tasks in your constructor:
@@ -625,6 +631,7 @@ public:
 		void subComponentAdded(ScriptComponent* newComponent) override;
 		void subComponentRemoved(ScriptComponent* componentAboutToBeRemoved) override;
 
+		static void cursorChanged(PanelWrapper& p, ScriptingApi::Content::ScriptPanel::MouseCursorInfo newInfo);
 
 		void animationChanged() override;
 
@@ -650,6 +657,7 @@ public:
 		void boundsChanged(const Rectangle<int> &newBounds) override;
 
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PanelWrapper)
+		JUCE_DECLARE_WEAK_REFERENCEABLE(PanelWrapper);
 	};
 
 

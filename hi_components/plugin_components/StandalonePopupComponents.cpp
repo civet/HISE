@@ -125,7 +125,9 @@ CustomSettingsWindow::CustomSettingsWindow(MainController* mc_, bool buildMenus)
         properties[i] = true;
     }
     
-#if !HISE_USE_OPENGL_FOR_PLUGIN
+#if HISE_USE_OPENGL_FOR_PLUGIN
+    properties[(int)Properties::UseOpenGL] = true;
+#else
 	properties[(int)Properties::UseOpenGL] = false;
 #endif
 

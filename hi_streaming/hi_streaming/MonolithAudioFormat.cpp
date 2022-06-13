@@ -64,13 +64,16 @@ int MonolithFileReference::getSplitPartFromChar(juce_wchar splitChar)
 	return (int)splitChar - 'a';
 }
 
-juce::File MonolithFileReference::getFile()
+juce::File MonolithFileReference::getFile(bool checkIfFileExists)
 {
 	jassert(referenceString.isNotEmpty());
 
 	auto path = referenceString.replace("/", "_");
 
 	auto extension = getFileExtensionPrefix();
+
+	if (sampleRoots.isEmpty() && fileNotFoundBehaviour == FileNotFoundBehaviour::ThrowException)
+		throw Result::fail("No sample directory specified");
 
 	if (isMultimic())
 	{
@@ -86,20 +89,21 @@ juce::File MonolithFileReference::getFile()
 	else
 		extension << String(1);
 
+	File lastFile;
+	path << "." << extension;
+
 	for (const auto& f : sampleRoots)
 	{
-		path << "." << extension;
-
 		auto mf = f.getChildFile(path);
 
-		if (!mf.existsAsFile())
-		{
-			if(fileNotFoundBehaviour == FileNotFoundBehaviour::ThrowException)
-				throw Result::fail(f.getFullPathName() + " can't be found");
-		}
+		lastFile = mf;
 
-		return mf;
+		if (!checkIfFileExists || mf.existsAsFile())
+			return mf;
 	}
+
+	if (fileNotFoundBehaviour == FileNotFoundBehaviour::ThrowException)
+		throw Result::fail(lastFile.getFullPathName() + " can't be found");
 
 	return File();
 }
@@ -111,14 +115,15 @@ Array<juce::File> MonolithFileReference::getAllFiles()
 	
 	Array<File> filesToLoad;
 
-	filesToLoad.addIfNotAlreadyThere(getFile());
+	filesToLoad.addIfNotAlreadyThere(getFile(true));
 
 	while (bumpToNextMonolith(true))
 	{
-		filesToLoad.addIfNotAlreadyThere(getFile());
+		filesToLoad.addIfNotAlreadyThere(getFile(true));
 	}
 
 	int numExpected = numChannels * jmax(1, numParts);
+    ignoreUnused(numExpected);
 	jassert(filesToLoad.size() == numExpected);
 
 	return filesToLoad;
@@ -254,8 +259,6 @@ void HlacMonolithInfo::fillMetadataInfo(const ValueTree& sampleMap)
 		info.length = sample.getProperty(MonolithIds::MonolithLength);
 		info.sampleRate = sample.getProperty("SampleRate");
 		
-		int splitIndex = sample.getProperty(MonolithIds::MonolithSplitIndex, 0);
-
 		if (numChannels == 1)
 		{
 			info.fileNames.add(sample.getProperty(MonolithIds::FileName));

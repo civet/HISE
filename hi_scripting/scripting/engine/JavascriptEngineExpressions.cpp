@@ -129,16 +129,18 @@ struct HiseJavascriptEngine::RootObject::ArraySubscript : public Expression
 			(*b)[i] = FloatSanitizers::sanitizeFloatNumber(v);
 			return;
 		}
-		else if (Array<var>* array = result.getArray())
+		else if (Array<var>* ar = result.getArray())
 		{
 			const int i = index->getResult(s);
 
-			WARN_IF_AUDIO_THREAD(i >= array->getNumAllocated(), ScriptAudioThreadGuard::ArrayResizing);
+			
+			
+			WARN_IF_AUDIO_THREAD(i >= ar->getNumAllocated(), ScriptAudioThreadGuard::ArrayResizing);
 
-			while (array->size() < i)
-				array->add(var::undefined());
+			while (ar->size() < i)
+				ar->add(var::undefined());
 
-			array->set(i, newValue);
+			ar->set(i, newValue);
 			return;
 		}
 		else if (AssignableObject * instance = dynamic_cast<AssignableObject*>(result.getObject()))
@@ -501,13 +503,19 @@ struct HiseJavascriptEngine::RootObject::FunctionObject : public DynamicObject,
 				return var();
 			};
 
-			String mid;
-			mid << "%PARENT%" << "." << l->getProperties().getName(index + 1);
+			auto& prop = l->getProperties();
 
-			return new LambdaValueInformation(vf, mid, {}, DebugInformation::Type::ExternalFunction, getLocation());
+			
+
+			if (isPositiveAndBelow(index + 1, prop.size()))
+			{
+				String mid;
+				mid << "%PARENT%" << "." << l->getProperties().getName(index + 1);
+				return new LambdaValueInformation(vf, mid, {}, DebugInformation::Type::ExternalFunction, getLocation());
+			}
 		}
 
-		return 0;
+		return nullptr;
 	}
 
 	AttributedString getDescription() const override

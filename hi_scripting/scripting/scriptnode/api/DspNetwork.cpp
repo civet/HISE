@@ -81,6 +81,16 @@ DspNetwork::DspNetwork(hise::ProcessorWithScriptingContent* p, ValueTree data_, 
     if(!data.hasProperty(PropertyIds::CompileChannelAmount))
         data.setProperty(PropertyIds::CompileChannelAmount, 2, nullptr);
     
+	if (!data.hasProperty(PropertyIds::HasTail))
+		data.setProperty(PropertyIds::HasTail, true, nullptr);
+
+	hasTailProperty.referTo(data, PropertyIds::HasTail, &um, true);
+
+	if (!data.hasProperty(ExpansionIds::Version))
+	{
+		data.setProperty(ExpansionIds::Version, "0.0.0", nullptr);
+	}
+
 	if (dataHolder_ != nullptr)
 		setExternalDataHolder(dataHolder_);
 	else
@@ -112,7 +122,18 @@ DspNetwork::DspNetwork(hise::ProcessorWithScriptingContent* p, ValueTree data_, 
 #else
 	if (auto ah = dynamic_cast<Holder*>(p))
 	{
-		ownedFactories.add(new hise::FrontendHostFactory(this));
+		auto nf = new hise::FrontendHostFactory(this);
+
+		ownedFactories.add(nf);
+
+		String selfId = "project." + getId();
+
+		if (nf->getModuleList().contains(selfId))
+		{
+			// This network is supposed to be frozen
+			projectNodeHolder.init(nf->staticFactory.get());
+			projectNodeHolder.setEnabled(true);
+		}
 	}
 #endif
 
@@ -206,6 +227,8 @@ DspNetwork::DspNetwork(hise::ProcessorWithScriptingContent* p, ValueTree data_, 
 
 DspNetwork::~DspNetwork()
 {
+	stopTimer();
+
 	root = nullptr;
 	selectionUpdater = nullptr;
 	nodes.clear();
@@ -233,17 +256,22 @@ void DspNetwork::createAllNodesOnce()
 
 	for (auto f : nodeFactories)
 	{
-        if(f->getId() == Identifier("project"))
-            continue;
-        
+		auto isProjectFactory = f->getId() == Identifier("project");
+            
+		if (isProjectFactory)
+			continue;
+
+		int index = 0;
 		for (auto id : f->getModuleList())
 		{
-			NodeBase::Holder s;
+			ScopedPointer<NodeBase::Holder> s = new NodeBase::Holder();
 
-			currentNodeHolder = &s;
+			currentNodeHolder = s;
 			create(id, "unused");
 			exceptionHandler.removeError(nullptr);
 			currentNodeHolder = nullptr;
+
+			s = nullptr;
 		}
 	}
 
@@ -426,8 +454,8 @@ void DspNetwork::reset()
 	
 	if (projectNodeHolder.isActive())
 		projectNodeHolder.n.reset();
-	else
-		getRootNode()->reset();
+	else if (auto rn = getRootNode())
+		rn->reset();
 }
 
 void DspNetwork::handleHiseEvent(HiseEvent& e)
@@ -466,7 +494,7 @@ void DspNetwork::process(ProcessDataDyn& data)
 
 bool DspNetwork::hasTail() const
 {
-	return true;
+	return hasTailProperty.get();
 }
 
 juce::Identifier DspNetwork::getParameterIdentifier(int parameterIndex)
@@ -780,6 +808,18 @@ NodeBase* DspNetwork::createFromValueTree(bool createPolyIfAvailable, ValueTree 
 	{
 		auto n = createFromValueTree(createPolyIfAvailable, c, forceCreate);
 
+		if (n == nullptr)
+		{
+			String errorMessage;
+			errorMessage << "Error at node `" << id << "`:  \n> ";
+			errorMessage << "Can't create node with factory path `" << d[PropertyIds::FactoryPath].toString() << "`";
+
+			if (MessageManager::getInstanceWithoutCreating()->isThisTheMessageThread())
+			{
+				PresetHandler::showMessageWindow("Error", errorMessage, PresetHandler::IconType::Error);
+			}
+		}
+
 		if (currentNodeHolder != nullptr)
 		{
 			currentNodeHolder->nodes.addIfNotAlreadyThere(n);
@@ -997,14 +1037,8 @@ juce::String DspNetwork::getNonExistentId(String id, StringArray& usedIds) const
 	return id;
 }
 
-juce::ValueTree DspNetwork::cloneValueTreeWithNewIds(const ValueTree& treeToClone)
+juce::ValueTree DspNetwork::cloneValueTreeWithNewIds(const ValueTree& treeToClone, Array<IdChange>& changes, bool changeIds)
 {
-	struct IdChange
-	{
-		String oldId;
-		String newId;
-	};
-
 	auto c = treeToClone.createCopy();
 
 	StringArray sa;
@@ -1012,9 +1046,6 @@ juce::ValueTree DspNetwork::cloneValueTreeWithNewIds(const ValueTree& treeToClon
 		sa.add(n->getId());
 
 	auto saRef = &sa;
-
-	Array<IdChange> changes;
-
 	auto changeRef = &changes;
 
 	auto setNewId = [changeRef, saRef, this](ValueTree& v)
@@ -1036,8 +1067,12 @@ juce::ValueTree DspNetwork::cloneValueTreeWithNewIds(const ValueTree& treeToClon
 
 	valuetree::Helpers::foreach(c, setNewId);
 
-	for (auto& ch : changes)
-		changeNodeId(c, ch.oldId, ch.newId, nullptr);
+    if(changeIds)
+    {
+        for (auto& ch : changes)
+            changeNodeId(c, ch.oldId, ch.newId, nullptr);
+    }
+	
 
 	return c;
 }
@@ -1242,6 +1277,8 @@ void DspNetwork::Holder::saveNetworks(ValueTree& d) const
 			}
 			else
             {
+				DspNetworkListeners::PatchAutosaver::removeDanglingConnections(c);
+
 				// look if there's a network file that we 
 				// need to replace with this content
                 cppgen::ValueTreeIterator::forEach(c,
@@ -1372,6 +1409,7 @@ DspNetwork::SelectionUpdater::SelectionUpdater(DspNetwork& parent_) :
 
 DspNetwork::SelectionUpdater::~SelectionUpdater()
 {
+	MessageManagerLock mm;
 	parent.selection.removeChangeListener(this);
 }
 
@@ -1594,6 +1632,19 @@ void DspNetwork::ProjectNodeHolder::init(dll::ProjectDll::Ptr dllToUse)
 #endif
 }
 
+void DspNetwork::ProjectNodeHolder::init(dll::StaticLibraryHostFactory* staticLibrary)
+{
+	int numNodes = staticLibrary->getNumNodes();
+
+	for (int i = 0; i < numNodes; i++)
+	{
+		if (network.getId() == staticLibrary->getId(i))
+		{
+			loaded = staticLibrary->initOpaqueNode(&n, i, network.isPolyphonic());
+		}
+	}
+}
+
 int HostHelpers::getNumMaxDataObjects(const ValueTree& v, snex::ExternalData::DataType t)
 {
 	auto id = Identifier(snex::ExternalData::getDataTypeName(t, false));
@@ -1700,6 +1751,89 @@ void ScriptnodeExceptionHandler::validateMidiProcessingContext(NodeBase* b)
 }
 
 
+#if USE_BACKEND
+void DspNetworkListeners::PatchAutosaver::removeDanglingConnections(ValueTree& v)
+{
+	cppgen::ValueTreeIterator::forEach(v, snex::cppgen::ValueTreeIterator::ChildrenFirst, [v](ValueTree& c)
+		{
+			auto nodeExists = [v](const String& id)
+			{
+				return cppgen::ValueTreeIterator::forEach(v, snex::cppgen::ValueTreeIterator::ChildrenFirst, [id](ValueTree& n)
+					{
+						if (n.getType() == PropertyIds::Node)
+						{
+							if (n[PropertyIds::ID].toString() == id)
+								return true;
+						}
+
+						return false;
+					});
+			};
+
+			if (c.getType() == PropertyIds::Property && c[PropertyIds::ID].toString() == PropertyIds::Connection.toString())
+			{
+				// A global cable will also store its cable ID as Connection property so we need to avoid stripping this
+				// vital information...
+				auto isGlobalCableConnection = c.getParent().getParent()[PropertyIds::FactoryPath].toString().startsWith("routing.global");
+
+				if (!isGlobalCableConnection)
+				{
+					auto idList = StringArray::fromTokens(c[PropertyIds::Value].toString(), ";", "");
+
+					int numBefore = idList.size();
+
+					for (int i = 0; i < idList.size(); i++)
+					{
+						if (!nodeExists(idList[i]))
+							idList.remove(i--);
+					}
+
+					if (idList.size() != numBefore)
+					{
+						c.setProperty(PropertyIds::Value, idList.joinIntoString(";"), nullptr);
+					}
+				}
+			}
+
+			return false;
+		});
+}
+
+bool DspNetworkListeners::PatchAutosaver::stripValueTree(ValueTree& v)
+{
+	
+	// Remove all child nodes from a project node
+	// (might be a leftover from the extraction process)
+	if (v.getType() == PropertyIds::Node && v[PropertyIds::FactoryPath].toString().startsWith("project"))
+	{
+		v.removeChild(v.getChildWithName(PropertyIds::Nodes), nullptr);
+
+		for (auto p : v.getChildWithName(PropertyIds::Parameters))
+			p.removeChild(p.getChildWithName(PropertyIds::Connections), nullptr);
+	}
+
+	auto propChild = v.getChildWithName(PropertyIds::Properties);
+
+	// Remove all properties with the default value
+	for (int i = 0; i < propChild.getNumChildren(); i++)
+	{
+		if (removePropIfDefault(propChild.getChild(i), PropertyIds::IsVertical, 1))
+			propChild.removeChild(i--, nullptr);
+	}
+
+	removeIfNoChildren(propChild);
+
+	for (auto id : PropertyIds::Helpers::getDefaultableIds())
+		removeIfDefault(v, id, PropertyIds::Helpers::getDefaultValue(id));
+
+	removeIfDefined(v, PropertyIds::Value, PropertyIds::Automated);
+
+	removeIfNoChildren(v.getChildWithName(PropertyIds::Bookmarks));
+	removeIfNoChildren(v.getChildWithName(PropertyIds::ModulationTargets));
+
+	return false;
+}
+#endif
 
 }
 

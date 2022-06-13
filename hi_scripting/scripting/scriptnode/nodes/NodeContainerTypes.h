@@ -404,6 +404,8 @@ private:
     valuetree::RecursivePropertyListener complexDataSyncer;
 };
 
+
+
 template <int OversampleFactor> class OversampleNode : public SerialNode
 {
 public:
@@ -439,11 +441,57 @@ public:
 
     void setOversamplingFactor(double newFactor)
     {
-        obj.setOversamplingFactor(jlimit(0, 16, (int)newFactor));
+		if (!hasFixedParameters())
+			return;
+
+		obj.setOversamplingFactor(newFactor);
+
+		// We need to call this dynamically because the DynamicSerialProcessor::prepare does nothing
+		if(lastSpecs)
+			prepareNodes(lastSpecs);
     }
     
-    virtual bool hasFixedParameters() const { return OversampleFactor == -1; }
+    bool hasFixedParameters() const final override { return OversampleFactor == -1; }
     
+	Component* createLeftTabComponent() const override
+	{
+		if (hasFixedParameters())
+			return new Component();
+		else
+			return nullptr;
+	}
+
+	ParameterDataList createInternalParameterList() override
+	{
+		ParameterDataList data;
+
+		{
+			auto maxExponent = wrap::oversample_base::MaxOversamplingExponent;
+
+			parameter::data p("Oversampling");
+			p.callback = parameter::inner<OversampleNode<OversampleFactor>, (int)Parameters::OversamplingFactor>(*this);
+			p.setRange({ 0.0, (double)maxExponent, 1.0 });
+			
+			StringArray sa;
+			sa.add("None");
+
+			for (int i = 1; i < maxExponent + 1; i++)
+			{
+				auto os = (int)(std::pow(2.0, (double)(i)));
+				String name;
+				name << (int)os << "x";
+				sa.add(name);
+			}
+			
+			p.setParameterValueNames(sa);
+
+			p.setDefaultValue(1.0);
+			data.add(std::move(p));
+		}
+
+		return data;
+	}
+
 	double getSampleRateForChildNodes() const override;
 
 	int getBlockSizeForChildNodes() const override;
@@ -482,7 +530,10 @@ public:
 
 	void process(ProcessDataDyn& data) final override;
 
-	void processFrame(FrameType& data) noexcept final override { jassertfalse; }
+	void processFrame(FrameType& data) noexcept final override;
+
+	void processMonoFrame(MonoFrameType& data);
+	void processStereoFrame(StereoFrameType& data);
 
 	void prepare(PrepareSpecs ps) final override;
 	void reset() final override;
@@ -490,14 +541,13 @@ public:
 
 	int getBlockSizeForChildNodes() const override
 	{
-		return isBypassed() ? originalBlockSize : FixedBlockSize;
+		return (isBypassed() || originalBlockSize == 1) ? originalBlockSize : FixedBlockSize;
 	}
 
 	void setBypassed(bool shouldBeBypassed) override;
 
 	wrap::fix_block<FixedBlockSize, DynamicSerialProcessor> obj;
 };
-
 
 
 class FixedBlockXNode : public SerialNode
@@ -538,7 +588,7 @@ public:
 		void prepare(void* obj, prototypes::prepare f, const PrepareSpecs& ps)
 		{
 			originalSpecs = ps;
-			auto ps_ = ps.withBlockSize(blockSize);
+			auto ps_ = ps.withBlockSize(blockSize, true);
 			f(obj, &ps_);
 		}
 
@@ -571,7 +621,7 @@ public:
 
 	void process(ProcessDataDyn& data) final override;
 
-	void processFrame(FrameType& data) noexcept final override { jassertfalse; }
+	void processFrame(FrameType& data) noexcept final override;
 
 	void prepare(PrepareSpecs ps) final override;
 	void reset() final override;
@@ -581,7 +631,7 @@ public:
 
 	int getBlockSizeForChildNodes() const override
 	{
-		return isBypassed() ? originalBlockSize : obj.fbClass.blockSize;
+		return (isBypassed() || originalBlockSize == 1) ? originalBlockSize : obj.fbClass.blockSize;
 	}
 
 	void setBypassed(bool shouldBeBypassed) override;
@@ -741,16 +791,17 @@ public:
 	void process(ProcessDataDyn& data) final override
 	{
 		
-
 		if (isBypassed())
 		{
 			NodeProfiler np(this, data.getNumSamples());
+			ProcessDataPeakChecker pd(this, data);
 			obj.getObject().process(data.as<FixProcessType>());
 		}
 			
 		else
 		{
 			NodeProfiler np(this, 1);
+			ProcessDataPeakChecker pd(this, data);
 			float* channels[NumChannels];
 			int numChannels = jmin(NumChannels, data.getNumChannels());
 			memcpy(channels, data.getRawDataPointers(), numChannels * sizeof(float*));
@@ -777,6 +828,7 @@ public:
 	void processFrame(FrameType& d) final override
 	{
 		jassert(d.size() == NumChannels);
+		FrameDataPeakChecker fd(this, d.begin(), d.size());
 
 		auto& s = FixFrameType::as(d.begin());
 		obj.processFrame(s);
