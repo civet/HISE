@@ -211,7 +211,7 @@ FileBrowser::FileBrowser(BackendRootWindow* rootWindow_) :
 
 	addKeyListener(browserCommandManager->getKeyMappings());
 
-	setWantsKeyboardFocus(true);
+	setWantsKeyboardFocus(false);
 
 	browseUndoManager = new UndoManager();
 
@@ -242,7 +242,11 @@ FileBrowser::FileBrowser(BackendRootWindow* rootWindow_) :
 
 	fileTreeComponent->addMouseListener(this, true);
 
-	
+    auto vp = fileTreeComponent->getViewport();
+    
+    vp->setScrollBarThickness(14);
+    
+    sf.addScrollBarToAnimate(vp->getVerticalScrollBar());
 
 #if HISE_IOS
 #else
@@ -886,36 +890,7 @@ void FileBrowser::mouseDoubleClick(const MouseEvent& )
 					
 					if (auto mws = FloatingTileHelpers::findTileWithId<FloatingTabComponent>(root, Identifier("ScriptEditorTabs")))
 					{
-						for (int tabIndex = 0; tabIndex < mws->getNumTabs(); tabIndex++)
-						{
-							if (auto tc = dynamic_cast<FloatingTile*>(mws->getTabContentComponent(tabIndex)))
-							{
-								if (auto cep = dynamic_cast<CodeEditorPanel*>(tc->getCurrentFloatingPanel()))
-								{
-									auto processorMatches = cep->getConnectedProcessor() == currentWorkspaceProcessor;
-									auto indexMatches = cep->getCurrentIndex() == idx;
-
-									if (processorMatches && indexMatches)
-									{
-										mws->setCurrentTabIndex(tabIndex);
-										
-										return;
-									}
-								}
-							}
-						}
-
-						FloatingInterfaceBuilder ib(mws->getParentShell());
-						
-						auto newEditor = ib.addChild<CodeEditorPanel>(0);
-
-						auto ed = ib.getContent<CodeEditorPanel>(newEditor);
-						ed->setCustomTitle(newRoot.getFileName());
-
-						ib.finalizeAndReturnRoot();
-
-						ed->setContentWithUndo(currentWorkspaceProcessor, idx);
-						mws->setCurrentTabIndex(mws->getNumTabs() - 1);
+						CodeEditorPanel::showOrCreateTab(mws, jsp, idx);
 					}
 					else
 					{

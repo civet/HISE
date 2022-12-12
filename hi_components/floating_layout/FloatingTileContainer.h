@@ -131,6 +131,8 @@ public:
 
 	void notifySiblingChange();
 
+	void moveContent(int oldIndex, int newIndex);
+
 protected:
 
 	virtual void componentAdded(FloatingTile* newComponent) = 0;
@@ -158,6 +160,7 @@ public:
 	enum TabPropertyIds
 	{
 		CurrentTab = FloatingTileContainer::ContainerPropertyIds::numContainerPropertyIds,
+		CycleKeyPress,
 		numTabPropertyIds
 	};
 
@@ -191,6 +194,14 @@ public:
 	}
 
 	void popupMenuClickOnTab(int tabIndex, const String& tabName) override;
+
+	int getNumChildPanelsWithType(const Identifier& panelId) const;
+
+	template <typename ContentType> int getNumChildPanelsWithType() const
+	{
+		static_assert(std::is_base_of<FloatingTileContent, ContentType>(), "ContentType must be derived from FloatingTileContent");
+		return getNumChildPanelsWithType(ContentType::getPanelId());
+	}
 
 	void refreshLayout() override;
 
@@ -228,8 +239,17 @@ public:
 
 	void currentTabChanged(int newCurrentTabIndex, const String& newCurrentTabName) override;
 
+    Identifier getCycleKeyPress() const { return cycleKeyId; }
+    
+    void setCycleKeyPress(const Identifier& k)
+    {
+        cycleKeyId = k;
+    }
+    
 private:
 
+    Identifier cycleKeyId;
+    
 	ScopedPointer<ShapeButton> addButton;
 
 	PopupLookAndFeel plaf;

@@ -253,35 +253,7 @@ template <typename T, typename RangeType=typename ranges::Identity> struct bypas
 };
 
 
-template <typename T, int P> struct inner
-{
-	PARAMETER_SPECS(ParameterType::Single, 1);
 
-	inner(T& obj_) :
-		obj(&obj_)
-	{}
-
-	void call(double v)
-	{
-		jassert(isConnected());
-		callStatic(obj, v);
-	}
-
-	bool isConnected() const noexcept
-	{
-		return true;
-	}
-
-	static void callStatic(void* obj_, double v)
-	{
-		auto f = T::template setParameterStatic<P>;
-		f(obj_, v);
-	}
-
-	void* getObjectPtr() { return obj; }
-
-	void* obj;
-};
 
 
 
@@ -364,7 +336,7 @@ template <class T, int P, class Expression> struct expression : public single_ba
 		Expression e;
 		v = e.op(v);
 
-		ObjectType::setParameterStatic<P>(this->obj, v);
+		ObjectType:: template setParameterStatic<P>(this->obj, v);
 	}
 
 	void operator()(double v)
@@ -589,8 +561,28 @@ template <class InputRange, class... Others> struct chain: public advanced_tuple
 };
 
 
+/** This class is just a placeholder for a node that expects multiple outputs without connections.
+*/
+struct empty_list
+{
+    PARAMETER_SPECS(ParameterType::List, 0);
+    
+    template <int P> auto& getParameter()
+    {
+        return *this;
+    }
+    
+    static constexpr int getNumParameters() { return 0; }
 
+    template <int Index, class Target> void connect(Target& t)
+    {
+        jassertfalse;
+    }
+    
+    template <int P> void call(double) {};
 
+    static constexpr bool isStaticList() { return true; }
+};
 
 /** The parameter list is a collection of multiple parameters that can be called individually.
 
@@ -631,7 +623,7 @@ template <class... Parameters> struct list: public advanced_tuple<Parameters...>
 
 	template <int P> void call(double v)
 	{
-		if constexpr (P <= size)
+		if constexpr (P <= getNumParameters())
 		{
 			getParameter<P>().call(v);
 		}

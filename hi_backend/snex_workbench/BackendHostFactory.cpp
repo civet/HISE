@@ -53,7 +53,9 @@ BackendHostFactory::BackendHostFactory(DspNetwork* n, ProjectDll::Ptr dll) :
 
 	int thirdPartyOffset = 0;
 
-	for (int i = 0; i < numNodesInDll; i++)
+	auto numNodesToCreate = jmax(numNetworks, numNodesInDll);
+
+	for (int i = 0; i < numNodesToCreate; i++)
 	{
 		auto isThirdPartyNode = dllFactory.isThirdPartyNode(i);
 
@@ -75,7 +77,7 @@ BackendHostFactory::BackendHostFactory(DspNetwork* n, ProjectDll::Ptr dll) :
 				if (isModNode)
 				{
 					auto mn = new InterpretedModNode(p, v);
-					mn->initFromDll(f, i, false);
+					mn->initFromDll(f, i, true);
 					n = mn;
 				}
 				else
@@ -139,6 +141,9 @@ using namespace juce;
 
 juce::Array<juce::File> BackendDllManager::getNetworkFiles(MainController* mc, bool includeNoCompilers)
 {
+	if (!mc->getCurrentFileHandler().getRootFolder().isDirectory())
+		return {};
+
 	auto networkDirectory = getSubFolder(mc, FolderSubType::Networks);
 
 	auto files = networkDirectory.findChildFiles(File::findFiles, false, "*.xml");
@@ -247,6 +252,9 @@ bool BackendDllManager::unloadDll()
 
 bool BackendDllManager::loadDll(bool forceUnload)
 {
+	if (!getMainController()->getCurrentFileHandler().getRootFolder().isDirectory())
+		return false;
+
 	if (forceUnload)
 		unloadDll();
 
@@ -298,6 +306,17 @@ juce::var BackendDllManager::getStatistics()
 	}
 
 	return var(obj.get());
+}
+
+bool BackendDllManager::shouldIncludeFaust(MainController* mc)
+{
+#if !HISE_INCLUDE_FAUST
+	return false;
+#else
+	auto hasFaustFiles = getSubFolder(mc, FolderSubType::CodeLibrary).getChildFile("faust").getNumberOfChildFiles(File::findFiles) != 0;
+	
+	return hasFaustFiles;
+#endif
 }
 
 bool BackendDllManager::allowCompilation(const File& networkFile)
@@ -369,11 +388,8 @@ juce::File BackendDllManager::getSubFolder(const MainController* mc, FolderSubTy
 	case FolderSubType::Binaries:				return createIfNotDirectory(f.getChildFile("Binaries"));
 	case FolderSubType::Layouts:				return createIfNotDirectory(f.getChildFile("Layouts"));
 	case FolderSubType::ProjucerSourceFolder:	return createIfNotDirectory(f.getChildFile("Binaries").getChildFile("Source"));
-    default: return {};
+	default: jassertfalse; return {};
 	}
-
-	jassertfalse;
-	return {};
 }
 
 }

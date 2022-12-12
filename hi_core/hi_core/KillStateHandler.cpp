@@ -43,6 +43,8 @@ MainController::KillStateHandler::KillStateHandler(MainController* mc_) :
 	threadIds[TargetThread::SampleLoadingThread] = mc->getSampleManager().getGlobalSampleThreadPool()->getThreadId();
 	threadIds[TargetThread::ScriptingThread] = mc->javascriptThreadPool->getThreadId();
 	threadIds[TargetThread::MessageThread] = nullptr;
+
+	setCurrentExportThread(nullptr);
 }
 
 
@@ -127,6 +129,10 @@ bool MainController::KillStateHandler::handleKillState()
 			return true;
 #endif
 		}
+
+		// Let the audio export thread through...
+		if (threadIds[TargetThread::AudioExportThread] == Thread::getCurrentThreadId())
+			return true;
 
 		return false;
 	}
@@ -486,7 +492,7 @@ bool MainController::KillStateHandler::killVoicesAndWait(int* timeoutMillisecond
 
 	int safeguard = 0;
 	int timeout = timeoutMilliseconds != nullptr ? *timeoutMilliseconds : 1000;
-	int numRetries = timeout / 20;
+	int numRetries = timeout / 20 + 10;
 
 	while (isAudioRunning() && safeguard < numRetries)
 	{
@@ -560,7 +566,7 @@ bool MainController::KillStateHandler::voiceStartIsDisabled() const
 #if HI_RUN_UNIT_TESTS
 	return false;
 #else
-	return currentState > State::Clear;
+	return currentState > State::Clear && threadIds[TargetThread::AudioExportThread] == nullptr;
 #endif
 }
 
@@ -603,6 +609,22 @@ MainController::KillStateHandler::TargetThread MainController::KillStateHandler:
 }
 
 
+void MainController::KillStateHandler::setCurrentExportThread(void* exportThread)
+{
+    auto& currentExportThread = threadIds[TargetThread::AudioExportThread];
+    
+    if(currentExportThread != exportThread)
+    {
+        if(currentExportThread != nullptr)
+            audioThreads.removeAllInstancesOf(currentExportThread);
+        
+        currentExportThread = exportThread;
+        
+        if(currentExportThread != nullptr)
+            audioThreads.addIfNotAlreadyThere(currentExportThread);
+    }
+}
+
 void MainController::KillStateHandler::addThreadIdToAudioThreadList()
 {
     if(MessageManager::getInstance()->isThisTheMessageThread())
@@ -611,6 +633,16 @@ void MainController::KillStateHandler::addThreadIdToAudioThreadList()
 	auto threadId = Thread::getCurrentThreadId();
 
 	audioThreads.addIfNotAlreadyThere(threadId);
+}
+
+void MainController::KillStateHandler::removeThreadIdFromAudioThreadList()
+{
+	if (MessageManager::getInstance()->isThisTheMessageThread())
+		return;
+
+	auto threadId = Thread::getCurrentThreadId();
+
+	audioThreads.removeAllInstancesOf(threadId);
 }
 
 void MainController::KillStateHandler::initAudioThreadId()

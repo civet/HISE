@@ -445,8 +445,6 @@ float ahdsr_base::state_base::getUIPosition(double deltaMs)
 	case EnvelopeState::RELEASE: return (double)current_state + ratioOrZero(deltaMs, releaseTime);
     default: return -1.0f;
 	}
-
-	return -1.0f;
 }
 
 bool ahdsr_base::AhdsrRingBufferProperties::validateInt(const Identifier& id, int& v) const
@@ -463,7 +461,7 @@ bool ahdsr_base::AhdsrRingBufferProperties::validateInt(const Identifier& id, in
 
 
 
-juce::Path ahdsr_base::AhdsrRingBufferProperties::createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds) const
+juce::Path ahdsr_base::AhdsrRingBufferProperties::createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds, double) const
 {
 	const auto& b = buffer->getReadBuffer();
 
@@ -694,13 +692,13 @@ float simple_ar_base::State::tick()
 
 	if (curve == 0.5f)
 		returnValue = (float)linearRampValue;
-	if (curve < 0.5f)
+	else if (curve < 0.5f)
 	{
 		auto alpha = 2.0f * (curve);
 		returnValue = Interpolator::interpolateLinear(lastValue, (float)linearRampValue, alpha);
 	}
 
-	if (curve > 0.5f)
+	else  //curve > 0.5f
 	{
 		auto oneValue = hmath::pow((float)linearRampValue, float_Pi);
 
@@ -729,5 +727,20 @@ void simple_ar_base::State::recalculateLinearAttackTime()
 }
 
 } // pimpl
+
+juce::Path voice_manager_base::editor::createPath(const String& id) const
+{
+	static const unsigned char pathData[] = { 110,109,221,20,79,68,0,120,134,68,98,63,245,69,68,0,120,134,68,254,140,62,68,215,43,138,68,254,140,62,68,215,187,142,68,98,254,140,62,68,133,75,147,68,63,245,69,68,174,255,150,68,221,20,79,68,174,255,150,68,98,139,52,88,68,174,255,150,68,205,156,95,68,
+133,75,147,68,205,156,95,68,215,187,142,68,98,205,156,95,68,215,43,138,68,139,52,88,68,0,120,134,68,221,20,79,68,0,120,134,68,99,109,221,20,79,68,31,197,135,68,98,156,196,86,68,31,197,135,68,29,2,93,68,215,227,138,68,29,2,93,68,215,187,142,68,98,29,2,
+93,68,133,147,146,68,156,196,86,68,143,178,149,68,221,20,79,68,143,178,149,68,98,47,101,71,68,143,178,149,68,174,39,65,68,133,147,146,68,174,39,65,68,215,187,142,68,98,174,39,65,68,215,227,138,68,47,101,71,68,31,197,135,68,221,20,79,68,31,197,135,68,
+99,109,6,33,77,68,195,133,147,68,108,6,33,77,68,102,166,145,68,108,158,223,80,68,102,166,145,68,108,158,223,80,68,195,133,147,68,108,6,33,77,68,195,133,147,68,99,109,23,241,77,68,246,0,145,68,108,16,248,76,68,215,11,140,68,108,16,248,76,68,72,193,137,
+68,108,31,5,81,68,72,193,137,68,108,31,5,81,68,215,11,140,68,108,125,15,80,68,246,0,145,68,108,23,241,77,68,246,0,145,68,99,101,0,0 };
+
+	Path path;
+	path.loadPathFromData(pathData, sizeof(pathData));
+
+	return path;
+}
+
 } // envelope
 } // scriptnode

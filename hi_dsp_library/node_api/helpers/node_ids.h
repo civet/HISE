@@ -77,7 +77,6 @@ DECLARE_ID(ShowParameters);
 DECLARE_ID(ShowClones);
 DECLARE_ID(DisplayedClones);
 DECLARE_ID(Bypassed);
-DECLARE_ID(SoulPatch);
 DECLARE_ID(Debug);
 DECLARE_ID(NumParameters);
 DECLARE_ID(Value);
@@ -96,6 +95,7 @@ DECLARE_ID(SwitchTarget);
 DECLARE_ID(ModulationTargets);
 DECLARE_ID(ModulationTarget);
 DECLARE_ID(Automated);
+DECLARE_ID(SmoothingTime);
 DECLARE_ID(ModulationChain);
 DECLARE_ID(SplitSignal);
 DECLARE_ID(ValueTarget);
@@ -139,7 +139,7 @@ DECLARE_ID(AllowCompilation);
 DECLARE_ID(UncompileableNode);
 DECLARE_ID(CompileChannelAmount);
 DECLARE_ID(HasTail);
-
+DECLARE_ID(SourceId);
 
 struct Helpers
 {
@@ -400,6 +400,9 @@ struct CustomNodeProperties
 				}
 			}
 		}
+        
+        jassertfalse;
+        return {};
 	}
 
 	static bool nodeHasProperty(const ValueTree& nodeTree, const Identifier& propId)

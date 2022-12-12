@@ -56,7 +56,9 @@
 #include "scripting/engine/JavascriptEngineCyclicReferenceChecks.cpp"
 
 #include "scripting/api/ScriptingApiObjects.cpp"
+#include "scripting/api/ScriptBroadcaster.cpp"
 #include "scripting/api/ScriptDrawActions.cpp"
+#include "scripting/api/ScriptTableListModel.cpp"
 #include "scripting/api/ScriptingGraphics.cpp"
 #include "scripting/api/ScriptExpansion.cpp"
 #include "scripting/api/GlobalServer.cpp"

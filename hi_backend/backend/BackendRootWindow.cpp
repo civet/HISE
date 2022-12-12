@@ -37,13 +37,17 @@ BackendRootWindow::BackendRootWindow(AudioProcessor *ownerProcessor, var editorS
 	BackendCommandTarget(static_cast<BackendProcessor*>(ownerProcessor)),
 	owner(static_cast<BackendProcessor*>(ownerProcessor))
 {
+	
+
 	PresetHandler::buildProcessorDataBase(owner->getMainSynthChain());
 
 	Desktop::getInstance().setDefaultLookAndFeel(&globalLookAndFeel);
 
 	addAndMakeVisible(floatingRoot = new FloatingTile(owner, nullptr));
 
-	getMainController()->getLockFreeDispatcher().addPresetLoadListener(this);
+	
+
+	loadKeyPressMap();
 
 	if (GET_HISE_SETTING(owner->getMainSynthChain(), HiseSettings::Other::GlassEffect))
 	{
@@ -250,20 +254,41 @@ BackendRootWindow::BackendRootWindow(AudioProcessor *ownerProcessor, var editorS
 		BackendPanelHelpers::showWorkspace(this, BackendPanelHelpers::Workspace::ScriptingWorkspace, sendNotification);
 	}
 
-    getBackendProcessor()->workbenches.addListener(this);
+	getBackendProcessor()->workbenches.addListener(this);
 
+    GET_PROJECT_HANDLER(getBackendProcessor()->getMainSynthChain()).addListener(this, true);
+            
 	getBackendProcessor()->getScriptComponentEditBroadcaster()->getLearnBroadcaster().addListener(*this, BackendRootWindow::learnModeChanged);
+
+	getMainController()->getLockFreeDispatcher().addPresetLoadListener(this);
+
+	getBackendProcessor()->workspaceBroadcaster.addListener(*this, [](BackendRootWindow& w, const Identifier& id, Processor* p)
+	{
+		w.currentWorkspaceProcessor = p;
+
+		if (id == JavascriptProcessor::getConnectorId())
+		{
+			SafeAsyncCall::call<BackendRootWindow>(w, [](BackendRootWindow& w2)
+			{
+				w2.addEditorTabsOfType<CodeEditorPanel>();
+			});
+		}
+	}, true);
 }
 
 
 BackendRootWindow::~BackendRootWindow()
 {
-	saveInterfaceData();
+	saveKeyPressMap();
 
+	saveInterfaceData();
+    
 	popoutWindows.clear();
 
 	getMainController()->getLockFreeDispatcher().removePresetLoadListener(this);
 
+    GET_PROJECT_HANDLER(getMainController()->getMainSynthChain()).removeListener(this);
+    
 	getBackendProcessor()->getCommandManager()->clearCommands();
 	getBackendProcessor()->getConsoleHandler().setMainConsole(nullptr);
 
@@ -313,6 +338,75 @@ bool BackendRootWindow::isFullScreenMode() const
 #endif
 }
 
+void BackendRootWindow::initialiseAllKeyPresses()
+{
+	// Workspace Shortcuts
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_browser, "Fold Browser Tab", KeyPress(KeyPress::F2Key, ModifierKeys::shiftModifier, 0));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_editor, "Fold Code Editor", KeyPress(KeyPress::F3Key, ModifierKeys::shiftModifier, 0));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_interface, "Fold Interface Designer", KeyPress(KeyPress::F4Key, ModifierKeys::shiftModifier, 0));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_watch, "Fold Script Variable Watch Table", KeyPress('q', ModifierKeys::commandModifier, 'q'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_list, "Fold Component / Node List", KeyPress('w', ModifierKeys::commandModifier, 'w'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_console, "Fold [K]onsole", KeyPress('k', ModifierKeys::commandModifier, 'k'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_properties, "Fold Component / Node Properties", KeyPress('e', ModifierKeys::commandModifier, 'e'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::focus_browser, "Focus Browser Tab", KeyPress(KeyPress::F2Key));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::focus_editor, "Focus Code Editor", KeyPress(KeyPress::F3Key));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::focus_interface, "Focus Interface Designer", KeyPress(KeyPress::F4Key));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::cycle_browser, "Cycle Browser Tabs", KeyPress(KeyPress::F2Key, ModifierKeys::commandModifier, 0));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::cycle_editor, "Cycle Code Editor Tabs", KeyPress(KeyPress::F3Key, ModifierKeys::commandModifier, 0));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_browser, "Fold Browser Tab", KeyPress(KeyPress::F2Key, ModifierKeys::shiftModifier, 0));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_editor, "Fold Code Editor", KeyPress(KeyPress::F3Key, ModifierKeys::shiftModifier, 0));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_interface, "Fold Interface Designer", KeyPress(KeyPress::F4Key, ModifierKeys::shiftModifier, 0));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_watch, "Fold Script Variable Watch Table", KeyPress('q', ModifierKeys::commandModifier, 'q'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_list, "Fold Component / Node List", KeyPress('w', ModifierKeys::commandModifier, 'w'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_console, "Fold [K]onsole", KeyPress('k', ModifierKeys::commandModifier, 'k'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_properties, "Fold Component / Node Properties", KeyPress('e', ModifierKeys::commandModifier, 'e'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::focus_browser, "Focus Browser Tab", KeyPress(KeyPress::F2Key));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::focus_editor, "Focus Code Editor", KeyPress(KeyPress::F3Key));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::focus_interface, "Focus Interface Designer", KeyPress(KeyPress::F4Key));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::cycle_browser, "Cycle Browser Tabs", KeyPress(KeyPress::F2Key, ModifierKeys::commandModifier, 0));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::cycle_editor, "Cycle Code Editor Tabs", KeyPress(KeyPress::F3Key, ModifierKeys::commandModifier, 0));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_browser, "Fold Browser Tab", KeyPress(KeyPress::F2Key, ModifierKeys::shiftModifier, 0));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_editor, "Fold Code Editor", KeyPress(KeyPress::F3Key, ModifierKeys::shiftModifier, 0));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_interface, "Fold Interface Designer", KeyPress(KeyPress::F4Key, ModifierKeys::shiftModifier, 0));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_watch, "Fold Script Variable Watch Table", KeyPress('q', ModifierKeys::commandModifier, 'q'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_list, "Fold Component / Node List", KeyPress('w', ModifierKeys::commandModifier, 'w'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_console, "Fold [K]onsole", KeyPress('k', ModifierKeys::commandModifier, 'k'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_properties, "Fold Component / Node Properties", KeyPress('e', ModifierKeys::commandModifier, 'e'));
+
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::focus_browser, "Focus Browser Tab", KeyPress(KeyPress::F2Key));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::focus_editor, "Focus Code Editor", KeyPress(KeyPress::F3Key));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::focus_interface, "Focus Interface Designer", KeyPress(KeyPress::F4Key));
+    addShortcut(this, "Workspaces", FloatingTileKeyPressIds::fold_map, "Focus BroadcasterMap", KeyPress(KeyPress::F6Key));
+    
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::cycle_browser, "Cycle Browser Tabs", KeyPress(KeyPress::F2Key, ModifierKeys::commandModifier, 0));
+	addShortcut(this, "Workspaces", FloatingTileKeyPressIds::cycle_editor, "Cycle Code Editor Tabs", KeyPress(KeyPress::F3Key, ModifierKeys::commandModifier, 0));
+
+	mcl::FullEditor::initKeyPresses(this);
+	PopupIncludeEditor::initKeyPresses(this);
+	scriptnode::DspNetwork::initKeyPresses(this);
+
+	ScriptContentPanel::initKeyPresses(this);
+}
+
 void BackendRootWindow::setScriptProcessorForWorkspace(JavascriptProcessor* jsp)
 {
 	sendRootContainerRebuildMessage(true);
@@ -349,6 +443,20 @@ void BackendRootWindow::saveInterfaceData()
 	}
 	else
 	{
+		auto tabs = BackendPanelHelpers::ScriptingWorkspace::getCodeTabs(this);
+
+		for (int i = 0; i < tabs->getNumTabs(); i++)
+		{
+			auto c = tabs->getComponent(i);
+
+			// Delete all panels which are not containers
+			if (dynamic_cast<FloatingTileContainer*>(c->getCurrentFloatingPanel()) == nullptr)
+			{
+				tabs->removeFloatingTile(c);
+				i--;
+			}
+		}
+
 		DynamicObject::Ptr obj = new DynamicObject();
 
 		var editorData = getRootFloatingTile()->getCurrentFloatingPanel()->toDynamicObject();
@@ -636,6 +744,11 @@ void BackendRootWindow::paintOverChildren(Graphics& g)
 	}
 }
 
+hise::FloatingTabComponent* BackendRootWindow::getCodeTabs()
+{
+	return BackendPanelHelpers::ScriptingWorkspace::getCodeTabs(this);
+}
+
 VerticalTile* BackendPanelHelpers::getMainTabComponent(FloatingTile* root)
 {
 	static const Identifier id("PersonaContainer");
@@ -741,7 +854,6 @@ void BackendPanelHelpers::ScriptingWorkspace::showInterfaceDesigner(BackendRootW
     
 }
 
-
 FloatingTile* BackendPanelHelpers::SamplerWorkspace::get(BackendRootWindow* rootWindow)
 {
 	return FloatingTileHelpers::findTileWithId<FloatingTileContainer>(rootWindow->getRootFloatingTile(), "SamplerWorkspace")->getParentShell();
@@ -777,5 +889,7 @@ void PeriodicScreenshotter::run()
 		wait(6000);
 	}
 }
+
+
 
 } // namespace hise

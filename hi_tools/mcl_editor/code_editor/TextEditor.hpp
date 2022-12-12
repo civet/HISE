@@ -72,7 +72,7 @@ public:
 	{
 		document.getCodeDocument().getUndoManager().beginNewTransaction();
 
-		document.viewUndoManager.beginNewTransaction();
+		document.viewUndoManagerToUse->beginNewTransaction();
 	}
 
 	void setReadOnly(bool shouldBeReadOnly)
@@ -96,6 +96,11 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override;
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& d) override;
     void mouseMagnify (const juce::MouseEvent& e, float scaleFactor) override;
+
+	bool keyMatchesId(const KeyPress& k, const Identifier& id);
+
+	static void initKeyPresses(Component* root);
+
     bool keyPressed (const juce::KeyPress& key) override;
     juce::MouseCursor getMouseCursor() override;
 
@@ -109,16 +114,7 @@ public:
 
 	bool shouldSkipInactiveUpdate() const;
 
-	void focusLost(FocusChangeType t) override
-	{
-		tokenCollection.setEnabled(false);
-
-		if (onFocusChange)
-			onFocusChange(false, t);
-
-		caret.stopTimer();
-		caret.repaint();
-	}
+	void focusLost(FocusChangeType t) override;
 
 	Font getFont() const { return document.getFont(); }
 
@@ -131,14 +127,8 @@ public:
 		gotoFunction = f;
 	}
 
-	void setDeactivatedLines(SparseSet<int> deactivatesLines_)
-	{
-		if (enablePreprocessorParsing)
-		{
-			deactivatesLines = deactivatesLines_;
-			repaint();
-		}
-	}
+    void setDeactivatedLines(const SparseSet<int>& lines);
+	
 
 	void clearWarningsAndErrors()
 	{
@@ -264,7 +254,9 @@ public:
 
 			auto sl = gotoFunction(s.x, token);
 
-			return document.jumpToLine(sl);
+            document.jumpToLine(sl);
+            
+            return true;
 		}
 
 		return false;
@@ -862,7 +854,11 @@ private:
 
     Array<Selection> tokenSelection;
     
-	SparseSet<int> deactivatesLines;
+    struct DeactivatedRange;
+    
+    
+    OwnedArray<DeactivatedRange> deactivatedLines;
+    
 	bool linebreakEnabled = true;
     float viewScaleFactor = 1.f;
 	int maxLinesToShow = 0;

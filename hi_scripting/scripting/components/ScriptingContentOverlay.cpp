@@ -277,31 +277,7 @@ void ScriptingContentOverlay::paint(Graphics& g)
 
 		Colour lineColour = isInPopup ? Colours::white : Colours::black;
 
-		UnblurryGraphics ug(g, *this, true);
-
-		auto mulAlpha = 1.0f - jlimit(0.0f, 1.0f, (1.0f / 3.0f * ug.getPixelSize()));
-
-		float tenAlpha = JUCE_LIVE_CONSTANT_OFF(0.15f);
-		float oneAlpha = JUCE_LIVE_CONSTANT_OFF(.06f);
-		
-		if (mulAlpha > 0.1f)
-		{
-			for (int x = 10; x < getWidth(); x += 10)
-			{
-				float alpha = (x % 100 == 0) ? tenAlpha : oneAlpha;
-				alpha *= mulAlpha;
-				g.setColour(lineColour.withAlpha(alpha));
-				ug.draw1PxVerticalLine(x, 0.0f, (float)getHeight());
-			}
-
-			for (int y = 10; y < getHeight(); y += 10)
-			{
-				float alpha = (y % 100 == 0) ? tenAlpha : oneAlpha;
-				alpha *= mulAlpha;
-				g.setColour(lineColour.withAlpha(alpha));
-				ug.draw1PxHorizontalLine(y, 0.0f, (float)getWidth());
-			}
-		}
+        GlobalHiseLookAndFeel::draw1PixelGrid(g, this, getLocalBounds(), lineColour);
 	}
 
 	if (dragModeButton->isVisible())
@@ -420,7 +396,7 @@ bool ScriptingContentOverlay::keyPressed(const KeyPress &key)
 		b->getUndoManager().undo();
 		return true;
 	}
-	else if ((keyCode == 'D' || keyCode == 'd') && key.getModifiers().isCommandDown())
+	else if (TopLevelWindowWithKeyMappings::matches(this, key, InterfaceDesignerShortcuts::id_duplicate))
 	{
 		if (draggers.size() > 0)
 		{
@@ -444,7 +420,7 @@ bool ScriptingContentOverlay::keyPressed(const KeyPress &key)
 
 		return true;
 	}
-	else if ((key.isKeyCode('j') || key.isKeyCode('J')))
+	else if (TopLevelWindowWithKeyMappings::matches(this, key, InterfaceDesignerShortcuts::id_show_json))
 	{
 		getScriptComponentEditBroadcaster()->showJSONEditor(this);
 		return true;
@@ -568,6 +544,8 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 				addDefinition,
 				DeleteSelection,
 				showCallback,
+				showDefinition,
+				showLookAndFeel,
 				restoreToData,
 				copySnapshot,
 				toggleLearnMode,
@@ -608,7 +586,7 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 
 				auto first = components.getFirst();
 
-				m.addItem(showCallback, "Show callback for " + first->getName().toString(), first->getCustomControlCallback() != nullptr);
+				
 
 				bool learnable = b->getNumSelected() == 1;
 
@@ -620,7 +598,15 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 				learnable |= (id == ScriptingApi::Content::ScriptPanel::getStaticObjectName());
 				
 				m.addItem(toggleLearnMode, "Enable Connection Learn", learnable, b->getCurrentlyLearnedComponent() == b->getFirstFromSelection());
+
+				m.addSeparator();
+
+				m.addItem(showDefinition, "Goto first Definition of " + first->getName().toString(), true);
+				m.addItem(showLookAndFeel, "Goto LookAndFeel for " + first->getName().toString(), first->getLookAndFeelObject().isObject());
+				m.addItem(showCallback, "Goto Callback for " + first->getName().toString(), first->getCustomControlCallback() != nullptr);
 			}
+
+			auto first = components.getFirst();
 
 			int result = m.show();
 
@@ -674,19 +660,26 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 
 				ScriptingApi::Content::Helpers::deleteSelection(pwsc->getScriptingContent(), b);
 			}
+			else if (result == showDefinition)
+			{
+				auto pwsc = dynamic_cast<ProcessorWithScriptingContent*>(handler->getScriptEditHandlerProcessor());
+
+				pwsc->getScriptingContent()->recompileAndThrowAtDefinition(first.get());
+			}
+			else if (result == showLookAndFeel)
+			{
+				if (auto obj = dynamic_cast<DebugableObjectBase*>(first->getLookAndFeelObject().getObject()))
+				{
+					DebugInformation::Ptr d = new DebugableObjectInformation(obj, "unused", DebugInformation::Type::Constant);
+					d->doubleClickCallback(e, this);
+				}
+			}
 			else if (result == showCallback)
 			{
-				auto componentToUse = components.getFirst();
-
-				if (componentToUse != nullptr)
+				if (auto obj = dynamic_cast<DebugableObjectBase*>(first->getCustomControlCallback()))
 				{
-                    jassertfalse;
-                    #if 0
-					auto func = dynamic_cast<DebugableObjectBase*>(componentToUse->getCustomControlCallback());
-                    
-					if (func != nullptr)
-						func->doubleClickCallback(e, dynamic_cast<Component*>(handler));
-#endif
+					DebugInformation::Ptr d = new DebugableObjectInformation(obj, "unused", DebugInformation::Type::Constant);
+					d->doubleClickCallback(e, this);
 				}
 			}
 			else if (result >= editComponentOffset) // EDIT IN PANEL

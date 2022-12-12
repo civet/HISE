@@ -176,7 +176,7 @@ void AsmCodeGenerator::emitStore(RegPtr target, RegPtr value)
 				if (value->getImmediateValue(immValue))
 				{
 					auto d = Data128::fromF32(immValue);
-					auto mem = cc.newXmmConst(ConstPool::kScopeGlobal, d);
+					auto mem = cc.newConst(ConstPoolScope::kGlobal, d.getData(), d.size());
 
 					if (target->hasCustomMemoryLocation())
 					{
@@ -429,7 +429,7 @@ void AsmCodeGenerator::emitThisMemberAccess(RegPtr target, RegPtr parent, Variab
 	jassert(target->getType() == type);
 	jassert(parent->getType() == Types::ID::Pointer);
 
-	int byteSize = jmin<int>(8, target->getTypeInfo().getRequiredByteSize());
+	int byteSize = jmin<int>(8, (int)target->getTypeInfo().getRequiredByteSize());
 
 	if (parent->isMemoryLocation())
 	{
@@ -479,9 +479,9 @@ void AsmCodeGenerator::emitMemberAcess(RegPtr target, RegPtr parent, RegPtr chil
 
 #define BINARY_OP(token, intOp, floatOp, doubleOp) if(op == token) { IF_(int) INT_OP(intOp, l, r); IF_(float) FP_OP(floatOp, l, r); IF_(double) FP_OP(doubleOp, l, r); }
 
-void AsmCodeGenerator::emitParameter(Operations::Function* f, RegPtr parameterRegister, int parameterIndex)
+void AsmCodeGenerator::emitParameter(Operations::Function* f, FuncNode* fn, RegPtr parameterRegister, int parameterIndex)
 {
-	emitParameter(f->data, parameterRegister, parameterIndex, f->hasObjectPtr);
+	emitParameter(f->data, fn, parameterRegister, parameterIndex, f->hasObjectPtr);
 }
 
 AsmCodeGenerator::RegPtr AsmCodeGenerator::emitBinaryOp(OpType op, RegPtr l, RegPtr r)
@@ -557,7 +557,7 @@ AsmCodeGenerator::RegPtr AsmCodeGenerator::emitBinaryOp(OpType op, RegPtr l, Reg
 
 				if (r->isMemoryLocation())
 				{
-					auto forcedMemory = cc.newInt32Const(ConstPool::kScopeLocal, static_cast<int>(INT_IMM(r)));
+					auto forcedMemory = cc.newInt32Const(ConstPoolScope::kLocal, static_cast<int>(INT_IMM(r)));
 					cc.idiv(dummy.get(), INT_REG_W(l), forcedMemory);
 				}
 				else
@@ -723,7 +723,7 @@ void AsmCodeGenerator::emitSpanReference(RegPtr target, RegPtr address, RegPtr i
 		}
 		else
 		{
-			auto m = cc.newStack(address->getTypeInfo().getRequiredByteSize(), address->getTypeInfo().getRequiredAlignment());
+			auto m = cc.newStack((uint32_t)address->getTypeInfo().getRequiredByteSize(), (uint32_t)address->getTypeInfo().getRequiredAlignment());
 
 			cc.movaps(m, FP_REG_R(address));
 
@@ -792,7 +792,7 @@ void AsmCodeGenerator::emitSpanReference(RegPtr target, RegPtr address, RegPtr i
         
 		if (index->isMemoryLocation())
         {
-            p = ptr.cloneAdjustedAndResized(imm2ptr(INT_IMM(index) * elementSizeInBytes), jmin<int>(elementSizeInBytes, 8));
+            p = ptr.cloneAdjustedAndResized(imm2ptr(INT_IMM(index) * (int64_t)elementSizeInBytes), jmin<int>((int)elementSizeInBytes, 8));
         }
 		else
 		{
@@ -965,7 +965,7 @@ void AsmCodeGenerator::emitReturn(BaseCompiler* c, RegPtr target, RegPtr expr)
 			if (expr->isMemoryLocation())
 				ptr = expr->getAsMemoryLocation();
 			else
-				ptr = x86::ptr(PTR_REG_R(expr)).cloneResized(expr->getTypeInfo().getRequiredByteSize());
+				ptr = x86::ptr(PTR_REG_R(expr)).cloneResized((uint32_t)expr->getTypeInfo().getRequiredByteSize());
 
 			IF_(int)
 				cc.mov(INT_REG_W(rToUse), ptr);
@@ -1099,7 +1099,7 @@ Result AsmCodeGenerator::emitStackInitialisation(RegPtr target, ComplexType::Ptr
 					uint64_t* s = reinterpret_cast<uint64_t*>(start);
 
 					auto d = Data128::fromU64(s[0], s[1]);
-					auto c = cc.newXmmConst(ConstPool::kScopeLocal, d);
+					auto c = cc.newConst(ConstPoolScope::kLocal, d.getData(), d.size());
 					cc.movaps(tmpSSE, c);
 				}
 				
@@ -1132,7 +1132,7 @@ Result AsmCodeGenerator::emitStackInitialisation(RegPtr target, ComplexType::Ptr
 	}
 	else
 	{
-		int numToCopy = typePtr->getRequiredByteSize();
+		auto numToCopy = (int)typePtr->getRequiredByteSize();
 
 		target->loadMemoryIntoRegister(cc, true);
 		expr->loadMemoryIntoRegister(cc, true);
@@ -1362,7 +1362,7 @@ void AsmCodeGenerator::emitCast(RegPtr target, RegPtr expr, Types::ID sourceType
 			if (IS_REG(expr))    cc.cvtsi2sd(FP_REG_W(target), INT_REG_R(expr));
 			else if (IS_IMM(expr))
 			{
-				auto m = cc.newDoubleConst(ConstPool::kScopeLocal, static_cast<double>(INT_IMM(expr)));
+				auto m = cc.newDoubleConst(ConstPoolScope::kLocal, static_cast<double>(INT_IMM(expr)));
 				target->setCustomMemoryLocation(m, false);
 			}
 			else if (IS_CMEM(expr) || IS_MEM(expr))   
@@ -1387,7 +1387,7 @@ void AsmCodeGenerator::emitCast(RegPtr target, RegPtr expr, Types::ID sourceType
 			if     (IS_REG(expr))    cc.cvtsi2ss(FP_REG_W(target), INT_REG_R(expr));
 			else if (IS_IMM(expr))
 			{
-				auto m = cc.newFloatConst(ConstPool::kScopeLocal, static_cast<float>(INT_IMM(expr)));
+				auto m = cc.newFloatConst(ConstPoolScope::kLocal, static_cast<float>(INT_IMM(expr)));
 				target->setCustomMemoryLocation(m, false);
 			}
 		    else if(IS_CMEM(expr) || IS_MEM(expr))   cc.cvtsi2ss(FP_REG_W(target), INT_MEM(expr));
@@ -1407,9 +1407,9 @@ void AsmCodeGenerator::emitNegation(RegPtr target, RegPtr expr)
 	IF_(int)
 		cc.neg(INT_REG_W(target));
 	IF_(float)
-		cc.mulss(FP_REG_W(target), cc.newFloatConst(ConstPool::kScopeLocal, -1.0f));
+		cc.mulss(FP_REG_W(target), cc.newFloatConst(ConstPoolScope::kLocal, -1.0f));
 	IF_(float)
-		cc.mulsd(FP_REG_W(target), cc.newDoubleConst(ConstPool::kScopeLocal, -1.0));
+		cc.mulsd(FP_REG_W(target), cc.newDoubleConst(ConstPoolScope::kLocal, -1.0));
 }
 
 
@@ -1486,7 +1486,9 @@ Result AsmCodeGenerator::emitFunctionCall(RegPtr returnReg, const FunctionData& 
 		pr->loadMemoryIntoRegister(cc);
 	}
 
-	FuncCallNode* call = cc.call((uint64_t)f.function, sig);
+    InvokeNode* call;
+    
+	cc.invoke(&call, (uint64_t)f.function, sig);
 
 	//call->setInlineComment(f.functionName.getCharPointer().getAddress());
 
@@ -1530,7 +1532,7 @@ void AsmCodeGenerator::emitFunctionParameterReference(RegPtr sourceReg, RegPtr p
 		jassert(sourceReg->isActive());
 
 		auto byteSize = Types::Helpers::getSizeForType(type);
-		mem = cc.newStack(byteSize, 0);
+		mem = cc.newStack((uint32_t)byteSize, 0);
 
 		IF_(int) cc.mov(mem, INT_REG_R(sourceReg));
 		IF_(float) cc.movss(mem, FP_REG_R(sourceReg));
@@ -1573,12 +1575,12 @@ Result AsmCodeGenerator::emitSimpleToComplexTypeCopy(RegPtr target, InitialiserL
 		IF_(int) cc.mov(INT_REG_W(target), v.toInt());
 		IF_(float)
 		{
-			auto c = cc.newFloatConst(asmjit::ConstPool::kScopeLocal, v.toFloat());
+			auto c = cc.newFloatConst(asmjit::ConstPoolScope::kLocal, v.toFloat());
 			cc.movss(FP_REG_W(target), c);
 		}
 		IF_(double)
 		{
-			auto c = cc.newFloatConst(asmjit::ConstPool::kScopeLocal, v.toDouble());
+			auto c = cc.newFloatConst(asmjit::ConstPoolScope::kLocal, v.toDouble());
 			cc.movsd(FP_REG_W(target), c);
 		}
 		
@@ -1658,7 +1660,7 @@ void AsmCodeGenerator::dumpVariables(BaseScope* s, uint64_t lineNumber)
 	auto data = reinterpret_cast<void*>(bpHandler.getLineNumber());
 
 	TemporaryRegister ad(*this, s, TypeInfo(Types::ID::Block));
-	int ok = cc.mov(ad.get(), void2ptr(data));
+	cc.mov(ad.get(), void2ptr(data));
 	auto target = x86::qword_ptr(ad.get());
 
 	cc.mov(target, lineNumber);
@@ -1722,7 +1724,7 @@ void AsmCodeGenerator::fillSignature(const FunctionData& data, FuncSignatureX& s
 
 asmjit::X86Mem AsmCodeGenerator::createStack(Types::ID t)
 {
-	auto s = Types::Helpers::getSizeForType(t);
+	auto s = (uint32_t)Types::Helpers::getSizeForType(t);
 
 	auto st = cc.newStack(s, s);
 	st.setSize(s);
@@ -1736,9 +1738,6 @@ void SpanLoopEmitter::emitLoop(AsmCodeGenerator& gen, BaseCompiler* compiler, Ba
 	jassert(typePtr != nullptr);
 	jassert(iterator.typeInfo == typePtr->getElementType());
     
-	int numLoops = typePtr->getNumElements();
-
-
 	auto& cc = gen.cc;
     auto start = cc.newGpq();
     auto end = cc.newGpq();
@@ -1762,8 +1761,8 @@ void SpanLoopEmitter::emitLoop(AsmCodeGenerator& gen, BaseCompiler* compiler, Ba
         }
         else
         {
-            auto startMem = AsmCodeGenerator::createValid64BitPointer(cc, ptr, 0, typePtr->getElementSize());
-            auto endMem = AsmCodeGenerator::createValid64BitPointer(cc, ptr, offset, typePtr->getElementSize());
+            auto startMem = AsmCodeGenerator::createValid64BitPointer(cc, ptr, 0, (int)typePtr->getElementSize());
+            auto endMem = AsmCodeGenerator::createValid64BitPointer(cc, ptr, (int)offset, (int)typePtr->getElementSize());
             
             cc.lea(start, startMem);
             cc.lea(end, endMem);
@@ -1779,7 +1778,7 @@ void SpanLoopEmitter::emitLoop(AsmCodeGenerator& gen, BaseCompiler* compiler, Ba
         else
             cc.mov(start, PTR_REG_R(loopTarget));
         
-        cc.lea(end, x86::ptr(start, offset));
+        cc.lea(end, x86::ptr(start, (uint32_t)offset));
     }
     
 	auto loopStart = cc.newLabel();
@@ -1953,7 +1952,7 @@ void CustomLoopEmitter::emitLoop(AsmCodeGenerator& gen, BaseCompiler* compiler, 
 	{
 		auto offset = sizeReg.tempReg->getImmediateIntValue();
 
-		cc.lea(endReg.get(), x86::ptr(beginReg.get()).cloneAdjustedAndResized(offset * elementSize, elementSize));
+		cc.lea(endReg.get(), x86::ptr(beginReg.get()).cloneAdjustedAndResized(offset * (int64_t)elementSize, (uint32_t)elementSize));
 	}
 	else
 	{

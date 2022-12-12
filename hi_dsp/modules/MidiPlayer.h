@@ -239,7 +239,7 @@ public:
 	
 		
 	*/
-	Array<HiseEvent> getEventList(double sampleRate, double bpm);
+	Array<HiseEvent> getEventList(double sampleRate, double bpm, HiseMidiSequence::TimestampEditFormat formatToUse=HiseMidiSequence::TimestampEditFormat::numTimestampFormats);
 
 	/** Swaps the current track with the given MidiMessageSequence. */
 	void swapCurrentSequence(MidiMessageSequence* sequenceToSwap);
@@ -308,6 +308,15 @@ public:
 		JUCE_DECLARE_WEAK_REFERENCEABLE(PlaybackListener);
 	};
 
+	struct EventRecordProcessor
+	{
+		virtual ~EventRecordProcessor() {};
+
+		virtual void processRecordedEvent(HiseEvent& e) = 0;
+
+		JUCE_DECLARE_WEAK_REFERENCEABLE(EventRecordProcessor);
+	};
+
 	/** A Listener that will be notified when a new HiseMidiSequence was loaded. */
 	struct SequenceListener
 	{
@@ -341,7 +350,7 @@ public:
 		
 		    Upon construction, it will create a list of events from the current sequence that
 			will be used for undo operations. */
-		EditAction(WeakReference<MidiPlayer> currentPlayer_, const Array<HiseEvent>& newContent, double sampleRate_, double bpm_);;
+		EditAction(WeakReference<MidiPlayer> currentPlayer_, const Array<HiseEvent>& newContent, double sampleRate_, double bpm_, HiseMidiSequence::TimestampEditFormat formatToUse);;
 
 		/** Applies the given event list. */
 		bool perform() override;
@@ -349,7 +358,7 @@ public:
 		/** Restores the previous event list. */
 		bool undo() override;
 
-		static void writeArrayToSequence(HiseMidiSequence::Ptr destination, Array<HiseEvent>& arrayToWrite, double bpm, double sampleRate);
+		static void writeArrayToSequence(HiseMidiSequence::Ptr destination, Array<HiseEvent>& arrayToWrite, double bpm, double sampleRate, HiseMidiSequence::TimestampEditFormat formatToUse=HiseMidiSequence::TimestampEditFormat::numTimestampFormats);
 
 	private:
 
@@ -361,6 +370,7 @@ public:
 		double sampleRate;
 		double bpm;
 		Identifier sequenceId;
+		HiseMidiSequence::TimestampEditFormat formatToUse;
 	};
 
 	/** An undoable operation that exchanges the entire sequence set. */
@@ -451,7 +461,7 @@ public:
 
 	void onGridChange(int gridIndex, uint16 timestamp, bool firstGridEventInPlayback) override;
 
-	void onTransportChange(bool isPlaying) override;
+	void onTransportChange(bool isPlaying, double ppqPosition) override;
 	
 	enum class RecordState
 	{
@@ -551,7 +561,7 @@ public:
 	
 		It locks the sequence just for a very short time so you should be able to use this from any
 		thread without bothering about multi-threading. */
-	void flushEdit(const Array<HiseEvent>& newEvents);
+	void flushEdit(const Array<HiseEvent>& newEvents, HiseMidiSequence::TimestampEditFormat formatToUse=HiseMidiSequence::TimestampEditFormat::numTimestampFormats);
 
 	/** Clears the current sequence and any recorded events. */
 	void clearCurrentSequence();
@@ -564,6 +574,14 @@ public:
 		get triggered by UI controls and it would be difficult to deinterleave parameter changes
 		and MIDI edits. */
 	UndoManager* getUndoManager() { return undoManager; };
+
+	void setUseExternalUndoManager(UndoManager* externalUndoManagerToUse)
+	{
+		if (externalUndoManagerToUse == nullptr)
+			undoManager = ownedUndoManager.get();
+		else
+			undoManager = externalUndoManagerToUse;
+	}
 
 	/** If set to false, the recording will not be flushed and you can preprocess it. */
 	void setFlushRecordingOnStop(bool shouldFlushRecording)
@@ -604,7 +622,9 @@ public:
 		by passing in the timestamp of the current event within the buffer. */
 	bool stop(int timestampInBuffer=0);
 
-	double getTicksPerSample() const { return ticksPerSample * playbackSpeed; }
+	double getTicksPerSample() const { return ticksPerSample * getPlaybackSpeed(); }
+
+	double getPlaybackSpeed() const { return playbackSpeed * getMainController()->getGlobalPlaybackSpeed(); }
 
 	/** Starts recording. If the sequence is already playing, it switches into overdub mode, otherwise it also starts playing. */
 	bool record(int timestampInBuffer=0);
@@ -656,7 +676,82 @@ public:
 
 	void setSyncToMasterClock(bool shouldSyncToMasterClock);
 
+	void addEventRecordProcessor(EventRecordProcessor* newProcessor)
+	{
+		eventRecordProcessors.addIfNotAlreadyThere(newProcessor);
+	}
+
+	void removeEventRecordProcessor(EventRecordProcessor* processorToRemove)
+	{
+		eventRecordProcessors.removeAllInstancesOf(processorToRemove);
+	}
+
 private:
+
+	bool processRecordedEvent(HiseEvent& m)
+	{
+		for (auto& p : eventRecordProcessors)
+		{
+			jassert(p != nullptr);
+
+			if (p != nullptr)
+				p->processRecordedEvent(m);
+		}
+
+		return !m.isIgnored();
+	}
+
+	Array<WeakReference<EventRecordProcessor>> eventRecordProcessors;
+
+	struct NotePair
+	{
+		bool operator==(const NotePair& other) const { return on == other.on && off == other.off; }
+		HiseEvent on;
+		HiseEvent off;
+	};
+
+	struct OverdubUpdater : public PooledUIUpdater::SimpleTimer
+	{
+		OverdubUpdater(MidiPlayer& mp) :
+			SimpleTimer(mp.getMainController()->getGlobalUIUpdater()),
+			parent(mp)
+		{};
+
+		void timerCallback() override
+		{
+			if (dirty)
+			{
+				parent.flushOverdubNotes(lastTimestamp);
+				lastTimestamp = -1.0;
+				dirty.store(false);
+			}
+		}
+
+		void setDirty(double activeNoteTimestamp=-1.0)
+		{
+			if (activeNoteTimestamp != lastTimestamp)
+			{
+				lastTimestamp = activeNoteTimestamp;
+			}
+
+			dirty.store(true);
+		}
+
+		double lastTimestamp = -1.0;
+		std::atomic<bool> dirty = { false };
+
+		MidiPlayer& parent;
+	} overdubUpdater;
+
+	void flushOverdubNotes(double timestampForActiveNotes=-1.0);
+
+	
+	bool recordOnNextPlaybackStart = false;
+
+	bool overdubMode = true;
+	hise::UnorderedStack<NotePair> overdubNoteOns;
+	hise::UnorderedStack<HiseEvent> controllerEvents;
+	SimpleReadWriteLock overdubLock;
 
 	struct Updater : private PooledUIUpdater::SimpleTimer
 	{
@@ -746,8 +841,7 @@ private:
 
 
 /** Subclass this and implement your MIDI file player type. */
-class MidiPlayerBaseType : public MidiPlayer::SequenceListener,
-							   private SafeChangeListener
+class MidiPlayerBaseType : public MidiPlayer::SequenceListener
 {
 public:
 
@@ -782,16 +876,20 @@ public:
 
 protected:
 
+	void cancelUpdates()
+	{
+		if (player != nullptr)
+		{
+			player->removeSequenceListener(this);
+		}
+	}
+
 	MidiPlayerBaseType(MidiPlayer* player_);;
 
 	
 
 	MidiPlayer* getPlayer() { return player.get(); }
 	const MidiPlayer* getPlayer() const { return player.get(); }
-
-	virtual void sequenceIndexChanged() {};
-
-	virtual void trackIndexChanged() {};
 
 	Font getFont() const
 	{
@@ -801,8 +899,6 @@ protected:
 private:
 
 	Font font;
-
-	void changeListenerCallback(SafeChangeBroadcaster* b) override;
 
 	int lastTrackIndex = 0;
 	int lastSequenceIndex = -1;

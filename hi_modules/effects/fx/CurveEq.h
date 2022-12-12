@@ -97,7 +97,7 @@ public:
 		StereoFilter()
 		{
 			setNumChannels(2);
-			setSmoothingTime(0.015);
+			setSmoothingTime(0.28);
 		}
 
 		void renderIfEnabled(FilterHelpers::RenderData& r)
@@ -139,10 +139,17 @@ public:
 
 	void applyEffect(AudioSampleBuffer &buffer, int startSample, int numSamples) override
 	{
-		FilterHelpers::RenderData r(buffer, startSample, numSamples);
+		static constexpr int FixBlockSize = 64;
 
-		for (auto filter : filterBands)
-			filter->renderIfEnabled(r);
+		for (int i = startSample; i < startSample + numSamples; i += FixBlockSize)
+		{
+			int numThisTime = jmin<int>(FixBlockSize, numSamples - i);
+
+			FilterHelpers::RenderData r(buffer, i, numThisTime);
+
+			for (auto filter : filterBands)
+				filter->renderIfEnabled(r);
+		}
 
 		if (fftBuffer != nullptr && fftBuffer->isActive())
 			fftBuffer->write(buffer, startSample, numSamples);
@@ -186,7 +193,7 @@ public:
 		fftBuffer->setActive(shouldBeEnabled);
 	}
 
-	void addFilterBand(double freq, double gain)
+	void addFilterBand(double freq, double gain, int insertIndex=-1)
 	{
 		ScopedLock sl(getMainController()->getLock());
 
@@ -197,7 +204,10 @@ public:
 		f->setGain(gain);
 		f->setFrequency(freq);
 
-		filterBands.add(f);
+		if (insertIndex == -1)
+			filterBands.add(f);
+		else
+			filterBands.insert(insertIndex, f);
 
 		sendChangeMessage();
 	}
@@ -254,9 +264,14 @@ public:
 
 		const int numFilters = v.getProperty("NumFilters", 0);
 
+		auto sr = getSampleRate();
+
 		for(int i = 0; i < numFilters; i++)
 		{
 			filterBands.add(new StereoFilter());
+
+			if (sr > 0.0)
+				filterBands.getLast()->setSampleRate(sr);
 		}
 
 		for(int i = 0; i < numFilters * numBandParameters; i++)

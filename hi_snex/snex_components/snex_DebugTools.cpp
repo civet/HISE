@@ -106,7 +106,7 @@ bool debug::SymbolProvider::ComplexMemberToken::matches(const String& input, con
 			if (typeInfo.getTypedIfComplexType<ComplexType>() == p.get())
 				return matchesInput(input, codeToSearch);
 		}
-		catch (ParserHelpers::Error& e)
+		catch (ParserHelpers::Error& )
 		{
 			return false;
 		}
@@ -128,6 +128,7 @@ void debug::PreprocessorMacroProvider::addTokens(mcl::TokenCollection::List& tok
 	catch (ParserHelpers::Error& e)
 	{
 		DBG(e.toString());
+		ignoreUnused(e);
 	}
 
 	for (auto ad : p.getAutocompleteData())

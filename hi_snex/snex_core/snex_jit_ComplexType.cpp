@@ -78,7 +78,7 @@ Result ComplexType::callConstructor(InitData& d)
 				VariableStorage v;
 
 				if (!mp->getValue(v))
-					mp->value = VariableStorage(memberData, mp->st->getMemberTypeInfo(mp->variableId).getRequiredByteSize());
+					mp->value = VariableStorage(memberData, (int)mp->st->getMemberTypeInfo(mp->variableId).getRequiredByteSize());
 
 				providedArgs.add(mp->st->getMemberTypeInfo(mp->variableId).withModifiers(false, true));
 			}
@@ -259,11 +259,9 @@ bool ComplexType::hasDefaultConstructor()
 
 		for (auto& m : matches)
 		{
-            if(m.matchesArgumentTypesWithDefault({}));
+            if(m.matchesArgumentTypesWithDefault({}))
 				return true;
 		}
-
-		return false;
 	}
 
 	return false;
@@ -416,14 +414,14 @@ void ComplexType::writeNativeMemberTypeToAsmStack(const ComplexType::InitData& d
 		}
 		IF_(float)
 		{
-			auto t = cc.newFloatConst(ConstPool::kScopeLocal, v.toFloat());
+			auto t = cc.newFloatConst(ConstPoolScope::kLocal, v.toFloat());
 			auto temp = cc.newXmmPs();
 			cc.movss(temp, t);
 			cc.movss(mem, temp);
 		}
 		IF_(double)
 		{
-			auto t = cc.newDoubleConst(ConstPool::kScopeLocal, v.toDouble());
+			auto t = cc.newDoubleConst(ConstPoolScope::kLocal, v.toDouble());
 			auto temp = cc.newXmmPd();
 			cc.movsd(temp, t);
 			cc.movsd(mem, temp);

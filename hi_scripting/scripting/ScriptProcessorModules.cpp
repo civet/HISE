@@ -224,7 +224,7 @@ void JavascriptMidiProcessor::runScriptCallbacks()
 	breakpointWasHit(-1);
 #endif
 
-	scriptEngine->maximumExecutionTime = isDeferred() ? RelativeTime(0.5) : RelativeTime(0.03);
+	scriptEngine->maximumExecutionTime = HiseJavascriptEngine::getDefaultTimeOut();
 
 	synthObject->handleNoteCounter(*currentEvent);
 
@@ -330,7 +330,7 @@ void JavascriptMidiProcessor::runTimerCallback(int /*offsetInBuffer*//*=-1*/)
 {
 	if (isBypassed() || onTimerCallback->isSnippetEmpty()) return;
 
-	scriptEngine->maximumExecutionTime = isDeferred() ? RelativeTime(0.5) : RelativeTime(0.002);
+	scriptEngine->maximumExecutionTime = HiseJavascriptEngine::getDefaultTimeOut();
 
 	if (lastResult.failed()) return;
 
@@ -488,6 +488,8 @@ void JavascriptPolyphonicEffect::prepareToPlay(double sampleRate, int samplesPer
 	{
 		auto numChannels = dynamic_cast<RoutableProcessor*>(getParentProcessor(true))->getMatrix().getNumSourceChannels();
 
+        setVoiceKillerToUse(this);
+        
 		n->setNumChannels(numChannels);
 		n->prepareToPlay(sampleRate, (double)samplesPerBlock);
 	}
@@ -509,6 +511,8 @@ void JavascriptPolyphonicEffect::renderVoice(int voiceIndex, AudioSampleBuffer &
 
 		scriptnode::DspNetwork::VoiceSetter vs(*n, voiceIndex);
 		n->getRootNode()->process(d);
+        
+        isTailing = voiceData.containsVoiceIndex(voiceIndex);
 	}
 }
 
@@ -1561,6 +1565,7 @@ void JavascriptSynthesiser::restoreFromValueTree(const ValueTree &v)
 
 void JavascriptSynthesiser::Voice::calculateBlock(int startSample, int numSamples)
 {
+	
 	if (auto n = synth->getActiveNetwork())
 	{
 		if (isVoiceStart)
@@ -1602,6 +1607,38 @@ void JavascriptSynthesiser::Voice::calculateBlock(int startSample, int numSample
 
 		getOwnerSynth()->effectChain->renderVoice(voiceIndex, voiceBuffer, startSample, numSamples);
 	}
+}
+
+void ScriptnodeVoiceKiller::initialiseNetworks(ScriptnodeVoiceKiller& v)
+{
+	if (!v.initialised)
+	{
+		auto parentSynth = v.getParentProcessor(true, false);
+		auto modParent = v.getParentProcessor(false, false);
+
+		if (parentSynth == nullptr)
+			return;
+
+		auto modParentIsGain = parentSynth->getChildProcessor(ModulatorSynth::GainModulation) == modParent;
+
+		if (!modParentIsGain)
+		{
+			// nothing to do here...
+			v.initialised = true;
+			return;
+		}
+
+		if (auto holder = dynamic_cast<DspNetwork::Holder*>(parentSynth))
+		{
+			holder->setVoiceKillerToUse(&v);
+			v.initialised = true;
+		}
+	}
+}
+
+float ScriptnodeVoiceKiller::startVoice(int voiceIndex)
+{
+	getState(voiceIndex)->active.store(true); return 1.0f;
 }
 
 hise::ProcessorEditorBody * ScriptnodeVoiceKiller::createEditor(ProcessorEditor *parentEditor)

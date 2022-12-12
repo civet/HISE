@@ -50,7 +50,7 @@ dynamic_expression::graph::graph(PooledUIUpdater* u, dynamic_expression* e) :
 
 float dynamic_expression::graph::intersectsPath(Path& path, Rectangle<float> b)
 {
-	PathFlatteningIterator i(path, AffineTransform(), JUCE_LIVE_CONSTANT(0.6));
+	PathFlatteningIterator i(path, AffineTransform(), JUCE_LIVE_CONSTANT_OFF(0.6f));
 
 	while (i.next())
 	{
@@ -326,20 +326,10 @@ void dynamic_expression::editor::paint(Graphics& g)
 
 	auto b = darkBackground.removeFromTop(jmax<float>(te.getHeight(), 24 - 3.0)).toFloat();
 
-    Colour resultColours[3] = { Colour(0xFFBB3434),
-                                Colour(0xFFFFBA00),
-                                Colour(0xFF4E8E35) };
-        
+	Colour resultColours[3] = { Colour(HISE_ERROR_COLOUR),
+                                Colour(HISE_WARNING_COLOUR),
+                                Colour(HISE_OK_COLOUR) };
     
-    
-	
-#if 0
-	c = c.withSaturation(0.5f);
-
-	g.setColour(c.withAlpha(0.05f));
-	g.fillRect(b);
-#endif
-
 	g.setColour(Colours::white.withAlpha(0.4f));
 	g.setFont(GLOBAL_MONOSPACE_FONT());
 

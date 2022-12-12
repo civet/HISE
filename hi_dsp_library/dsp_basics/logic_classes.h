@@ -73,6 +73,14 @@ struct ms2samples
     double sampleRate = 0.0;
 };
 
+struct ms2bpm
+{
+    double getValue(double input) const
+    {
+        return 60 / (hmath::max(input, 1.0) * 0.001);
+    }
+};
+
 struct samples2ms
 {
     double getValue(double input) const
@@ -127,7 +135,7 @@ struct midi2freq
 {
     double getValue(double input) const
     {
-        return MidiMessage::getMidiNoteInHertz(input);
+        return MidiMessage::getMidiNoteInHertz(hmath::round(input*127.0));
     }
 };
 
@@ -533,6 +541,18 @@ struct harmonics
     }
 };
 
+struct threshold
+{
+    SN_EMPTY_INITIALISE;
+    
+    template <int Index> double getFadeValue(int numElements, double normalisedInput)
+    {
+        auto tr = (double)(Index) / (double)(numElements);
+        
+        return (double)(normalisedInput >= tr);
+    }
+};
+
 struct linear
 {
     SN_EMPTY_INITIALISE;
@@ -548,8 +568,6 @@ struct linear
             auto v = 1.0 - Math.abs(1.0 - u * (normalisedInput + offset));
             return jlimit(0.0, 1.0, v);
         }
-
-        return 0.0;
     }
 
     hmath Math;

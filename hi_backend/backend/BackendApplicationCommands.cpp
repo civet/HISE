@@ -75,7 +75,9 @@ void BackendCommandTarget::setEditor(BackendRootWindow *editor)
 	mainCommandManager = owner->getCommandManager();
 	mainCommandManager->registerAllCommandsForTarget(this);
 	mainCommandManager->getKeyMappings()->resetToDefaultMappings();
-
+    
+    updater = new Updater(*this);
+    
 	bpe->addKeyListener(mainCommandManager->getKeyMappings());
 	mainCommandManager->setFirstCommandTarget(this);
 	mainCommandManager->commandStatusChanged();
@@ -109,6 +111,7 @@ void BackendCommandTarget::getAllCommands(Array<CommandID>& commands)
 		MenuFileSettingsCompiler,
 		MenuFileSettingCheckSanity,
 		MenuFileSettingsCleanBuildDirectory,
+		MenuFileCreateThirdPartyNode,
 		MenuReplaceWithClipboardContent,
 		MenuExportFileAsPlugin,
 		MenuExportFileAsEffectPlugin,
@@ -131,7 +134,7 @@ void BackendCommandTarget::getAllCommands(Array<CommandID>& commands)
         MenuEditCloseAllChains,
         MenuEditPlotModulator,
 		MenuViewShowSelectedProcessorInPopup,
-		
+		MenuToolsEditShortcuts,
 		MenuToolsRecompile,
 		MenuToolsCreateInterface,
         MenuToolsClearConsole,
@@ -140,6 +143,7 @@ void BackendCommandTarget::getAllCommands(Array<CommandID>& commands)
 		MenuToolsRecompileScriptsOnReload,
 		MenuToolsEnableCallStack,
 		MenuToolsCheckCyclicReferences,
+		MenuToolsConvertSVGToPathData,
 		MenuToolsCreateToolbarPropertyDefinition,
 		MenuToolsCreateExternalScriptFile,
 		MenuToolsCreateUIDataFromDesktop,
@@ -148,7 +152,6 @@ void BackendCommandTarget::getAllCommands(Array<CommandID>& commands)
 		MenuToolsResolveMissingSamples,
 		MenuToolsDeleteMissingSamples,
 		MenuToolsCheckAllSampleMaps,
-		MenuToolsCollectExternalFiles,
 		MenuToolsCheckUnusedImages,
 		MenuToolsGetMissingSampleList,
 		MenuToolsRedirectScriptFolder,
@@ -165,26 +168,23 @@ void BackendCommandTarget::getAllCommands(Array<CommandID>& commands)
 		MenuToolsCreateRSAKeys,
 		MenuToolsCreateDummyLicenseFile,
 		MenuToolsApplySampleMapProperties,
+		MenuToolsSimulateChangingBufferSize,
 		MenuToolsShowDspNetworkDllInfo,
 		MenuViewResetLookAndFeel,
 		MenuViewReset,
         MenuViewFullscreen,
         MenuViewRotate,
-		MenuViewBack,
-		MenuViewForward,
 		MenuViewEnableGlobalLayoutMode,
 		MenuViewAddFloatingWindow,
 		MenuViewAddInterfacePreview,
+        MenuViewGotoUndo,
+        MenuViewGotoRedo,
         MenuOneColumn,
 		MenuTwoColumns,
 		MenuThreeColumns,
 		MenuViewShowPluginPopupPreview,
         MenuViewIncreaseCodeFontSize,
         MenuViewDecreaseCodeFontSize,
-        MenuAddView,
-        MenuDeleteView,
-        MenuRenameView,
-        MenuViewSaveCurrentView,
         MenuToolsSanityCheck,
 		MenuHelpShowAboutPage,
         MenuHelpCheckVersion,
@@ -306,6 +306,10 @@ void BackendCommandTarget::getCommandInfo(CommandID commandID, ApplicationComman
         setCommandTarget(result, "Save current state as new User Preset", true, false, 'X', false);
 		result.categoryName = "File";
         break;
+	case MenuFileCreateThirdPartyNode:
+		setCommandTarget(result, "Create C++ third party node template", true, false, 'X', false);
+		result.categoryName = "File";
+		break;
     case MenuExportFileAsPlugin:
         setCommandTarget(result, "Export as Instrument (VSTi / AUi) plugin", true, false, 'X', false);
 		result.categoryName = "Export";
@@ -374,6 +378,7 @@ void BackendCommandTarget::getCommandInfo(CommandID commandID, ApplicationComman
 	case MenuFileQuit:
 		setCommandTarget(result, "Quit", true, false, 'X', false);
 		result.categoryName = "File";
+		break;
 	case MenuEditUndo:
 		setCommandTarget(result, "Undo: " + bpe->owner->getControlUndoManager()->getUndoDescription(), bpe->owner->getControlUndoManager()->canUndo(), false, 'Z', true, ModifierKeys::commandModifier);
 		result.categoryName = "Edit";
@@ -394,6 +399,10 @@ void BackendCommandTarget::getCommandInfo(CommandID commandID, ApplicationComman
 		setCommandTarget(result, "Move up", currentCopyPasteTarget.get() != nullptr, false, 'X', false);
 		result.categoryName = "Edit";
 		result.addDefaultKeypress(KeyPress::upKey, ModifierKeys::ctrlModifier);
+		break;
+	case MenuToolsEditShortcuts:
+		setCommandTarget(result, "Edit Shortcuts", true, false, 'x', false);
+		result.categoryName = "Tools";
 		break;
 	case MenuEditMoveDown:
 		setCommandTarget(result, "Move down", currentCopyPasteTarget.get() != nullptr, false, 'X', false);
@@ -461,6 +470,11 @@ void BackendCommandTarget::getCommandInfo(CommandID commandID, ApplicationComman
 		setCommandTarget(result, "Check Javascript objects for cyclic references", true, false, 'X', false);
 		result.categoryName = "Tools";
 		break;
+	case MenuToolsSimulateChangingBufferSize:
+		setCommandTarget(result, "Simulate varying audio buffer size", true, bpe->getBackendProcessor()->isUsingDynamicBufferSize(), 'X', false);
+
+		result.categoryName = "Tools";
+		break;
 	case MenuToolsRecompileScriptsOnReload:
 		setCommandTarget(result, "Recompile all scripts on preset load", true, bpe->getBackendProcessor()->isCompilingAllScriptsOnPresetLoad(), 'X', false);
 		result.categoryName = "Tools";
@@ -502,10 +516,6 @@ void BackendCommandTarget::getCommandInfo(CommandID commandID, ApplicationComman
 		break;
 	case MenuToolsImportArchivedSamples:
 		setCommandTarget(result, "Import archived samples", true, false, 'X', false);
-		result.categoryName = "Tools";
-		break;
-	case MenuToolsCollectExternalFiles:
-		setCommandTarget(result, "Collect external files into Project folder", GET_PROJECT_HANDLER(bpe->getMainSynthChain()).isActive(), false, 'X', false);
 		result.categoryName = "Tools";
 		break;
 	case MenuToolsShowDspNetworkDllInfo:
@@ -565,6 +575,10 @@ void BackendCommandTarget::getCommandInfo(CommandID commandID, ApplicationComman
 		setCommandTarget(result, "Create RSA Key pair", true, false, 'X', false);
 		result.categoryName = "Tools";
 		break;
+	case MenuToolsConvertSVGToPathData:
+		setCommandTarget(result, "Convert SVG to Path data", true, false, 'X', false);
+		result.categoryName = "Tools";
+		break;
 	case MenuToolsCreateDummyLicenseFile:
 		setCommandTarget(result, "Create Dummy License File", true, false, 'X', false);
 		result.categoryName = "Tools";
@@ -577,19 +591,35 @@ void BackendCommandTarget::getCommandInfo(CommandID commandID, ApplicationComman
 		setCommandTarget(result, "Reset Workspaces", true, false, 'X', false);
 		result.categoryName = "View";
 		break;
+    case MenuViewGotoUndo:
+    case MenuViewGotoRedo:
+    {
+        auto isUndo = commandID == MenuViewGotoUndo;
+        auto l = bpe->getBackendProcessor()->getLocationUndoManager();
+        auto shortcutId = isUndo ? TextEditorShortcuts::goto_undo : TextEditorShortcuts::goto_redo;
+        String name;
+            
+        if(isUndo)
+        {
+            
+            name << "Go back to ";
+            name << l->getUndoDescription();
+        }
+        else
+            name << "Goto next location";
+            
+        result.setInfo(name, name, "Unused", 0);
+        result.setActive(true);
+        result.categoryName = "View";
+            result.defaultKeypresses.add(TopLevelWindowWithKeyMappings::getFirstKeyPress(bpe, shortcutId));
+        
+        break;
+    }
     case MenuViewFullscreen:
         setCommandTarget(result, "Toggle Fullscreen", true, bpe->isFullScreenMode(), 'X', false);
 		result.categoryName = "View";
         break;
-	case MenuViewBack:
-		setCommandTarget(result, "Back: " + bpe->mainEditor->getViewUndoManager()->getUndoDescription(), bpe->mainEditor->getViewUndoManager()->canUndo(), false, 'X', false);
-		result.categoryName = "View";
-		break;
-	case MenuViewForward:
-		setCommandTarget(result, "Forward: " + bpe->mainEditor->getViewUndoManager()->getRedoDescription(), bpe->mainEditor->getViewUndoManager()->canRedo(), false, 'X', false);
-		result.categoryName = "View";
-		break;
-    case MenuViewRotate:
+	case MenuViewRotate:
         setCommandTarget(result, "Vertical Layout", true, bpe->isRotated(), 'X', false);
         break;
 	case MenuViewEnableGlobalLayoutMode:
@@ -623,19 +653,7 @@ void BackendCommandTarget::getCommandInfo(CommandID commandID, ApplicationComman
     case MenuViewDecreaseCodeFontSize:
         setCommandTarget(result, "Decrease code font size", true, false, 'X', false);
         break;
-    case MenuAddView:
-        setCommandTarget(result, "Add new view", true, false, 'X', false);
-        break;
-    case MenuDeleteView:
-        setCommandTarget(result, "Delete current view", viewActive(), false, 'X', false);
-        break;
-    case MenuRenameView:
-        setCommandTarget(result, "Rename current view", viewActive(), false, 'X', false);
-        break;
-    case MenuViewSaveCurrentView:
-        setCommandTarget(result, "Save current view", viewActive(), false, 'X', false);
-        break;
-	case MenuViewShowSelectedProcessorInPopup:
+    case MenuViewShowSelectedProcessorInPopup:
 		setCommandTarget(result, "Show Processor in full screen", dynamic_cast<ProcessorEditor*>(currentCopyPasteTarget.get()) != nullptr, false, 'X', false);
 		result.addDefaultKeypress(KeyPress::F11Key, ModifierKeys::noModifiers);
 		break;
@@ -702,6 +720,7 @@ bool BackendCommandTarget::perform(const InvocationInfo &info)
 	case MenuFileSettingsCompiler:		Actions::showFileCompilerSettings(bpe); return true;
 	case MenuFileSettingCheckSanity:	Actions::checkSettingSanity(bpe); return true;
 	case MenuFileSettingsCleanBuildDirectory:	Actions::cleanBuildDirectory(bpe); return true;
+	case MenuFileCreateThirdPartyNode:	Actions::createThirdPartyNode(bpe); return true;
 	case MenuReplaceWithClipboardContent: Actions::replaceWithClipboardContent(bpe); return true;
 	case MenuFileQuit:                  if (PresetHandler::showYesNoWindow("Quit Application", "Do you want to quit?"))
                                             JUCEApplicationBase::quit(); return true;
@@ -727,7 +746,6 @@ bool BackendCommandTarget::perform(const InvocationInfo &info)
 	case MenuToolsValidateUserPresets:	Actions::validateUserPresets(bpe); return true;
 	case MenuToolsResolveMissingSamples:Actions::resolveMissingSamples(bpe); return true;
 	case MenuToolsGetMissingSampleList:	Actions::copyMissingSampleListToClipboard(bpe); return true;
-	case MenuToolsCollectExternalFiles:	Actions::collectExternalFiles(bpe); return true;
 	case MenuToolsCreateUIDataFromDesktop: Actions::createUIDataFromDesktop(bpe); updateCommands(); return true;
 	case MenuToolsCheckDeviceSanity:	Actions::checkDeviceSanity(bpe); return true;
 	case MenuToolsCheckUnusedImages:	Actions::checkUnusedImages(bpe); return true;
@@ -739,6 +757,7 @@ bool BackendCommandTarget::perform(const InvocationInfo &info)
 	case MenuToolsUpdateSampleMapIdsBasedOnFileName:	Actions::updateSampleMapIds(bpe); return true;
 	case MenuToolsConvertSfzToSampleMaps:	Actions::convertSfzFilesToSampleMaps(bpe); return true;
 	case MenuToolsRemoveAllSampleMaps:	Actions::removeAllSampleMaps(bpe); return true;
+	case MenuToolsSimulateChangingBufferSize: bpe->getBackendProcessor()->toggleDynamicBufferSize(); return true;
 	case MenuToolsUnloadAllAudioFiles:  Actions::unloadAllAudioFiles(bpe); return true;
 	case MenuToolsCreateRSAKeys:		Actions::createRSAKeys(bpe); return true;
 	case MenuToolsCreateDummyLicenseFile: Actions::createDummyLicenseFile(bpe); return true;
@@ -747,11 +766,11 @@ bool BackendCommandTarget::perform(const InvocationInfo &info)
 	case MenuToolsRecordOneSecond:		bpe->owner->getDebugLogger().startRecording(); return true;
     case MenuToolsEnableDebugLogging:	bpe->owner->getDebugLogger().toggleLogging(); updateCommands(); return true;
 	case MenuToolsApplySampleMapProperties: Actions::applySampleMapProperties(bpe); return true;
+	case MenuToolsConvertSVGToPathData:	Actions::convertSVGToPathData(bpe); return true;
+	case MenuToolsEditShortcuts:		Actions::editShortcuts(bpe); return true;
     case MenuViewFullscreen:            Actions::toggleFullscreen(bpe); updateCommands(); return true;
-	case MenuViewBack:					bpe->mainEditor->getViewUndoManager()->undo(); updateCommands(); return true;
 	case MenuViewReset:				    bpe->resetInterface(); updateCommands(); return true;
-	case MenuViewForward:				bpe->mainEditor->getViewUndoManager()->redo(); updateCommands(); return true;
-    case MenuViewRotate:
+	case MenuViewRotate:
         bpe->toggleRotate();
         updateCommands();
         return true;
@@ -761,6 +780,8 @@ bool BackendCommandTarget::perform(const InvocationInfo &info)
 	case MenuViewShowPluginPopupPreview: Actions::togglePluginPopupWindow(bpe); updateCommands(); return true;
     case MenuViewIncreaseCodeFontSize:  Actions::changeCodeFontSize(bpe, true); return true;
     case MenuViewDecreaseCodeFontSize:   Actions::changeCodeFontSize(bpe, false); return true;
+    case MenuViewGotoUndo: bpe->getBackendProcessor()->getLocationUndoManager()->undo(); updateCommands(); return true;
+    case MenuViewGotoRedo:  bpe->getBackendProcessor()->getLocationUndoManager()->redo(); updateCommands(); return true;
 	case MenuExportFileAsPlugin:
     {
         CompileExporter exporter(bpe->getMainSynthChain());
@@ -791,10 +812,6 @@ bool BackendCommandTarget::perform(const InvocationInfo &info)
 	case MenuExportSampleDataForInstaller: Actions::exportSampleDataForInstaller(bpe); return true;
 	case MenuExportCompileFilesInPool:	Actions::exportCompileFilesInPool(bpe); return true;
 	case MenuViewResetLookAndFeel:		Actions::resetLookAndFeel(bpe); return true;
-    case MenuAddView:                   Actions::addView(bpe); updateCommands();return true;
-    case MenuDeleteView:                Actions::deleteView(bpe); updateCommands();return true;
-    case MenuRenameView:                Actions::renameView(bpe); updateCommands();return true;
-    case MenuViewSaveCurrentView:       Actions::saveView(bpe); updateCommands(); return true;
     case MenuToolsClearConsole:         owner->getConsoleHandler().clearConsole(); return true;
 	case MenuHelpShowAboutPage:			Actions::showAboutPage(bpe); return true;
     case MenuHelpCheckVersion:          Actions::checkVersion(bpe); return true;
@@ -868,6 +885,7 @@ PopupMenu BackendCommandTarget::getMenuForIndex(int topLevelMenuIndex, const Str
 		p.addSectionHeader("File Management");
 
 		ADD_ALL_PLATFORMS(MenuNewFile);
+		ADD_ALL_PLATFORMS(MenuFileCreateThirdPartyNode);
 		
 
 		
@@ -920,6 +938,7 @@ PopupMenu BackendCommandTarget::getMenuForIndex(int topLevelMenuIndex, const Str
 		p.addSeparator();
 
 		ADD_ALL_PLATFORMS(MenuFileSettingsProject);
+		ADD_DESKTOP_ONLY(MenuToolsEditShortcuts);
 
 		p.addSeparator();
 		ADD_ALL_PLATFORMS(MenuFileQuit);
@@ -975,7 +994,9 @@ PopupMenu BackendCommandTarget::getMenuForIndex(int topLevelMenuIndex, const Str
 		
 		ADD_DESKTOP_ONLY(MenuToolsCreateExternalScriptFile);
 		ADD_DESKTOP_ONLY(MenuToolsValidateUserPresets);
+		ADD_DESKTOP_ONLY(MenuToolsConvertSVGToPathData);
 		
+
 		p.addSeparator();
 
 		PopupMenu sub;
@@ -1000,7 +1021,6 @@ PopupMenu BackendCommandTarget::getMenuForIndex(int topLevelMenuIndex, const Str
 		ADD_DESKTOP_ONLY(MenuToolsCheckAllSampleMaps);
 		ADD_DESKTOP_ONLY(MenuToolsApplySampleMapProperties);
 		ADD_DESKTOP_ONLY(MenuToolsImportArchivedSamples);
-		ADD_DESKTOP_ONLY(MenuToolsCollectExternalFiles);
 		ADD_DESKTOP_ONLY(MenuToolsCheckUnusedImages);
 		ADD_DESKTOP_ONLY(MenuToolsForcePoolSearch);
 		
@@ -1012,6 +1032,7 @@ PopupMenu BackendCommandTarget::getMenuForIndex(int topLevelMenuIndex, const Str
 		ADD_DESKTOP_ONLY(MenuToolsUnloadAllAudioFiles);
 		ADD_DESKTOP_ONLY(MenuToolsShowDspNetworkDllInfo);
 		ADD_DESKTOP_ONLY(MenuToolsRecordOneSecond);
+		ADD_DESKTOP_ONLY(MenuToolsSimulateChangingBufferSize);
 		p.addSeparator();
 		p.addSectionHeader("License Management");
 		ADD_DESKTOP_ONLY(MenuToolsCreateDummyLicenseFile);
@@ -1021,6 +1042,11 @@ PopupMenu BackendCommandTarget::getMenuForIndex(int topLevelMenuIndex, const Str
 	}
 	case BackendCommandTarget::ViewMenu: {
 
+        ADD_ALL_PLATFORMS(MenuViewGotoUndo);
+        ADD_ALL_PLATFORMS(MenuViewGotoRedo);
+        
+        p.addSeparator();
+        
         ADD_ALL_PLATFORMS(MenuViewFullscreen);
         ADD_ALL_PLATFORMS(MenuViewRotate);
 
@@ -1153,21 +1179,7 @@ void BackendCommandTarget::menuItemSelected(int menuItemID, int topLevelMenuInde
             
         Actions::openFileFromXml(bpe, presetToLoad);
     }
-    
-	else if (menuItemID >= MenuViewOffset && menuItemID < (int)MenuViewOffset + 200)
-	{
-		ViewInfo *info = owner->synthChain->getViewInfo(menuItemID - MenuViewOffset);
-
-		if (info != nullptr)
-		{
-			info->restore();
-
-			bpe->mainEditor->setRootProcessor(info->getRootProcessor());
-
-			owner->synthChain->setCurrentViewInfo(menuItemID - MenuViewOffset);
-		}
-	}
-	else if (menuItemID >= MenuToolsDeviceSimulatorOffset && menuItemID < (MenuToolsDeviceSimulatorOffset + 50))
+    else if (menuItemID >= MenuToolsDeviceSimulatorOffset && menuItemID < (MenuToolsDeviceSimulatorOffset + 50))
 	{
 		HiseDeviceSimulator::DeviceType newDevice = (HiseDeviceSimulator::DeviceType)(menuItemID - (int)MenuToolsDeviceSimulatorOffset);
 
@@ -1267,6 +1279,13 @@ void BackendCommandTarget::menuItemSelected(int menuItemID, int topLevelMenuInde
 }
 
 
+
+void BackendCommandTarget::Actions::editShortcuts(BackendRootWindow* bpe)
+{
+	auto s = new ShortcutEditor(bpe);
+
+	s->setModalBaseWindowComponent(bpe);
+}
 
 bool BackendCommandTarget::Actions::hasProcessorInClipboard()
 {
@@ -1706,35 +1725,6 @@ void BackendCommandTarget::Actions::resetLookAndFeel(BackendRootWindow* bpe)
 	bpe->owner->resetLookAndFeelToDefault(bpe);
 }
 
-void BackendCommandTarget::Actions::addView(BackendRootWindow *bpe)
-{
-    String view = PresetHandler::getCustomName("View");
-    
-    ViewInfo *info = new ViewInfo(bpe->owner->synthChain, bpe->mainEditor->currentRootProcessor, view);
-    
-    bpe->owner->synthChain->addViewInfo(info);
-}
-
-void BackendCommandTarget::Actions::deleteView(BackendRootWindow *bpe)
-{
-    bpe->owner->synthChain->removeCurrentViewInfo();
-}
-
-void BackendCommandTarget::Actions::renameView(BackendRootWindow *bpe)
-{
-    String view = PresetHandler::getCustomName("View");
-    
-    bpe->owner->synthChain->getCurrentViewInfo()->setViewName(view);
-}
-
-void BackendCommandTarget::Actions::saveView(BackendRootWindow *bpe)
-{
-    String view = bpe->owner->synthChain->getCurrentViewInfo()->getViewName();
-    
-    ViewInfo *info = new ViewInfo(bpe->owner->synthChain, bpe->mainEditor->currentRootProcessor, view);
-    
-    bpe->owner->synthChain->replaceCurrentViewInfo(info);
-}
 
 void BackendCommandTarget::Actions::closeAllChains(BackendRootWindow *bpe)
 {
@@ -1833,12 +1823,6 @@ void BackendCommandTarget::Actions::toggleCompileScriptsOnPresetLoad(BackendRoot
 }
 
 
-void BackendCommandTarget::Actions::collectExternalFiles(BackendRootWindow * bpe)
-{
-	ExternalResourceCollector *resource = new ExternalResourceCollector(bpe->getBackendProcessor());
-
-	resource->setModalBaseWindowComponent(bpe);
-}
 
 
 void BackendCommandTarget::Actions::exportFileAsSnippet(BackendProcessor* bp)
@@ -2156,6 +2140,12 @@ void BackendCommandTarget::Actions::loadProject(BackendRootWindow *bpe)
 #endif
 }
 
+void BackendCommandTarget::Actions::convertSVGToPathData(BackendRootWindow* bpe)
+{
+	auto pc = new SVGToPathDataConverter(bpe);
+	pc->setModalBaseWindowComponent(bpe);
+}
+
 void BackendCommandTarget::Actions::applySampleMapProperties(BackendRootWindow* bpe)
 {
 	auto downloader = new SampleMapPropertySaverWithBackup(bpe);
@@ -2291,18 +2281,8 @@ void BackendCommandTarget::Actions::createDummyLicenseFile(BackendRootWindow * b
 	const String dummyEmail = "dummy@email.com";
 	const String userName = "Dummy McLovin";
 
-	StringArray ids;
-
-#if JUCE_WINDOWS
-	OnlineUnlockStatus::MachineIDUtilities::addFileIDToList(ids, File::getSpecialLocation(File::windowsSystemDirectory));
-#else
-	OnlineUnlockStatus::MachineIDUtilities::addFileIDToList(ids, File("~"));
-#endif
-
-	// ..if that fails, use the MAC addresses..
-	if (ids.size() == 0)
-		OnlineUnlockStatus::MachineIDUtilities::addMACAddressesToList(ids);
-
+    StringArray ids = OnlineUnlockStatus::MachineIDUtilities::getLocalMachineIDs();
+    
 	RSAKey privateKey = RSAKey(handler->getPrivateKey());
 
 	if (!privateKey.isValid())
@@ -2315,16 +2295,7 @@ void BackendCommandTarget::Actions::createDummyLicenseFile(BackendRootWindow * b
 	File key = handler->getWorkDirectory().getChildFile(productName + FrontendHandler::getLicenseKeyExtension());
 
 	key.replaceWithText(keyContent);
-
-#if JUCE_WINDOWS
-#if JUCE_64BIT
-	const String message = "A dummy license file for 64bit plugins was created.\nTo load 32bit plugins, please use the 32bit version of HISE to create the license file";
-#else
-	const String message = "A dummy license file for 32bit plugins was created.\nTo load 64bit plugins, please use the 64bit version of HISE to create the license file";
-#endif
-#else
-	const String message = "A dummy license file for the plugins was created.";
-#endif
+    const String message = "A dummy license file for the plugins was created.";
 
 	PresetHandler::showMessageWindow("License File created", message, PresetHandler::IconType::Info);
 }
@@ -2835,6 +2806,200 @@ void BackendCommandTarget::Actions::showNetworkDllInfo(BackendRootWindow * bpe)
 	t << "DLL Info:  \n> `" << JSON::toString(v, true) << "`";
 
 	PresetHandler::showMessageWindow("DllInfo", t, PresetHandler::IconType::Info);
+}
+
+void BackendCommandTarget::Actions::createThirdPartyNode(BackendRootWindow* bpe)
+{
+	auto n = PresetHandler::getCustomName("custom_node", "Please enter the name of the custom node");
+
+	if (n.isNotEmpty())
+	{
+		using namespace snex::cppgen;
+
+		n = StringHelpers::makeValidCppName(n);
+
+		auto thirdPartyFolder = BackendDllManager::getSubFolder(bpe->getMainController(), BackendDllManager::FolderSubType::ThirdParty);
+		auto codeFile = thirdPartyFolder.getChildFile(n).withFileExtension("h");
+
+		Base b(Base::OutputType::AddTabs);
+
+		b.addComment("Third Party Node Template", Base::CommentType::FillTo80);
+
+		{
+            b << "#pragma once";
+            
+            b << "#include <JuceHeader.h>";
+            
+            b.addEmptyLine();
+            
+			Namespace pn(b, "project", false);
+
+            auto rawComment = snex::cppgen::Base::CommentType::Raw;
+            
+			UsingNamespace(b, NamespacedIdentifier("juce"));
+			UsingNamespace(b, NamespacedIdentifier("hise"));
+			UsingNamespace(b, NamespacedIdentifier("scriptnode"));
+
+            b.addEmptyLine();
+            
+			Array<NamespacedIdentifier> baseClasses;
+			baseClasses.add(snex::NamespacedIdentifier::fromString("data::base"));
+
+			snex::TemplateParameter::List templates;
+			templates.add(snex::TemplateParameter(NamespacedIdentifier::fromString("NV"), 0, false));
+
+			b.addComment("The node class with all required callbacks", snex::cppgen::Base::CommentType::FillTo80);
+
+			Struct s(b, Identifier(n), baseClasses, templates, true);
+
+			b.addComment("Metadata Definitions", snex::cppgen::Base::CommentType::FillTo80Light);
+
+			Macro(b, "SNEX_NODE", { n });
+
+			{
+				Struct mt(b, "MetadataClass", {}, {});
+				cppgen::Macro(b, "SN_NODE_ID", { n.quoted() });
+			}
+			
+			b.addEmptyLine();
+
+			b.addComment("set to true if you want this node to have a modulation dragger", rawComment);
+			b << "static constexpr bool isModNode() { return false; };";
+			b << "static constexpr bool isPolyphonic() { return NV > 1; };";
+
+			b.addComment("set to true if your node produces a tail", Base::CommentType::Raw);
+			b << "static constexpr bool hasTail() { return false; };";
+
+			b.addComment("Undefine this method if you want a dynamic channel count", Base::CommentType::Raw);
+			b << "static constexpr int getFixChannelAmount() { return 2; };";
+
+            b.addEmptyLine();
+
+            b.addComment("Define the amount and types of external data slots you want to use", Base::CommentType::Raw);
+            
+			ExternalData::forEachType([&](ExternalData::DataType t)
+			{
+				String s;
+				s << "static constexpr int Num" << ExternalData::getDataTypeName(t, true) << " = 0;" ;
+				b << s;
+			});
+
+			b.addEmptyLine();
+
+			auto callbacks = snex::jit::ScriptnodeCallbacks::getAllPrototypes(nullptr, -1);
+
+			callbacks.add(ScriptnodeCallbacks::getPrototype(nullptr, ScriptnodeCallbacks::ID::HandleModulation, 2));
+			callbacks.add(ScriptnodeCallbacks::getPrototype(nullptr, ScriptnodeCallbacks::ID::SetExternalDataFunction, 2));
+			
+			b.addComment("Scriptnode Callbacks", snex::cppgen::Base::CommentType::FillTo80Light);
+
+			for (auto c : callbacks)
+			{
+				b.addEmptyLine();
+				if (c.id.getIdentifier().toString().startsWith("process"))
+				{
+					String s;
+					s << "template <typename T> void " << c.id.getIdentifier() << "(T& data)";
+					b << s;
+				}
+				else
+					Function f(b, c);
+
+				StatementBlock sb(b, false);
+
+				b << "";
+
+                if(c.id.getIdentifier() == Identifier("process"))
+                {
+					b << "static constexpr int NumChannels = getFixChannelAmount();";
+                    b.addComment("Cast the dynamic channel data to a fixed channel amount", rawComment);
+                    b << "auto& fixData = data.template as<ProcessData<NumChannels>>();";
+                    b.addEmptyLine();
+                    
+                    b.addComment("Create a FrameProcessor object", rawComment);
+                    b << "auto fd = fixData.toFrameData();";
+                    b.addEmptyLine();
+                    b << "while(fd.next())";
+                    {
+                        StatementBlock sb3(b, false);
+                        b.addComment("Forward to frame processing", rawComment);
+                        b << "processFrame(fd.toSpan());";
+                    }
+                }
+                
+				if (c.returnType.isValid())
+				{
+					VariableStorage v(c.returnType.getType(), var(0));
+					String rt;
+					rt << "return " << Types::Helpers::getCppValueString(v) << ";";
+					b << rt;
+				}
+
+				b.addEmptyLine();
+			}
+
+            b.addComment("Parameter Functions", snex::cppgen::Base::CommentType::FillTo80Light);
+            
+			{
+				b.addEmptyLine();
+				String pf;
+				pf << "template <int P> void setParameter(double v)";
+				b << pf;
+				StatementBlock sb(b, false);
+
+				b << "if (P == 0)";
+
+				{
+					StatementBlock sb2(b, false);
+					b.addComment("This will be executed for MyParameter (see below)", snex::cppgen::Base::CommentType::Raw);
+					b << "jassertfalse;";
+				}
+
+				b.addEmptyLine();
+			}
+
+			{
+				b.addEmptyLine();
+				
+				b << "void createParameters(ParameterDataList& data)";
+				StatementBlock sb(b);
+
+				{
+					StatementBlock sb2(b);
+					String l;
+					b.addComment("Create a parameter like this", Base::CommentType::Raw);
+					b << "parameter::data p(\"MyParameter\", { 0.0, 1.0 });";
+					b.addComment("The template parameter (<0>) will be forwarded to setParameter<P>()", Base::CommentType::Raw);
+					b << "registerCallback<0>(p);";
+					b << "p.setDefaultValue(0.5);";
+					b << "data.add(std::move(p));";
+				}
+			}
+		}
+
+		codeFile.replaceWithText(b.toString());
+
+		codeFile.revealToUser();
+
+		File npFile = thirdPartyFolder.getChildFile("node_properties").withFileExtension("json");
+
+		var np;
+
+		if(npFile.existsAsFile())
+			np = JSON::parse(npFile);
+
+		if (np.getDynamicObject() == nullptr)
+			np = var(new DynamicObject());
+
+		auto obj = np.getDynamicObject();
+
+		Array<var> propList;
+		propList.add(PropertyIds::IsPolyphonic.toString());
+
+		obj->setProperty(Identifier(n), var(propList));
+
+		npFile.replaceWithText(JSON::toString(np));
+	}
 }
 
 #undef REPLACE_WILDCARD

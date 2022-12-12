@@ -113,7 +113,7 @@ int TableEditor::snapXValueToGrid(int x) const
 
 void TableEditor::mouseWheelMove(const MouseEvent &e, const MouseWheelDetails &wheel)
 {
-	return;
+#if HISE_USE_MOUSE_WHEEL_FOR_TABLE_CURVE
 
 	MouseEvent parentEvent = e.getEventRelativeTo(this);
 	int x = parentEvent.getMouseDownPosition().getX();
@@ -158,6 +158,7 @@ void TableEditor::mouseWheelMove(const MouseEvent &e, const MouseWheelDetails &w
 	}
 
 	else getParentComponent()->mouseWheelMove(e, wheel);
+#endif
 };
 
 
@@ -188,15 +189,6 @@ void TableEditor::updateCurve(int x, int y, float newCurveValue, bool useUndoMan
 
 
 
-
-bool TableEditor::isInMainPanel() const
-{
-#if HI_REMOVE_HISE_DEPENDENCY_FOR_TOOL_CLASSES
-	return false;
-#else
-	return isInMainPanelInternal();
-#endif
-}
 
 
 juce::String TableEditor::getPopupString(float x, float y)
@@ -242,16 +234,23 @@ void TableEditor::addDragPoint(int x, int y, float curve, bool isStart/*=false*/
 
 void TableEditor::createDragPoints()
 {
-	jassert(editedTable->getNumGraphPoints() >= 2);
+	
 	//jassert(getWidth() != 0);
 
 	drag_points.clear();
 
 	if(editedTable.get() != nullptr) 
 	{
-		addNormalizedDragPoint(editedTable->getGraphPoint(0), true, false);
-		for(int i = 1; i < editedTable->getNumGraphPoints() - 1; ++i) addNormalizedDragPoint(editedTable->getGraphPoint(i), false, false);
-		addNormalizedDragPoint(editedTable->getGraphPoint(editedTable->getNumGraphPoints()-1), false, true);
+        auto list = editedTable->getCopyOfGraphPoints();
+        
+        jassert(list.size() >= 2);
+        
+		addNormalizedDragPoint(list.getFirst(), true, false);
+        
+		for(int i = 1; i < list.size() - 1; ++i)
+            addNormalizedDragPoint(list[i], false, false);
+        
+		addNormalizedDragPoint(list.getLast(), false, true);
 	}
 };
 
@@ -293,8 +292,7 @@ void TableEditor::paint (Graphics& g)
 	}
 		
 
-#if !HISE_IOS
-    if (currently_dragged_point != nullptr && isInMainPanel())
+    if (currently_dragged_point != nullptr)
     {
 		auto a = getTableArea();
 
@@ -312,7 +310,6 @@ void TableEditor::paint (Graphics& g)
 		if (auto l = getTableLookAndFeel())
 			l->drawTableValueLabel(g, *this, fontToUse, text, area);
     }
-#endif
     
     g.setOpacity(isEnabled() ? 1.0f : 0.2f);
  
@@ -963,6 +960,9 @@ void FileNameValuePropertyComponent::MyFunkyFilenameComponent::updateFromTextEdi
 
 void TableEditor::LookAndFeelMethods::drawTableValueLabel(Graphics& g, TableEditor& te, Font f, const String& text, Rectangle<int> textBox)
 {
+    if(!te.shouldDrawTableValueLabel())
+        return;
+    
 	g.setFont(f);
 	g.setColour(te.findColour(TableEditor::ColourIds::overlayBgColour));
 	g.fillRect(textBox);

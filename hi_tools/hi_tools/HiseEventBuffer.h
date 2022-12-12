@@ -84,6 +84,9 @@ class event_alignment HiseEvent
 {
 public:
 
+	static constexpr int PitchWheelCCNumber = 128;
+	static constexpr int AfterTouchCCNumber = 129;
+
 	/** The type of the event. The most important MIDI types are there, but there are a few
 	    more interesting types for internal HISE stuff. */
 	enum class Type : uint8
@@ -380,7 +383,7 @@ public:
 	bool isControllerOfType(int controllerType) const noexcept{ return type == Type::Controller && controllerType == (int)number; };
 
 	/** Copied from MidiMessage. */
-	int getControllerNumber() const noexcept{ return number; };
+	int getControllerNumber() const noexcept;;
 
 	/** Copied from MidiMessage. */
 	int getControllerValue() const noexcept{ return value; };
@@ -757,6 +760,28 @@ class EventIdHandler
 {
 public:
 
+	struct ChokeListener
+	{
+		virtual ~ChokeListener() {};
+
+		virtual void chokeMessageSent() = 0;
+
+		JUCE_DECLARE_WEAK_REFERENCEABLE(ChokeListener);
+
+		int getChokeGroup() const { return chokeGroup; };
+
+	protected:
+
+		void setChokeGroup(int newChokeGroup)
+		{
+			chokeGroup = newChokeGroup;
+		}
+
+	private:
+
+		int chokeGroup = 0;
+	};
+
 	// ===========================================================================================================
 
 	EventIdHandler(HiseEventBuffer& masterBuffer_);
@@ -782,9 +807,24 @@ public:
 		return !artificialEvents[eventId % HISE_EVENT_ID_ARRAY_SIZE].isEmpty();
 	}
 
+	/** Sends a choke message to all registered listeners for the given event. */
+	void sendChokeMessage(ChokeListener* source, const HiseEvent& e);
+
+	void addChokeListener(ChokeListener* l)
+	{
+		chokeListeners.addIfNotAlreadyThere(l);
+	}
+
+	void removeChokeListener(ChokeListener* l)
+	{
+		chokeListeners.removeAllInstancesOf(l);
+	}
+
 	// ===========================================================================================================
 
 private:
+
+	Array<WeakReference<ChokeListener>> chokeListeners;
 
 	const HiseEventBuffer &masterBuffer;
 	HeapBlock<HiseEvent> artificialEvents;

@@ -39,6 +39,30 @@ SimpleRingBuffer::SimpleRingBuffer()
 	setPropertyObject(new PropertyObject(nullptr));
 }
 
+void SimpleRingBuffer::setupReadBuffer(AudioSampleBuffer& b)
+{
+	auto numChannels = internalBuffer.getNumChannels();
+	auto numSamples = internalBuffer.getNumSamples();
+
+	if (b.getNumChannels() != numChannels || b.getNumSamples() != numSamples)
+	{
+		// must be called during a write lock
+		jassert(getDataLock().writeAccessIsLocked());
+
+		Array<var> newData;
+
+		for (int i = 0; i < numChannels; i++)
+		{
+			auto p = new VariantBuffer(numSamples);
+			externalBufferChannels[i] = p->buffer.getWritePointer(0);
+			newData.add(var(p));
+		}
+
+		newData.swapWith(externalBufferData);
+		b.setDataToReferTo(externalBufferChannels, numChannels, numSamples);
+	}
+}
+
 void SimpleRingBuffer::clear()
 {
 	if (auto sl = SimpleReadWriteLock::ScopedTryReadLock(getDataLock()))
@@ -262,6 +286,10 @@ juce::Array<juce::Identifier> SimpleRingBuffer::getIdentifiers() const
 
 void SimpleRingBuffer::setPropertyObject(PropertyObject* newObject)
 {
+#if HI_EXPORT_AS_PROJECT_DLL
+	jassertfalse;
+#endif
+
 	properties = newObject;
 
 	properties->initialiseRingBuffer(this);
@@ -269,9 +297,27 @@ void SimpleRingBuffer::setPropertyObject(PropertyObject* newObject)
 	auto ns = internalBuffer.getNumSamples();
 	auto nc = internalBuffer.getNumChannels();
 
+	bool updateBuffer = false;
+
+	if (ns == 0 && properties->getPropertyList().contains(RingBufferIds::BufferLength))
+	{
+		ns = (int)properties->properties[RingBufferIds::BufferLength];
+		updateBuffer = true;
+	}
+
+	if (nc == 0 && properties->getPropertyList().contains(RingBufferIds::NumChannels))
+	{
+		nc = (int)properties->properties[RingBufferIds::NumChannels];
+		updateBuffer = true;
+	}
+		
+
 	if (validateChannels(nc) ||
-		validateLength(ns))
+		validateLength(ns) || updateBuffer)
+	{
 		setRingBufferSize(nc, ns);
+	}
+		
 
 	getUpdater().sendDisplayChangeMessage(0.0f, sendNotificationAsync, true);
 	clear();
@@ -331,13 +377,23 @@ int ModPlotter::getSamplesPerPixel(float rectangleWidth) const
 
 	auto width = (float)getWidth() - 2.0f * offset;
 
-	int samplesPerPixel = SimpleRingBuffer::RingBufferSize / jmax((int)(width / rectangleWidth), 1);
-	return samplesPerPixel;
+	if (rb != nullptr)
+	{
+		auto numSamples = (int)rb->getReadBuffer().getNumSamples();
+
+		int samplesPerPixel = numSamples / jmax((int)(width / rectangleWidth), 1);
+		return samplesPerPixel;
+	}
+
+	return 1;
 }
 
 void RingBufferComponentBase::onComplexDataEvent(ComplexDataUIUpdaterBase::EventType e, var newValue)
 {
-	refresh();
+	SafeAsyncCall::callAsyncIfNotOnMessageThread<RingBufferComponentBase>(*this, [](RingBufferComponentBase& c)
+	{
+		c.refresh();
+	});
 }
 
 void RingBufferComponentBase::setComplexDataUIBase(ComplexDataUIBase* newData)
@@ -390,6 +446,9 @@ void ModPlotter::refresh()
 		for (float i = 0; i <= width; i += rectangleWidth)
 		{
 			auto numThisTime = jmin(samplesPerPixel, buffer.getNumSamples() - sampleIndex);
+
+			if (numThisTime <= 0)
+				break;
 
 			float maxValue = jlimit(0.0f, 1.0f, buffer.getMagnitude(0, sampleIndex, numThisTime));
 			FloatSanitizers::sanitizeFloatNumber(maxValue);
@@ -708,7 +767,7 @@ hise::RingBufferComponentBase* SimpleRingBuffer::PropertyObject::createComponent
 	return new ModPlotter();
 }
 
-juce::Path SimpleRingBuffer::PropertyObject::createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds) const
+juce::Path SimpleRingBuffer::PropertyObject::createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds, double startValue) const
 {
 	if (buffer == nullptr)
 	{
@@ -725,7 +784,7 @@ juce::Path SimpleRingBuffer::PropertyObject::createPath(Range<int> sampleRange, 
 	if (b.getNumChannels() == 0 || b.getNumSamples() == 0)
 		return {};
 
-	auto startValue = b.getSample(0, 0);
+	//auto startValue = b.getSample(0, 0);
 
 	auto startv = valueRange.getEnd() - (double)startValue * valueRange.getLength();
 
@@ -772,7 +831,7 @@ void FFTDisplayBase::drawSpectrum(Graphics& g)
 
 	if (rb != nullptr)
 	{
-		auto lPath = rb->getPropertyObject()->createPath({}, {}, targetBounds);
+		auto lPath = rb->getPropertyObject()->createPath({}, {}, targetBounds, 0.0);
 
 		Path grid;
 
@@ -846,7 +905,7 @@ void OscilloscopeBase::drawPath(const float* l_, int numSamples, int width, Path
 		p.startNewSubPath(0.0f, -1.0f);
 		p.startNewSubPath(0.0f, 0.0f);
 
-		float x;
+		float x = 0.0f;
 
 		bool mirrorMode = stride > 100;
 
@@ -893,7 +952,7 @@ void OscilloscopeBase::drawOscilloscope(Graphics &g, const AudioSampleBuffer &b)
 {
 	auto asComponent = dynamic_cast<Component*>(this);
 	auto lb = asComponent->getLocalBounds().toFloat();
-	auto path = rb->getPropertyObject()->createPath({ 0, b.getNumSamples() }, { -1.0f, 1.0f }, lb);
+	auto path = rb->getPropertyObject()->createPath({ 0, b.getNumSamples() }, { -1.0f, 1.0f }, lb, 0.0);
 
 	auto laf = getSpecialLookAndFeel<LookAndFeelMethods>();
 

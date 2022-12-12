@@ -397,6 +397,9 @@ void ProcessorEditor::pasteAction()
 
 void ProcessorEditor::paint(Graphics &g)
 {
+	if (getProcessor() == nullptr)
+		return;
+
 	Colour c = getProcessor()->getColour();
     const float z = (float)getIndentationLevel() * 0.04f;
     c = c.withMultipliedBrightness(1.0f + z);
@@ -611,13 +614,8 @@ void ProcessorEditor::createProcessorFromPopup(Component* editorIfPossible, Proc
             dynamic_cast<ModulatorSynth*>(processorToBeAdded)->addProcessorsWhenEmpty();
 
         c->getHandler()->add(processorToBeAdded, insertBeforeSibling);
-
-        
         
         PresetHandler::setUniqueIdsForProcessor(processorToBeAdded);
-
-        if (ProcessorHelpers::is<ModulatorSynth>(processorToBeAdded))
-            processorToBeAdded->getMainController()->getMainSynthChain()->compileAllScripts();
 
         MessageManager::callAsync([brw, c, editor, processorToBeAdded]()
         {
@@ -694,12 +692,22 @@ void ProcessorEditor::showContextMenu(Component* c, Processor* p)
 		m.addItem(CreateSamplerScriptReference, "Create typed Sampler script reference");
 	else if (dynamic_cast<MidiPlayer*>(p) != nullptr)
 		m.addItem(CreateMidiPlayerScriptReference, "Create typed MIDI Player script reference");
-	else if (dynamic_cast<SlotFX*>(p) != nullptr)
+	else if (dynamic_cast<HotswappableProcessor*>(p) != nullptr)
 		m.addItem(CreateSlotFXReference, "Create typed SlotFX script reference");
 
-	m.addItem(CreateTableProcessorScriptReference, "Create typed Table script reference", dynamic_cast<LookupTableProcessor*>(p) != nullptr);
-	m.addItem(CreateAudioSampleProcessorScriptReference, "Create typed Audio sample script reference", dynamic_cast<AudioSampleProcessor*>(p) != nullptr);
-	m.addItem(CreateSliderPackProcessorReference, "Create typed Slider Pack script reference", dynamic_cast<SliderPackProcessor*>(p) != nullptr);
+    if(auto ed = dynamic_cast<ExternalDataHolder*>(p))
+    {
+        m.addItem(CreateTableProcessorScriptReference,
+                  "Create typed Table script reference",
+                  ed->getNumDataObjects(ExternalData::DataType::Table));
+        m.addItem(CreateAudioSampleProcessorScriptReference,
+                  "Create typed Audio sample script reference",
+                  ed->getNumDataObjects(ExternalData::DataType::AudioFile));
+        m.addItem(CreateSliderPackProcessorReference,
+                  "Create typed Slider Pack script reference",
+                  ed->getNumDataObjects(ExternalData::DataType::SliderPack));
+    }
+    
 	m.addItem(CreateRoutingMatrixReference, "Create typed Routing matrix script reference", dynamic_cast<RoutableProcessor*>(p) != nullptr);
 
 	m.addSeparator();

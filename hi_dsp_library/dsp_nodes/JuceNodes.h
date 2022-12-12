@@ -158,13 +158,13 @@ struct jcompressor : public jdsp::base::jwrapper<juce::dsp::Compressor<float>, 1
 	{
 		for (auto& obj : this->objects)
 		{
-			if (P == 0)
+			if constexpr (P == 0)
 				obj.setThreshold(v);
-			if (P == 1)
+			if constexpr (P == 1)
 				obj.setRatio(jmax(1.0, v));
-			if (P == 2)
+			if constexpr (P == 2)
 				obj.setAttack(v);
-			if (P == 3)
+			if constexpr (P == 3)
 				obj.setRelease(v);
 		}
 	}
@@ -202,7 +202,10 @@ struct jlinkwitzriley : public base::jwrapper<juce::dsp::LinkwitzRileyFilter<flo
 		for (auto& o : objects)
 		{
 			if (P == 0)
-				o.setCutoffFrequency(v);
+			{
+				if(std::isfinite(v) && v > 20.0)
+					o.setCutoffFrequency(v);
+			}
 			if (P == 1)
 				o.setType((JuceDspType::Type)(int)v);
 		}
@@ -299,14 +302,13 @@ template <int NV> struct jpanner : public base::jwrapper<juce::dsp::Panner<float
 	{
 		{
 			parameter::data p("Pan", { -1.0, 1.0 });
-
-			p.callback = parameter::inner<jpanner, 0>(*this);
+			registerCallback<0>(p);
 			p.setDefaultValue(0.0);
 			d.add(p);
 		}
 		{
 			parameter::data p("Rule");
-			p.callback = parameter::inner<jpanner, 1>(*this);
+			registerCallback<1>(p);
 			p.setParameterValueNames({ "Linear", "Balanced", "Sine3dB", "Sine4.5dB", "Sine6dB", "Sqrt3dB", "Sqrt4p5dB" });
 			p.setDefaultValue(1.0);
 			d.add(p);
@@ -342,14 +344,14 @@ struct jdelay : public base::jwrapper<juce::dsp::DelayLine<float, juce::dsp::Del
 
 		for (auto& obj : objects)
 		{
-			if (P == 0)
+			if constexpr (P == 0)
 			{
 				if (sr != 0.0)
 					obj.setMaxDelaySamples(sampleValue);
 				else
 					maxSize = v;
 			}
-			if (P == 1)
+			if constexpr (P == 1)
 				obj.setDelay(sampleValue);
 		}
 	}

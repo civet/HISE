@@ -121,7 +121,7 @@ struct GlobalServer: public ControlledObject
 		using WeakPtr = WeakReference<PendingCallback>;
 
 		PendingCallback(ProcessorWithScriptingContent* p, const var& function) :
-			f(p, function, 2),
+			f(p, nullptr, function, 2),
 			creationTimeMs(Time::getMillisecondCounter())
 		{
 			f.setHighPriority();
@@ -215,7 +215,7 @@ struct GlobalServer: public ControlledObject
     }
     
 private:
-	
+
 #if USE_BACKEND
 	bool initialised = true;
 #else

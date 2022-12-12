@@ -110,8 +110,6 @@ public:
 
 	void handleControllersForMacroKnobs(const MidiBuffer &midiMessages);
 
-	UndoManager* getViewUndoManager() { return viewUndoManager; }
-
 	AudioProcessorEditor* createEditor();
 	bool hasEditor() const {return true;};
 
@@ -128,6 +126,11 @@ public:
 	void registerContentProcessor(MarkdownContentProcessor* processor) override;
 	File getCachedDocFolder() const override;
 	File getDatabaseRootDirectory() const override;
+
+	void toggleDynamicBufferSize() 
+	{
+		simulateDynamicBufferSize = !isUsingDynamicBufferSize();
+	}
 
 	void setDatabaseRootDirectory(File newDatabaseDirectory)
 	{
@@ -220,8 +223,6 @@ private:
 
 	ScopedPointer<ModulatorSynthChain> synthChain;
 	
-	ScopedPointer<UndoManager> viewUndoManager;
-
 	var editorInformation;
 
 	ScopedPointer<BackendProcessor> docProcessor;

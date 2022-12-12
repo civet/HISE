@@ -1712,9 +1712,6 @@ struct Helpers
 
 			if (m1.baseId() == m2.baseId())
 			{
-				auto m1Type = m1.baseType();
-				auto m2Type = m2.baseType();
-
 				auto sameIndexType = m1.hasIndexReg() == m2.hasIndexReg();
 
 				if (sameIndexType)
@@ -1752,8 +1749,8 @@ struct Helpers
 		if (!n1->isInst() || !n2->isInst())
 			return false;
 
-		auto o1 = n1->as<InstNode>()->opType(0);
-		auto o2 = n2->as<InstNode>()->opType(0);
+		auto o1 = n1->as<InstNode>()->op(0);
+		auto o2 = n2->as<InstNode>()->op(0);
 
 		return opEqualOrSameReg(o1, o2);
 	}
@@ -1808,7 +1805,7 @@ struct Helpers
 
 	static bool opEqualOrSameReg(const Operand& o1, const Operand& o2)
 	{
-		auto same = o1.isEqual(o2);
+		auto same = o1.equals(o2);
 		auto isRegister = o1.isPhysReg() && o2.isPhysReg();
 
 		if (isRegister)
@@ -1816,6 +1813,8 @@ struct Helpers
 			auto firstId = o1.id();
 			auto idMatch = o1.id() == o2.id();
 			
+			ignoreUnused(firstId);
+
 			auto sameType = o1.as<X86Reg>().isXmm() == o2.as<X86Reg>().isXmm();
 
 			return same || (isRegister && idMatch && sameType);
@@ -1852,15 +1851,15 @@ struct Helpers
 
 	static Operand getTargetOp(InstNode* n)
 	{
-		return n->opType(0);
+		return n->op(0);
 	}
 
 	static Operand getSourceOp(InstNode* n)
 	{
 		if (n->opCount() > 1)
-			return n->opType(1);
+			return n->op(1);
 		else
-			return n->opType(0);
+			return n->op(0);
 	}
 
 	static uint32 getBaseRegIndex(Operand op)
@@ -2067,7 +2066,7 @@ struct MathOp
 					if (!l->isConstPool())
 						continue;
 
-					auto lId = l->id();
+					auto lId = l->labelId();
 					auto mId = mem.id();
 
 					if (lId == mId)
@@ -2104,7 +2103,7 @@ struct RemoveMovToSameOp : public AsmCleanupPass::SubPass<Mov>
 		{
 			
 
-			if (Helpers::getTargetOp(n).isEqual(Helpers::getSourceOp(n)))
+			if (Helpers::getTargetOp(n).equals(Helpers::getSourceOp(n)))
 				it.removeNode(n);
 		}
 
@@ -2129,7 +2128,7 @@ struct RemoveLeaFromSameSource : public AsmCleanupPass::SubPass<Lea>
 
 			if (source.hasBaseReg() && !source.hasOffset())
 			{
-				auto sameReg = source.baseReg().isEqual(target);
+				auto sameReg = source.baseReg().equals(target);
 				auto hasIndexReg = source.hasIndexReg();
 
 
@@ -2305,6 +2304,8 @@ struct RemoveDoubleRegisterWrites : public AsmCleanupPass::SubPass<InstructionFi
 							auto idThatIsRemoved = thisTarget.id();
 							auto isMemTarget = nextTarget.isMem();
 
+							ignoreUnused(idThatIsRemoved, isMemTarget);
+
 							it.removeNode(thisNode);
 							return true;
 						}
@@ -2339,7 +2340,7 @@ struct RemoveMathNoops : public AsmCleanupPass::SubPass<MathOp>
 			{
 			case Types::ID::Integer:
 			{
-				if (source.isImm() && source.as<Imm>().i32() == noopValue)
+				if (source.isImm() && source.as<Imm>().valueAs<int>() == noopValue)
 				{
 					it.removeNode(n);
 				}
@@ -2439,7 +2440,7 @@ struct RemoveSubsequentMovCalls : public AsmCleanupPass::SubPass<Mov>
 				auto currentTarget = Helpers::getTargetOp(n);
 				auto nextTarget = Helpers::getTargetOp(nextNode);
 
-				if (currentTarget.isEqual(nextTarget))
+				if (currentTarget.equals(nextTarget))
 				{
 					auto nextSource = Helpers::getSourceOp(nextNode);
 

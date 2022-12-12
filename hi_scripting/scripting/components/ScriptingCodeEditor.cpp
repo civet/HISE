@@ -82,7 +82,11 @@ void DebugConsoleTextEditor::scriptWasCompiled(JavascriptProcessor *jp)
 
 		if (r.wasOk()) setText("Compiled OK", dontSendNotification);
 		else
-			setText(r.getErrorMessage().upToFirstOccurrenceOf("\n", false, false), dontSendNotification);
+        {
+            fullErrorMessage = r.getErrorMessage().upToFirstOccurrenceOf("\n", false, false);
+            
+            setText(fullErrorMessage.upToFirstOccurrenceOf("{", false, false), dontSendNotification);
+        }
 
 		setColour(TextEditor::backgroundColourId, r.wasOk() ? Colours::green.withBrightness(0.1f) : Colours::red.withBrightness((0.1f)));
 	}
@@ -109,8 +113,8 @@ bool DebugConsoleTextEditor::keyPressed(const KeyPress& k)
 
 void DebugConsoleTextEditor::mouseDown(const MouseEvent& e)
 {
-	if (e.mods.isRightButtonDown())
-		setText("> ", dontSendNotification);
+	if(!getText().containsChar('>'))
+        setText("> ", dontSendNotification);
 
 	TextEditor::mouseDown(e);
 }
@@ -122,7 +126,7 @@ void DebugConsoleTextEditor::mouseDoubleClick(const MouseEvent& /*e*/)
 
 void DebugConsoleTextEditor::gotoText()
 {
-	DebugableObject::Helpers::gotoLocation(processor->getMainController()->getMainSynthChain(), getText());
+	DebugableObject::Helpers::gotoLocation(processor->getMainController()->getMainSynthChain(), fullErrorMessage);
 }
 
 void DebugConsoleTextEditor::addToHistory(const String& s)
@@ -149,23 +153,29 @@ void DebugConsoleTextEditor::textEditorReturnKeyPressed(TextEditor& /*t*/)
 		codeToEvaluate = codeToEvaluate.substring(2);
 	}
 
-	HiseJavascriptEngine* engine = dynamic_cast<JavascriptProcessor*>(processor.get())->getScriptEngine();
+    auto jsp = dynamic_cast<JavascriptProcessor*>(processor.get());
+    
+    processor->getMainController()->getJavascriptThreadPool().addJob(JavascriptThreadPool::Task::Compilation,
+                                                                     jsp, [codeToEvaluate](JavascriptProcessor* p)
+    {
+        Result r = Result::ok();
+        HiseJavascriptEngine* engine = p->getScriptEngine();
+        
+        var returnValue = engine->evaluate(codeToEvaluate, &r);
 
-	if (engine != nullptr)
-	{
-		Result r = Result::ok();
-
-		var returnValue = engine->evaluate(codeToEvaluate, &r);
-
-		if (r.wasOk())
-		{
-			debugToConsole(processor, "> " + returnValue.toString());
-		}
-		else
-		{
-			debugToConsole(processor, r.getErrorMessage());
-		}
-	}
+        auto pr = dynamic_cast<Processor*>(p);
+        
+        if (r.wasOk())
+        {
+            pr->getMainController()->writeToConsole("> " + returnValue.toString(), 0, nullptr);
+        }
+        else
+        {
+            debugToConsole(pr, r.getErrorMessage());
+        }
+        
+        return r;
+    });
 }
 
 

@@ -365,6 +365,89 @@ private:
 	T obj;
 };
 
+template <class T> class sidechain
+{
+public:
+    
+    SN_OPAQUE_WRAPPER(sidechain, T);
+    
+    void prepare(PrepareSpecs ps)
+    {
+        if(ps.blockSize == 1)
+        {
+            sideChainBuffer.setSize(0);
+        }
+        else
+        {
+            auto numChannels = ps.numChannels;
+            auto numSamples = ps.blockSize;
+            auto numElements = numChannels * numSamples;
+
+            if (numElements > sideChainBuffer.size())
+                sideChainBuffer.setSize(numElements);
+        }
+        
+        ps.numChannels *= 2;
+        obj.prepare(ps);
+    }
+    
+    SN_DEFAULT_INIT(T);
+    SN_DEFAULT_RESET(T);
+    SN_DEFAULT_HANDLE_EVENT(T);
+    SN_DEFAULT_MOD(T);
+    
+    template <typename ProcessDataType> void process(ProcessDataType& data)
+    {
+        auto numChannels = data.getNumChannels();
+        auto numSamples = data.getNumSamples();
+        
+        auto ptrs = (float**)alloca(sizeof(float*) * numChannels * 2);
+        auto sourcePtrs = data.getRawChannelPointers();
+        
+        for(int i = 0; i < numChannels; i++)
+        {
+            ptrs[i] = sourcePtrs[i];
+            ptrs[i + numChannels] = sideChainBuffer.begin() + i * numSamples;
+            FloatVectorOperations::clear(ptrs[i + numChannels], numSamples);
+        }
+        
+        if constexpr(ProcessDataType::hasCompileTimeSize())
+        {
+            constexpr int NumChannelsWithSidechain = ProcessDataType::getNumFixedChannels() * 2;
+            ProcessData<NumChannelsWithSidechain> doubleData(ptrs, numSamples, numChannels);
+            doubleData.copyNonAudioDataFrom(data);
+            obj.process(doubleData);
+        }
+        else
+        {
+            ProcessDataDyn doubleData(ptrs, numSamples, numChannels * 2);
+            doubleData.copyNonAudioDataFrom(data);
+            obj.process(doubleData);
+        }
+        
+    }
+    
+    template <typename FrameDataType> void processFrame(FrameDataType& data)
+    {
+        jassertfalse;
+    }
+    
+    void createParameters(ParameterDataList& d)
+    {
+        if constexpr (prototypes::check::createParameters<typename T::ObjectType>::value)
+            this->obj.createParameters(d);
+    }
+
+    void setExternalData(const ExternalData& s, int i)
+    {
+        if constexpr (prototypes::check::setExternalData<typename T::ObjectType>::value)
+            this->obj.setExternalData(s, i);
+    }
+    
+    T obj;
+    heap<float> sideChainBuffer;
+};
+
 template <class T> class event
 {
 public:
@@ -372,7 +455,8 @@ public:
 	SN_OPAQUE_WRAPPER(event, T);
 
 	constexpr OPTIONAL_BOOL_CLASS_FUNCTION(isPolyphonic);
-	OPTIONAL_BOOL_CLASS_FUNCTION(isProcessingHiseEvent);
+
+	static constexpr bool isProcessingHiseEvent() { return true; };
 
 	SN_DEFAULT_INIT(T);
 	SN_DEFAULT_PREPARE(T);
@@ -380,11 +464,25 @@ public:
 	SN_DEFAULT_HANDLE_EVENT(T);
 	SN_DEFAULT_PROCESS_FRAME(T);
 
+	
+
 	template <typename ProcessDataType> void process(ProcessDataType& data)
 	{
         auto p = prototypes::static_wrappers<T>::template process<ProcessDataType>;
 		auto e = prototypes::static_wrappers<T>::handleHiseEvent;
 		static_functions::event::process<ProcessDataType>(this, p, e, data);
+	}
+
+	void createParameters(ParameterDataList& d)
+	{
+		if constexpr (prototypes::check::createParameters<typename T::ObjectType>::value)
+			this->obj.createParameters(d);
+	}
+
+	void setExternalData(const ExternalData& s, int i)
+	{
+		if constexpr (prototypes::check::setExternalData<typename T::ObjectType>::value)
+			this->obj.setExternalData(s, i);
 	}
 
 	T obj;
@@ -625,6 +723,9 @@ public:
 		this->pObj = &obj;
 	}
 
+    // A oversample node is never polyphonic
+    static constexpr bool isPolyphonic() { return false; }
+    
 	// Forward the get calls to the wrapped container
 	template <int arg> constexpr auto& get() noexcept { return this->obj.template get<arg>(); }
 	template <int arg> constexpr const auto& get() const noexcept { return this->obj.template get<arg>(); }
@@ -713,10 +814,14 @@ template <class T> class default_data
 	}
 };
 
+#if !JUCE_WINDOWS
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Winvalid-offsetof"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
 
+#endif
 
 /** A wrapper that extends the wrap::init class with the possibility of handling external data.
 
@@ -738,17 +843,6 @@ template <class T, class DataHandler = default_data<T>> struct data : public wra
 	{
         using D = data<T, DataHandler>;
         return offsetof(D, i);
-
-        
-        
-        D* d = nullptr;
-        
-        auto x1 = reinterpret_cast<uint64>(&d->i);
-        auto x2 = reinterpret_cast<uint64>(&d->obj);
-        
-        return static_cast<size_t>(x1 - x2);
-        
-		//return offsetof(D, i);
 	}
 
 	data()
@@ -792,72 +886,32 @@ template <class T, class DataHandler = default_data<T>> struct data : public wra
 	JUCE_DECLARE_WEAK_REFERENCEABLE(data);
 };
 
+#if !JUCE_WINDOWS
 #pragma clang diagnostic pop
+#endif
 
 
 
 /** A wrapper node that will render its child node to a external data object. */
-template <class T> class offline : public scriptnode::data::base
+template <class T> class offline
 {
 public:
 
-	static const int NumTables = 0;
-	static const int NumSliderPacks = 0;
-	static const int NumAudioFiles = 1;
-	static const int NumFilters = 0;
-	static const int NumDisplayBuffers = 0;
-
-	SN_SELF_AWARE_WRAPPER(offline, T);
+	SN_OPAQUE_WRAPPER(offline, T);
 
 	SN_EMPTY_PROCESS;
 	SN_EMPTY_PROCESS_FRAME;
-	SN_EMPTY_PREPARE;
-	SN_EMPTY_RESET;
 	SN_EMPTY_HANDLE_EVENT;
 	
 	void initialise(NodeBase* n) { obj.initialise(n); }
 
-	void setExternalData(const snex::ExternalData& data, int index) override
-	{
-		if (recursion || data.isEmpty())
-			return;
+	void prepare(PrepareSpecs ps) { obj.prepare(ps); }
 
-		ScopedValueSetter<bool> svs(recursion, true);
-
-		PrepareSpecs ps;
-		ps.blockSize = 512;
-		ps.numChannels = data.numChannels;
-		ps.sampleRate = data.sampleRate;
-
-		getWrappedObject().prepare(ps);
-		getWrappedObject().reset();
-		
-		ProcessDataDyn pd((float**)data.data, data.numSamples, data.numChannels);
-
-		ChunkableProcessData cd(pd);
-
-		while (cd.getNumLeft() > ps.blockSize)
-		{
-			auto c = cd.getChunk(ps.blockSize);
-			getWrappedObject().process(c.toData());
-		}
-
-		if (cd.getNumLeft() > 0)
-		{
-			auto c = cd.getRemainder();
-			getWrappedObject().process(c.toData());
-		}
-
-		if (auto af = dynamic_cast<MultiChannelAudioBuffer*>(data.obj))
-		{
-			af->loadBuffer(data.toAudioSampleBuffer(), data.sampleRate);
-		}
-	}
+	void reset() { obj.reset(); }
 
 private:
 
 	T obj;
-	bool recursion = false;
 };
 
 #if 0
@@ -1311,16 +1365,16 @@ template <class T> struct node : public scriptnode::data::base
 	{
 		if constexpr (prototypes::check::isPolyphonic<T>::value)
 			return obj.isPolyphonic();
-
-		return false;
+		else
+			return false;
 	}
 
 	static constexpr bool isProcessingHiseEvent()
 	{
 		if constexpr (prototypes::check::isProcessingHiseEvent<T>::value)
 			return T::isProcessingHiseEvent();
-
-		return false;
+		else
+			return false;
 	}
 
 	void reset() noexcept { obj.reset(); }
@@ -1329,8 +1383,8 @@ template <class T> struct node : public scriptnode::data::base
 	{
 		if constexpr(prototypes::check::handleModulation<T>::value)
 			return obj.handleModulation(value);
-
-		return false;
+		else
+			return false;
 	}
 
 	void setExternalData(const ExternalData& d, int index) override
@@ -1346,6 +1400,8 @@ template <class T> struct node : public scriptnode::data::base
 
 		auto peList = parameter::encoder::fromNode<node>();
 
+		
+
 		for (const parameter::pod& p : peList)
 		{
 			if (isPositiveAndBelow(p.index, l.size()))
@@ -1355,7 +1411,8 @@ template <class T> struct node : public scriptnode::data::base
 			}
 		}
 
-		data.addArray(l);
+		if (!peList.isEmpty())
+			data.addArray(l);
 	}
 
 

@@ -818,6 +818,13 @@ void TempoSyncer::initTempoData()
 		tempoFactors[t] = value;
 	};
 
+#if HISE_USE_EXTENDED_TEMPO_VALUES
+	setTempo(EightBar, "8/1", 4.0f * 8.0f);
+	setTempo(SixBar, "6/1", 4.0f * 6.0f);
+	setTempo(FourBar, "4/1", 4.0f * 4.0f);
+	setTempo(ThreeBar, "3/1", 4.0f * 3.0f);
+	setTempo(TwoBars, "2/1", 4.0f * 2.0f);
+#endif
 	setTempo(Whole, "1/1", 4.0f);
 	setTempo(HalfDuet, "1/2D", 2.0f * 1.5f);
 	setTempo(Half, "1/2", 2.0f);
@@ -921,13 +928,10 @@ void ScrollbarFader::startFadeOut()
     startTimer(500);
 }
 
-void FFTHelpers::applyWindow(WindowType t, AudioSampleBuffer& b, bool normalise)
+void FFTHelpers::applyWindow(WindowType t, float* data, int s, bool normalise)
 {
-    auto s = b.getNumSamples() / 2;
-    auto data = b.getWritePointer(0);
-
     using DspWindowType = juce::dsp::WindowingFunction<float>;
-
+    
     switch (t)
     {
     case Rectangle:
@@ -941,9 +945,9 @@ void FFTHelpers::applyWindow(WindowType t, AudioSampleBuffer& b, bool normalise)
     case Hann:
         DspWindowType(s, DspWindowType::hann, normalise).multiplyWithWindowingTable(data, s);
         break;
-	case Kaiser:
-		DspWindowType(s, DspWindowType::kaiser, normalise, 15.0f).multiplyWithWindowingTable(data, s);
-		break;
+    case Kaiser:
+        DspWindowType(s, DspWindowType::kaiser, normalise, 15.0f).multiplyWithWindowingTable(data, s);
+        break;
     case Triangle:
         DspWindowType(s, DspWindowType::triangular, normalise).multiplyWithWindowingTable(data, s);
         break;
@@ -955,6 +959,14 @@ void FFTHelpers::applyWindow(WindowType t, AudioSampleBuffer& b, bool normalise)
         FloatVectorOperations::clear(data, s);
         break;
     }
+}
+
+void FFTHelpers::applyWindow(WindowType t, AudioSampleBuffer& b, bool normalise)
+{
+    auto s = b.getNumSamples() / 2;
+    auto data = b.getWritePointer(0);
+
+    applyWindow(t, data, s, normalise);
 }
 
 float FFTHelpers::getFreqForLogX(float xPos, float width)
@@ -1062,7 +1074,7 @@ Image Spectrum2D::createSpectrumImage(AudioSampleBuffer& lastBuffer)
             alpha = std::pow(alpha, JUCE_LIVE_CONSTANT_OFF(0.6f));
 
 			auto lutValue = parameters->lut->getColouredPixel(alpha);
-            newImage.setPixelAt(i, y, lutValue);//Colour::fromHSV(hue, JUCE_LIVE_CONSTANT(1.0f), 1.0f, alpha));
+            newImage.setPixelAt(i, y, lutValue);
         }
     }
 
@@ -1324,7 +1336,5 @@ void Spectrum2D::Parameters::Editor::resized()
 		editors[i]->setBounds(r);
 	}	
 }
-
-
 
 }

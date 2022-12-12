@@ -54,7 +54,6 @@ template <typename IndexType> struct IndexTester
 		optimisations(opt),
 		ArraySize(Limit != 0 ? Limit : dynamicSize)
 	{
-		test.beginTest("Testing " + indexName);
 		runTest();
 	}
 
@@ -150,20 +149,19 @@ private:
 			// Test List =======================================================
 
 
-			testWithValue(0.5);
+			testWithValue(Type(0.5));
 #if SNEX_WRAP_ALL_NEGATIVE_INDEXES
-			testWithValue(-1.5);
+			testWithValue(Type(-1.5));
 #endif
-			testWithValue(20.0);
-			testWithValue(-1);
-			testWithValue(Limit * 0.99);
-			testWithValue(Limit * 1.2);
-			testWithValue(Limit * 141.2);
-			testWithValue(Limit * 8141.92);
-
-			testWithValue(0.3);
-			testWithValue(8.0);
-			testWithValue(Limit / 3);
+			testWithValue(Type(20.0));
+			testWithValue(Type(-1));
+			testWithValue(Type(Limit * 0.99));
+			testWithValue(Type(Limit * 1.2));
+			testWithValue(Type(Limit * 141.2));
+			testWithValue(Type(Limit * 8141.92));
+			testWithValue(Type(0.3));
+			testWithValue(Type(8.0));
+			testWithValue(Type(Limit / 3));
 		}
 	}
 
@@ -214,16 +212,16 @@ private:
 
 			// Test List =======================================================
 
-			testWithValue(0.5);
+			testWithValue(Type(0.5));
 #if SNEX_WRAP_ALL_NEGATIVE_INDEXES
-			testWithValue(-1.5);
+			testWithValue(Type(-1.5));
 #endif
-			testWithValue(20.0);
-			testWithValue(Limit * 0.99);
-			testWithValue(Limit * 1.2);
-			testWithValue(0.3);
-			testWithValue(8.0);
-			testWithValue(Limit / 3);
+			testWithValue(Type(20.0));
+			testWithValue(Type(Limit * 0.99));
+			testWithValue(Type(Limit * 1.2));
+			testWithValue(Type(0.3));
+			testWithValue(Type(8.0));
+			testWithValue(Type(Limit / 3));
 		}
 	}
 
@@ -258,7 +256,7 @@ private:
 				c << "return data[i];";
 			}
 
-			test.logMessage("Testing " + indexName + " span[]");
+			//test.logMessage("Testing " + indexName + " span[]");
 
 			c.replaceWildcard("T", Types::Helpers::getTypeNameFromTypeId<Type>());
 			auto obj = compile(c.toString());
@@ -290,10 +288,6 @@ private:
 
 					test.expectEquals(e2, a2, m);
 
-				}
-				else
-				{
-					test.logMessage("skip [] access for unsafe index");
 				}
 			};
 
@@ -352,7 +346,7 @@ private:
 				c << "return d[i];";
 			}
 
-			test.logMessage("Testing " + indexName + " dyn[]");
+			//test.logMessage("Testing " + indexName + " dyn[]");
 
 			c.replaceWildcard("XXX", Types::Helpers::getTypeNameFromTypeId<Type>());
 			auto obj = compile(c.toString());
@@ -386,25 +380,25 @@ private:
 
 			if (std::is_floating_point<Type>())
 			{
-				testWithValue(0.5);
-				testWithValue(Limit + 0.5);
-				testWithValue(Limit / 3.f);
+				testWithValue(Type(0.5));
+				testWithValue(Type(Limit + 0.5));
+				testWithValue(Type(Limit / 3.f));
 
 #if SNEX_WRAP_ALL_NEGATIVE_INDEXES
-				testWithValue(-12.215 * Limit);
+				testWithValue(Type(-12.215 * Limit));
 #endif
 
 			}
 			else
 			{
-				testWithValue(80);
-				testWithValue(Limit);
-				testWithValue(Limit - 1);
-				testWithValue(-1);
-				testWithValue(0);
-				testWithValue(1);
-				testWithValue(Limit + 1);
-				testWithValue(-Limit + 1);
+				testWithValue(Type(80));
+				testWithValue(Type(Limit));
+				testWithValue(Type(Limit - 1));
+				testWithValue(Type(-1));
+				testWithValue(Type(0));
+				testWithValue(Type(1));
+				testWithValue(Type(Limit + 1));
+				testWithValue(Type(-Limit + 1));
 			}
 		}
 	}
@@ -462,7 +456,7 @@ private:
 					c.addWithSemicolon("return i.getIndex(limit, delta);");
 				}
 
-				test.logMessage("Testing " + indexName + "::getAlpha");
+				//test.logMessage("Testing " + indexName + "::getAlpha");
 
 				c.replaceWildcard("T", Types::Helpers::getTypeNameFromTypeId<Type>());
 				auto obj = compile(c.toString());
@@ -524,7 +518,7 @@ private:
 					c.addWithSemicolon("return i.getIndex(0, delta);");
 				}
 
-				test.logMessage("Testing " + indexName + "::getAlpha");
+				//test.logMessage("Testing " + indexName + "::getAlpha");
 
 				c.replaceWildcard("T", Types::Helpers::getTypeNameFromTypeId<Type>());
 				auto obj = compile(c.toString());
@@ -554,15 +548,15 @@ private:
 
 				// Test List =======================================================
 
-				testWithValue(0.51, 0);
-				testWithValue(12.3, 0);
-				testWithValue(-0.52, -1);
-				testWithValue(Limit - 0.44, 2);
-				testWithValue(Limit + 25.2, 1);
-				testWithValue(Limit / 0.325 - 1, 9);
-				testWithValue(Limit * 9.029, 4);
-				testWithValue(Limit * 0.42, Limit + 2);
-				testWithValue(324.42, -Limit + 2);
+				testWithValue(Type(0.51), Type(0));
+				testWithValue(Type(12.3), Type(0));
+				testWithValue(Type(-0.52), Type(-1));
+				testWithValue(Type(Limit - 0.44), Type(2));
+				testWithValue(Type(Limit + 25.2), Type(1));
+				testWithValue(Type(Limit / 0.325 - 1), Type(9));
+				testWithValue(Type(Limit * 9.029), Type(4));
+				testWithValue(Type(Limit * 0.42), Type(Limit + 2));
+				testWithValue(Type(324.42), Type(-Limit + 2));
 			}
 		}
 	}
@@ -596,7 +590,7 @@ private:
 				c.addWithSemicolon("return (int)" + op);
 			}
 
-			test.logMessage("Testing " + indexName + "::" + FunctionClass::getSpecialSymbol({}, incType).toString());
+			//test.logMessage("Testing " + indexName + "::" + FunctionClass::getSpecialSymbol({}, incType).toString());
 
 			auto obj = compile(c.toString());
 

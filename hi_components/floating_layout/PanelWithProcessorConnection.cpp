@@ -324,6 +324,8 @@ void PanelWithProcessorConnection::resized()
 
 void PanelWithProcessorConnection::comboBoxChanged(ComboBox* comboBoxThatHasChanged)
 {
+    preSelectCallback(comboBoxThatHasChanged);
+    
 	if (comboBoxThatHasChanged == connectionSelector)
 	{
 		indexSelector->clear(dontSendNotification);
@@ -417,15 +419,31 @@ void PanelWithProcessorConnection::refreshSelector(StringArray &items, String cu
 {
 	fillModuleList(items);
 
-	int index = items.indexOf(currentId);
+	
 
 	connectionSelector->addItem("Disconnect", 1);
 	connectionSelector->addItemList(items, 2);
 
-	if (index != -1)
-	{
-		connectionSelector->setSelectedId(index + 2, dontSendNotification);
-	}
+    int index = items.indexOf(currentId);
+    
+    if (index != -1)
+        connectionSelector->setSelectedId(index + 2, dontSendNotification);
+}
+
+void PanelWithProcessorConnection::refreshSelectorValue(Processor* p, String currentId)
+{
+    StringArray items;
+    fillIndexList(items);
+    int index = items.indexOf(currentId);
+    
+    if (index != -1)
+    {
+        currentIndex = index;
+        indexSelector->setSelectedId(index + 2, dontSendNotification);
+        
+        setCustomTitle(currentId);
+        refreshTitle();
+    }
 }
 
 void PanelWithProcessorConnection::refreshIndexList()
@@ -471,27 +489,12 @@ void PanelWithProcessorConnection::setContentWithUndo(Processor* newProcessor, i
 	fillIndexList(indexes);
 
 	refreshIndexList();
-
-#if USE_BACKEND
-	auto undoManager = dynamic_cast<BackendProcessor*>(getMainController())->getViewUndoManager();
-
-	String undoText;
-
-	
-	undoText << (currentProcessor.get() != nullptr ? currentProcessor->getId() : "Disconnected") << ": " << indexes[currentIndex] << " -> ";
-	undoText << (newProcessor != nullptr ? newProcessor->getId() : "Disconnected") << ": " << indexes[newIndex] << " -> ";
-
-	undoManager->beginNewTransaction(undoText);
-	undoManager->perform(new ProcessorConnection(this, newProcessor, newIndex, getAdditionalUndoInformation()));
-#else
-
+    
 	ScopedPointer<ProcessorConnection> connection = new ProcessorConnection(this, newProcessor, newIndex, getAdditionalUndoInformation());
 
 	connection->perform();
 
 	connection = nullptr;
-
-#endif
 
 	if (newIndex != -1)
 	{
@@ -516,7 +519,9 @@ bool PanelWithProcessorConnection::ProcessorConnection::perform()
 	{
 		panel->setCurrentProcessor(newProcessor.get());
 		panel->refreshIndexList();
-		panel->currentIndex = newIndex;
+
+		if(newIndex != -1)
+			panel->currentIndex = newIndex;
 		
 		panel->refreshContent();
 		
@@ -556,7 +561,9 @@ void PanelWithProcessorConnection::setContentForIdentifier(Identifier idToSearch
                 if (p->getProcessorTypeId() != idToSearch)
                     continue;
                 
-                p->setContentWithUndo(getProcessor(), 0);
+				auto currentIndex = jmax(0, p->getCurrentIndex());
+
+                p->setContentWithUndo(getProcessor(), currentIndex);
             }
         }
     }

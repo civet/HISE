@@ -280,22 +280,12 @@ juce::File JitFileTestCase::getTestFileDirectory()
 {
 	auto p = File::getSpecialLocation(File::currentApplicationFile);
 
-#if JUCE_WINDOWS
 	p = p.getParentDirectory();
-	p = p.getParentDirectory();
-	p = p.getParentDirectory();
-	p = p.getParentDirectory();
-	p = p.getParentDirectory();
-	p = p.getParentDirectory();
-#else
-	p = p.getParentDirectory();
-	p = p.getParentDirectory();
-	p = p.getParentDirectory();
-	p = p.getParentDirectory();
-	p = p.getParentDirectory();
-#endif
 
-	return p.getChildFile("test_files");
+	while (!p.isRoot() && p.isDirectory() && !p.getChildFile("JUCE").isDirectory())
+		p = p.getParentDirectory();
+
+	return p.getChildFile("tools/snex_playground/test_files");
 }
 
 void JitFileTestCase::setTypeForDynamicFunction(Types::ID t, const String& originalCode)
@@ -559,10 +549,6 @@ juce::Result JitFileTestCase::test(bool dumpBeforeTest /*= false*/)
 		{
 			if (!activeOptimizations.contains(r))
 			{
-				if (t != nullptr)
-				{
-					t->logMessage("Skipping " + file.getFileNameWithoutExtension() + " due to missing optimization " + r);
-				}
 				return Result::ok();
 			}
 		}
@@ -670,7 +656,7 @@ void JitFileTestCase::parseFunctionData()
 				{
 					outputBuffer = Helpers::loadFile(s[output]);
 				}
-				catch (String& e)
+				catch (String& )
 				{
 					outputBuffer.makeCopyOf(inputBuffer);
 					outputWasEmpty = true;
@@ -856,7 +842,7 @@ void JitFileTestCase::parseFunctionData()
 					outputBuffer = Helpers::loadFile(v);
 					expectedResult = block(outputBuffer.getWritePointer(0), outputBuffer.getNumSamples());
 				}
-				catch (juce::String& s)
+				catch (juce::String& )
 				{
 					if (inputBuffer.getNumChannels() == 0)
 						throwError("Must supply input buffer");

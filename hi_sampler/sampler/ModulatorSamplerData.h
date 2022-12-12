@@ -148,7 +148,8 @@ public:
 
 	void setId(Identifier newIdentifier)
     {
-        sampleMapId = newIdentifier.toString();
+        sampleMapId = newIdentifier.toString().replaceCharacter('\\', '/');
+
 		data.setProperty("ID", sampleMapId.toString(), nullptr);
     }
     
@@ -527,6 +528,11 @@ public:
 		return false;
 	}
     
+	void setSilentMode(bool shouldShowMessage)
+	{
+		silentMode = shouldShowMessage;
+	}
+
 protected:
     
 	void setError(const String& errorMessage)
@@ -539,6 +545,8 @@ protected:
 	File monolithDirectory;
 
 private:
+
+	bool silentMode = false;
 
 	Array<int> splitIndexes;
 

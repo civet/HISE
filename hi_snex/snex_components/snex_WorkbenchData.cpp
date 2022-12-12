@@ -212,11 +212,11 @@ bool ui::WorkbenchData::handleCompilation()
 
 		callAsyncWithSafeCheck([](WorkbenchData* d) { d->postCompile(); });
 
-		compileHandler->postCompile(lastCompileResult);
-		
 		// Might get deleted in the meantime...
 		if (compileHandler != nullptr)
 		{
+            compileHandler->postCompile(lastCompileResult);
+            
 			callAsyncWithSafeCheck([](WorkbenchData* d) { d->postPostCompile(); });
 		}
 	}
@@ -692,7 +692,7 @@ Result ui::WorkbenchData::TestData::processTestData(WorkbenchData::Ptr data)
 					numThisTime -= numBeforeParam;
 				}
 
-				if (thisParameterIndex != -1 & p.timeStamp != 0)
+				if (thisParameterIndex != -1 && p.timeStamp != 0)
 					tester->processTestParameterEvent(p.parameterIndex, p.valueToUse);
 
 				auto numBeforeEvent = e.getTimeStamp() - samplePos;

@@ -530,6 +530,43 @@ struct WrapperWithMenuBarBase : public Component,
 			return changed;
 		}
 
+		void triggerClick(NotificationType sendNotification)
+		{
+			if (enabledFunction && !enabledFunction(*parent))
+				return;
+
+			if (actionFunction)
+				actionFunction(*parent);
+
+			SafeAsyncCall::repaint(this);
+		}
+
+		/** Call this function with a lambda that creates a component and it will be shown as Floating Tile popup. */
+		void setControlsPopup(const std::function<Component*()>& createFunc)
+		{
+			stateFunction = [this](ContentType&)
+			{
+				return this->currentPopup != nullptr;
+			};
+
+			actionFunction = [this, createFunc](ContentType&)
+			{
+				auto ft = findParentComponentOfClass<FloatingTile>();
+
+				if (this->currentPopup)
+				{
+					ft->showComponentInRootPopup(nullptr, this, {});
+				}
+				else
+				{
+					this->currentPopup = createFunc();
+					ft->showComponentInRootPopup(this->currentPopup, this, { getWidth() / 2, getHeight() });
+				}
+
+				return false;
+			};
+		}
+
 		void paint(Graphics& g) override
 		{
 			auto on = stateFunction ? stateFunction(*parent) : false;
@@ -560,10 +597,7 @@ struct WrapperWithMenuBarBase : public Component,
 
 		void mouseDown(const MouseEvent& e) override
 		{
-			if (actionFunction)
-				actionFunction(*parent);
-
-			repaint();
+			triggerClick(sendNotificationSync);
 		}
 
 		void resized() override
@@ -581,6 +615,10 @@ struct WrapperWithMenuBarBase : public Component,
 		Callback actionFunction;
 		bool lastState = false;
 		bool lastEnableState = false;
+
+		Component::SafePointer<Component> currentPopup;
+
+		bool isPopupShown = false;
 	};
 
 	constexpr static int MenuHeight = 24;
@@ -607,6 +645,21 @@ struct WrapperWithMenuBarBase : public Component,
 
 	virtual bool isValid() const { return true; }
 
+	template <typename ComponentType> ComponentType* getComponentWithName(const String& id)
+	{
+		for (auto b : actionButtons)
+		{
+			if (b->getName() == id)
+			{
+				if (auto typed = dynamic_cast<ComponentType*>(b))
+					return typed;
+			}
+		}
+
+		jassertfalse;
+		return nullptr;
+	}
+	
 	void setContentComponent(Component* newContent)
 	{
 		actionButtons.clear();
@@ -721,6 +774,11 @@ struct WrapperWithMenuBarBase : public Component,
 		actionButtons.add(c);
 	}
 
+	void setPostResizeFunction(const std::function<void(Component*)>& f)
+	{
+		resizeFunction = f;
+	}
+
 	void resized() override
 	{
 		auto b = getLocalBounds();
@@ -733,9 +791,12 @@ struct WrapperWithMenuBarBase : public Component,
 		}
 
 		canvas.setBounds(b);
+
+		if (resizeFunction)
+			resizeFunction(canvas.getContentComponent());
 	}
     
-    
+	std::function<void(Component*)> resizeFunction;
 
 	ZoomableViewport canvas;
 	OwnedArray<Component> actionButtons;

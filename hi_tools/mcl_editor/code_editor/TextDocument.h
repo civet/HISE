@@ -571,7 +571,7 @@ public:
 			auto copy = selections;
 			copy.setUnchecked(index, newSelection);
 
-			viewUndoManager.perform(new SelectionAction(*this, copy));
+			viewUndoManagerToUse->perform(new SelectionAction(*this, copy));
 		}
 		else
 			selections.setUnchecked(index, newSelection); sendSelectionChangeMessage(); 
@@ -852,7 +852,8 @@ public:
 
 			for (auto sl : selectionListeners)
 			{
-				sl->displayedLineRangeChanged(currentlyDisplayedLineRange);
+                if(sl != nullptr)
+                    sl->displayedLineRangeChanged(currentlyDisplayedLineRange);
 			}
 		}
 	}
@@ -919,6 +920,11 @@ public:
 		searchResults = newSearchResults;
 	}
 
+    void setExternalViewUndoManager(UndoManager* um)
+    {
+        viewUndoManagerToUse = um;
+    }
+    
 	Array<Selection> getSearchResults() const
 	{
 		return searchResults;
@@ -929,6 +935,7 @@ private:
 	mutable int columnTryingToMaintain = -1;
 
 	UndoManager viewUndoManager;
+    UndoManager* viewUndoManagerToUse = &viewUndoManager;
 
 	Array<Selection> searchResults;
 
@@ -960,8 +967,8 @@ private:
 	juce::Array<Selection> selections;
 };
 
-struct TokenCollection;
-struct LanguageManager;
+class TokenCollection;
+class LanguageManager;
 
 
 }

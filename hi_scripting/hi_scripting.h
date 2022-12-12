@@ -71,6 +71,7 @@ compile / debug cycle and don't need all nodes in scriptnode you might want to t
 #define MAX_SCRIPT_HEIGHT 700
 
 #include "AppConfig.h"
+#include "../JUCE/modules/juce_osc/juce_osc.h"
 #include "../hi_sampler/hi_sampler.h"
 #include "../hi_dsp_library/hi_dsp_library.h"
 #include "../hi_snex/hi_snex.h"
@@ -118,6 +119,8 @@ compile / debug cycle and don't need all nodes in scriptnode you might want to t
 
 #include "scripting/api/XmlApi.h"
 #include "scripting/api/ScriptingApiObjects.h"
+#include "scripting/api/ScriptBroadcaster.h"
+#include "scripting/api/ScriptTableListModel.h"
 #include "scripting/api/ScriptingGraphics.h"
 #include "scripting/api/ScriptExpansion.h"
 #include "scripting/api/GlobalServer.h"
@@ -160,6 +163,7 @@ compile / debug cycle and don't need all nodes in scriptnode you might want to t
 
 #if USE_BACKEND
 #include "scripting/components/ScriptingPanelTypes.h"
+
 #include "scripting/components/PopupEditors.h"
 #include "scripting/components/ScriptingCodeEditor.h"
 #include "scripting/components/AutoCompletePopup.h"

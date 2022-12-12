@@ -93,10 +93,12 @@ namespace ui
 using namespace Types;
 using namespace jit;
 
-struct WorkbenchData : public ReferenceCountedObject,
+class WorkbenchData : public ReferenceCountedObject,
 	public DebugHandler,
 	public ApiProviderBase::Holder
 {
+public:
+
 	static String getDefaultNodeTemplate(const Identifier& mainClass);
 
 	static String getDefaultCode(bool getTestCode);
@@ -119,7 +121,7 @@ struct WorkbenchData : public ReferenceCountedObject,
 
 	void logMessage(int level, const juce::String& s) override
 	{
-		if (!getGlobalScope().isDebugModeEnabled())
+		if (!getGlobalScope().isDebugModeEnabled() && level > 1)
 			return;
 
 		if (MessageManager::getInstance()->isThisTheMessageThread())
@@ -1274,9 +1276,11 @@ private:
 
 
 
-struct WorkbenchComponent : public Component,
+class WorkbenchComponent : public Component,
 	public WorkbenchData::Listener
 {
+public:
+
 	WorkbenchComponent(WorkbenchData* d, bool isOwner = false) :
 		workbench(d)
 	{
@@ -1363,8 +1367,10 @@ struct ValueTreeCodeProvider : public snex::ui::WorkbenchData::CodeProvider,
     int numChannelsToCompile;
 };
 
-struct WorkbenchManager final: public AsyncUpdater
+class WorkbenchManager final: public AsyncUpdater
 {
+public:
+
 	using LogFunction = std::function<void(int, const String&)>;
 
 	~WorkbenchManager() {};
@@ -1381,6 +1387,8 @@ struct WorkbenchManager final: public AsyncUpdater
 	void addListener(WorkbenchChangeListener* l)
 	{
 		listeners.addIfNotAlreadyThere(l);
+
+		l->workbenchChanged(currentWb);
 	}
 
 	void removeListener(WorkbenchChangeListener* l)

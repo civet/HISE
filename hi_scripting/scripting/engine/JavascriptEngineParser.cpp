@@ -237,8 +237,9 @@ private:
 //==============================================================================
 struct HiseJavascriptEngine::RootObject::ExpressionTreeBuilder : private TokenIterator
 {
-	ExpressionTreeBuilder(const String code, const String externalFile) :
-		TokenIterator(code, externalFile)
+	ExpressionTreeBuilder(const String code, const String externalFile, HiseJavascriptPreprocessor::Ptr preprocessor_) :
+		TokenIterator(code, externalFile),
+		preprocessor(preprocessor_)
 	{
 #if ENABLE_SCRIPTING_BREAKPOINTS
 		if (externalFile.isNotEmpty())
@@ -246,8 +247,9 @@ struct HiseJavascriptEngine::RootObject::ExpressionTreeBuilder : private TokenIt
 			fileId = Identifier("File_" + File(externalFile).getFileNameWithoutExtension());
 		}
 #endif
-		
 	}
+
+    HiseJavascriptPreprocessor::Ptr preprocessor;
 
 	void setupApiData(HiseSpecialData &data, const String& codeToPreprocess)
 	{
@@ -354,6 +356,29 @@ struct HiseJavascriptEngine::RootObject::ExpressionTreeBuilder : private TokenIt
 
 	void parseFunctionParamsAndBody(FunctionObject& fo)
 	{
+		if (matchIf(TokenTypes::openBracket))
+		{
+			while (currentType != TokenTypes::closeBracket)
+			{
+				auto paramName = currentValue.toString();
+
+				fo.capturedLocals.add(parseExpression());
+
+				if (currentType != TokenTypes::closeBracket)
+					match(TokenTypes::comma);
+			}
+
+			for (auto e : fo.capturedLocals)
+			{
+				if (e->getVariableName().isNull())
+				{
+					location.throwError("Can't capture anonymous expressions");
+				}
+			}
+
+			match(TokenTypes::closeBracket);
+		}
+
 		match(TokenTypes::openParen);
 
 		while (currentType != TokenTypes::closeParen)
@@ -365,7 +390,34 @@ struct HiseJavascriptEngine::RootObject::ExpressionTreeBuilder : private TokenIt
 				match(TokenTypes::comma);
 		}
 
+		struct ScopedFunctionSetter
+		{
+			ScopedFunctionSetter(ExpressionTreeBuilder& p, FunctionObject* o):
+				parent(p)
+			{
+				lastObject = parent.currentFunctionObject;
+				parent.currentFunctionObject = o;
+			}
+
+			~ScopedFunctionSetter()
+			{
+				parent.currentFunctionObject = lastObject;
+			}
+
+			ExpressionTreeBuilder& parent;
+			DynamicObject* lastObject;
+		};
+
 		match(TokenTypes::closeParen);
+
+		ScopedFunctionSetter svs(*this, &fo);
+
+		// We need to temporarily set the currentInlineFunction to nullptr to avoid
+		// local references inside the nested function body which will fail when
+		// ENABLE_SCRIPTING_BREAKPOINTS is disabled
+		ScopedValueSetter<DynamicObject*> svs1(outerInlineFunction, currentInlineFunction);
+		ScopedValueSetter<DynamicObject*> svs2(currentInlineFunction, nullptr);
+
 		fo.body = parseBlock();
 	}
 
@@ -391,7 +443,10 @@ struct HiseJavascriptEngine::RootObject::ExpressionTreeBuilder : private TokenIt
 		{
 			ExpPtr rhs(parseExpression());
 
-			currentIterator = id;
+			IteratorData d;
+
+			d.id = id;
+			currentIterators.add(d);
 
 			return rhs.release();
 		}
@@ -428,6 +483,7 @@ private:
 
 	Identifier fileId;
 
+	DynamicObject* currentFunctionObject = nullptr;
 	DynamicObject* outerInlineFunction = nullptr;
 	DynamicObject* currentInlineFunction = nullptr;
 
@@ -641,7 +697,16 @@ private:
 			{
 				String fileContent = getFileContent(currentValue.toString(), refFileName, true);
 
-				ExpressionTreeBuilder ftb(fileContent, refFileName);
+                auto ok = preprocessor->process(fileContent, refFileName);
+                
+                if (!ok.wasOk())
+                {
+                    CodeLocation loc(fileContent, refFileName);
+                    loc.location = loc.program.getCharPointer() + (ok.getErrorMessage().getIntValue()-1);
+                    loc.throwError(ok.getErrorMessage().fromFirstOccurrenceOf(":", false, false));
+                }
+                
+				ExpressionTreeBuilder ftb(fileContent, refFileName, preprocessor);
 
 #if ENABLE_SCRIPTING_BREAKPOINTS
 				ftb.breakpoints.addArray(breakpoints);
@@ -652,6 +717,8 @@ private:
 
 				//ftb.setupApiData(*hiseSpecialData, fileContent);
 
+                
+                
 				ScopedPointer<BlockStatement> s = ftb.parseStatementList();
 
 				match(TokenTypes::literal);
@@ -717,6 +784,9 @@ private:
 		}
 #endif
 
+		if (currentInlineFunction != nullptr)
+			location.throwError("Can't declare var statement in inline function");
+
 		ScopedPointer<VarStatement> s(new VarStatement(location));
 		s->name = parseIdentifier();
 
@@ -762,6 +832,10 @@ private:
 		ns->constObjects.set(s->name, uninitialised); // Will be initialied at runtime
 		s->ns = ns;
 
+		ns->comments.set(s->name, lastComment);
+
+		clearLastComment();
+
 		return s.release();
 	}
 
@@ -773,6 +847,9 @@ private:
 
 			ns->varRegister.addRegister(name, var::undefined());
             ns->registerLocations.add(preparser->createDebugLocation());
+
+			ns->comments.set(name, preparser->lastComment);
+			preparser->clearLastComment();
 
 			if (ns->registerLocations.size() != ns->varRegister.getNumUsedRegisters())
 			{
@@ -858,7 +935,7 @@ private:
 			
 			hiseSpecialData->checkIfExistsInOtherStorage(HiseSpecialData::VariableStorageType::LocalScope, s->name, location);
 
-			ifo->localProperties.set(s->name, var::undefined());
+			ifo->localProperties->set(s->name, {});
 
 			s->initialiser = matchIf(TokenTypes::assign) ? parseExpression() : new Expression(location);
 
@@ -1343,22 +1420,69 @@ private:
 	{
 		match(TokenTypes::openParen);
 
-		const Identifier previousIteratorName = currentIterator;
-
 		const bool isVarInitialiser = matchIf(TokenTypes::var);
 		
+        if(currentInlineFunction && isVarInitialiser)
+        {
+            location.throwError("Can't use var initialiser inside inline function");
+        }
+        
 		Expression *iter = parseExpression();
 
 		// Allow unqualified names in for loop initialisation for convenience
 		if (auto assignment = dynamic_cast<Assignment*>(iter))
 		{
 			if (auto un = dynamic_cast<UnqualifiedName*>(assignment->target.get()))
+            {
 				un->allowUnqualifiedDefinition = true;
+                
+                ScopedPointer<Expression> newExpression;
+                
+                auto id = un->getVariableName();
+                
+                // replace the anonymous initialiser with a local / var assignment
+                // in order to prevent global leakage
+                
+                if(auto fo = dynamic_cast<FunctionObject*>(currentFunctionObject))
+                {
+                    auto s = new VarStatement(location);
+                    s->name = id;
+
+                    hiseSpecialData->checkIfExistsInOtherStorage(HiseSpecialData::VariableStorageType::RootScope, id, location);
+
+                    s->initialiser.swapWith(assignment->newValue);
+                    
+                    newExpression = assignment;
+                    iter = s;
+                }
+                else if(auto ifo = dynamic_cast<InlineFunction::Object*>(currentInlineFunction))
+                {
+                    auto lv = new LocalVarStatement(location, ifo);
+                    lv->name = id;
+                    
+                    hiseSpecialData->checkIfExistsInOtherStorage(HiseSpecialData::VariableStorageType::LocalScope, id, location);
+                    
+                    ifo->localProperties->set(lv->name, {});
+                    lv->initialiser.swapWith(assignment->newValue);
+                    
+                    newExpression = assignment;
+                    iter = lv;
+                }
+            }
 		}
 
 		if (!isVarInitialiser && currentType == TokenTypes::closeParen)
 		{
 			ScopedPointer<LoopStatement> s(new LoopStatement(location, false, true));
+
+			for (auto& it : currentIterators)
+			{
+				if (it.loop == nullptr)
+				{
+					it.loop = s;
+					break;
+				}
+			}
 
 			s->currentIterator = iter;
 
@@ -1370,7 +1494,14 @@ private:
 
 			s->body = parseStatement();
 
-			currentIterator = previousIteratorName;
+			for (const auto& it: currentIterators)
+			{
+				if (it.loop == s)
+				{
+					currentIterators.remove(currentIterators.indexOf(it));
+					break;
+				}
+			}
 
 			return s.release();
 		}
@@ -1444,11 +1575,7 @@ private:
 		if (currentType == TokenTypes::identifier)
 			functionName = parseIdentifier();
 
-		// We need to temporarily set the currentInlineFunction to nullptr to avoid
-		// local references inside the nested function body which will fail when
-		// ENABLE_SCRIPTING_BREAKPOINTS is disabled
-		ScopedValueSetter<DynamicObject*> svs1(outerInlineFunction, currentInlineFunction);
-		ScopedValueSetter<DynamicObject*> svs2(currentInlineFunction, nullptr);
+		
 
 		ScopedPointer<FunctionObject> fo(new FunctionObject());
 
@@ -1634,27 +1761,48 @@ private:
 				}
 			}
 
-			if (id == currentIterator)
+			LoopStatement* iteratorLoop = nullptr;
+
+			for (const auto& it : currentIterators)
 			{
-				return parseSuffixes(new LoopStatement::IteratorName(location, parseIdentifier()));
+				if (it.id == id)
+				{
+					iteratorLoop = it.loop;
+					break;
+				}
+			}
+
+			if (iteratorLoop != nullptr)
+			{
+				return parseSuffixes(new LoopStatement::IteratorName(location, iteratorLoop, parseIdentifier()));
 			}
 			else if (auto ob = dynamic_cast<InlineFunction::Object*>(outerInlineFunction))
 			{
 				const int inlineParameterIndex = ob->parameterNames.indexOf(id);
-				const int localParameterIndex = ob->localProperties.indexOf(id);
+				const int localParameterIndex = ob->localProperties->indexOf(id);
 
-				if (inlineParameterIndex != -1)
-					location.throwError("Can't reference inline function parameters in nested function body");
+				int captureIndex = -1;
 
-				if (localParameterIndex != -1)
-					location.throwError("Can't reference local variables in nested function body");
+				if (auto fo = dynamic_cast<FunctionObject*>(currentFunctionObject))
+				{
+					captureIndex = fo->getCaptureIndex(id);
+				}
+
+				if (captureIndex == -1)
+				{
+					if (inlineParameterIndex != -1)
+						location.throwError("Can't reference inline function parameters in nested function body");
+
+					if (localParameterIndex != -1)
+						location.throwError("Can't reference local variables in nested function body");
+				}
 			}
 			else if (auto ob = dynamic_cast<InlineFunction::Object*>(currentInlineFunction))
 			{
 				
 
 				const int inlineParameterIndex = ob->parameterNames.indexOf(id);
-				const int localParameterIndex = ob->localProperties.indexOf(id);
+				const int localParameterIndex = ob->localProperties->indexOf(id);
 
 				if (inlineParameterIndex >= 0)
 				{
@@ -1680,6 +1828,18 @@ private:
 			}
 			else
 			{
+                if(auto fo = dynamic_cast<FunctionObject*>(currentFunctionObject))
+                {
+                    for(auto cl : fo->capturedLocals)
+                    {
+                        if(cl->getVariableName() == id)
+                        {
+                            return parseSuffixes(new UnqualifiedName(location, parseIdentifier(), false));
+                        }
+                    }
+                }
+                
+                
 				if (JavascriptNamespace* inlineNamespace = getNamespaceForStorageType(JavascriptNamespace::StorageType::InlineFunction, ns, id))
 				{
 					InlineFunction::Object *obj = getInlineFunction(id, inlineNamespace);
@@ -1802,6 +1962,12 @@ private:
 
 			if (name.isValid())
 				throwError("Inline functions definitions cannot have a name");
+
+			if (auto fo = dynamic_cast<FunctionObject*>(fn.getDynamicObject()))
+			{
+				if (!fo->capturedLocals.isEmpty())
+					return new AnonymousFunctionWithCapture(location, fn);
+			}
 
 			return new LiteralValue(location, fn);
 		}
@@ -1971,7 +2137,18 @@ private:
 
 	Array<Identifier> registerIdentifiers;
 
-	Identifier currentIterator;
+	struct IteratorData
+	{
+		bool operator==(const IteratorData& other) const
+		{
+			return loop == other.loop;
+		}
+
+		LoopStatement* loop = nullptr;
+		Identifier id;
+	};
+
+	Array<IteratorData> currentIterators;
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ExpressionTreeBuilder)
 };
@@ -2036,6 +2213,8 @@ void HiseJavascriptEngine::RootObject::ExpressionTreeBuilder::preprocessCode(con
 			String fileName = it.currentValue.toString();
 			String externalCode = getFileContent(it.currentValue.toString(), fileName);
 			
+            
+            
 			preprocessCode(externalCode, fileName);
 
 			continue;
@@ -2219,14 +2398,27 @@ String HiseJavascriptEngine::RootObject::ExpressionTreeBuilder::uglify()
 
 var HiseJavascriptEngine::RootObject::evaluate(const String& code)
 {
-	ExpressionTreeBuilder tb(code, String());
+	ExpressionTreeBuilder tb(code, String(), preprocessor);
 	tb.setupApiData(hiseSpecialData, code);
-	return ExpPtr(tb.parseExpression())->getResult(Scope(nullptr, this, this));
+    
+	auto& cp = currentLocalScopeCreator.get();
+
+    DynamicObject::Ptr localScope = cp != nullptr ? cp->createScope(this) : nullptr;
+    
+    if(localScope == nullptr)
+        localScope = this;
+    else
+    {
+        for(const auto& x: getProperties())
+            localScope->setProperty(x.name, x.value);
+    }
+    
+	return ExpPtr(tb.parseExpression())->getResult(Scope(nullptr, this, localScope.get()));
 }
 
 void HiseJavascriptEngine::RootObject::execute(const String& code, bool allowConstDeclarations)
 {
-	ExpressionTreeBuilder tb(code, String());
+	ExpressionTreeBuilder tb(code, String(), preprocessor);
 
 #if ENABLE_SCRIPTING_BREAKPOINTS
 	tb.breakpoints.swapWith(breakpoints);
@@ -2240,11 +2432,37 @@ void HiseJavascriptEngine::RootObject::execute(const String& code, bool allowCon
 		prepareCycleReferenceCheck();
 
 	sl->perform(Scope(nullptr, this, this), nullptr);
+
+	Array<OptimizationPass::OptimizationResult> results;
+
+	auto before = Time::getMillisecondCounter();
+
+	for (auto o : hiseSpecialData.optimizations)
+	{
+		if(auto or_ = hiseSpecialData.runOptimisation(o))
+			results.add(or_);
+	}
+	
+	auto after = Time::getMillisecondCounter();
+	
+	auto optimisationTimeMs = after - before;
+	
+	if (!results.isEmpty())
+	{
+		String s;
+
+		for (auto r : results)
+			s << r.passName << ": " << String(r.numOptimizedStatements) << "\n";
+
+		s << "Optimization Duration: " << String(optimisationTimeMs) << "ms";
+
+		hiseSpecialData.processor->setOptimisationReport(s);
+	}
 }
 
 HiseJavascriptEngine::RootObject::FunctionObject::FunctionObject(const FunctionObject& other) : DynamicObject(), functionCode(other.functionCode)
 {
-	ExpressionTreeBuilder tb(functionCode, String());
+	ExpressionTreeBuilder tb(functionCode, String(), nullptr);
 
 	tb.parseFunctionParamsAndBody(*this);
 }

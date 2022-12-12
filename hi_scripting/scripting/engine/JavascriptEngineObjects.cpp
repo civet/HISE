@@ -109,8 +109,10 @@ public:
 	{
 		setMethod("contains", contains);
 		setMethod("remove", remove);
+        setMethod("removeElement", removeElement);
 		setMethod("join", join);
 		setMethod("push", push);
+		setMethod("pushIfNotAlreadyThere", pushIfNotAlreadyThere);
 		setMethod("pop", pop);
         setMethod("sort", sort);
         setMethod("sortNatural", sortNatural);
@@ -134,6 +136,14 @@ public:
 		return false;
 	}
 
+    static var removeElement(Args a)
+    {
+        if (Array<var>* array = a.thisObject.getArray())
+            array->removeRange((int)get(a, 0), 1);
+
+        return var();
+    }
+    
 	static var remove(Args a)
 	{
 		if (Array<var>* array = a.thisObject.getArray())
@@ -163,10 +173,23 @@ public:
 		return var();
 	}
 
+	static var pushIfNotAlreadyThere(Args a)
+	{
+		if (Array<var>* array = a.thisObject.getArray())
+		{
+			WARN_IF_AUDIO_THREAD(a.numArguments + array->size() >= array->getNumAllocated(), ScriptGuard::ArrayResizing);
+
+			for (int i = 0; i < a.numArguments; ++i)
+				array->addIfNotAlreadyThere(a.arguments[i]);
+
+			return array->size();
+		}
+        
+        return var();
+	}
+
 	static var push(Args a)
 	{
-		
-
 		if (Array<var>* array = a.thisObject.getArray())
 		{
 			WARN_IF_AUDIO_THREAD(a.numArguments + array->size() >= array->getNumAllocated(), ScriptGuard::ArrayResizing);
@@ -492,10 +515,6 @@ public:
     
 };
 
-#if JUCE_MSVC
-#pragma warning (push)
-#pragma warning (disable: 4100)
-#endif
 
 
 /** This is a dummy class that contains the array functions. */
@@ -515,11 +534,17 @@ public:
 	/** Reserves the space needed for the given amount of elements. */
 	void reserve(int numElements) {}
 
+    /** Removes the element at the given position. */
+    var removeElement(int index) { return {}; }
+    
 	/** Joins the array into a string with the given separator. */
 	String join(var separatorString) { return String(); }
 
 	/** Adds the given element at the end and returns the size. */
 	int push(var elementToInsert) { return 0; }
+
+	/** Adds the given element at the end and returns the size. */
+	int pushIfNotAlreadyThere(var elementToInsert) { return 0; }
 
 	/** Sorts the array. */
 	void sort() {}
@@ -558,10 +583,6 @@ public:
 	var pop() { return var(); }
 };
 
-#if JUCE_MSVC
-#pragma warning (pop)
-#endif
-
 
 //==============================================================================
 
@@ -576,6 +597,7 @@ struct HiseJavascriptEngine::RootObject::StringClass : public DynamicObject
 		setMethod("fromCharCode", fromCharCode);
 		setMethod("replace", replace);
 		setMethod("split", split);
+		setMethod("splitCamelCase", splitCamelCase);
 		setMethod("lastIndexOf", lastIndexOf);
 		setMethod("toLowerCase", toLowerCase);
 		setMethod("toUpperCase", toUpperCase);
@@ -583,11 +605,22 @@ struct HiseJavascriptEngine::RootObject::StringClass : public DynamicObject
 		setMethod("parseAsJSON", parseAsJSON);
 		setMethod("trim", trim);
 		setMethod("concat", concat);
+		setMethod("encrypt", encrypt);
+		setMethod("decrypt", decrypt);
+		setMethod("contains", contains);
+
+		setMethod("getTrailingIntValue", getTrailingIntValue);
+		setMethod("getIntValue", getIntValue);
+		setMethod("hash", hash);
+		setMethod("fromFirstOccurrenceOf", fromFirstOccurrenceOf);
+		setMethod("fromLastOccurrenceOf", fromLastOccurrenceOf);
+		setMethod("upToFirstOccurrenceOf", upToFirstOccurrenceOf);
+		setMethod("upToLastOccurrenceOf", upToLastOccurrenceOf);
 	}
 
 	static Identifier getClassName()  { static const Identifier i("String"); return i; }
 
-	
+	static var contains(Args a)		 { return a.thisObject.toString().contains(getString(a, 0)); }
 	static var fromCharCode(Args a)  { return String::charToString(getInt(a, 0)); }
 	static var substring(Args a)     { return a.thisObject.toString().substring(getInt(a, 0), getInt(a, 1)); }
 	static var indexOf(Args a)       { return a.thisObject.toString().indexOf(getString(a, 0)); }
@@ -600,14 +633,20 @@ struct HiseJavascriptEngine::RootObject::StringClass : public DynamicObject
 	static var toLowerCase(Args a) { return a.thisObject.toString().toLowerCase(); };
 	static var trim(Args a) { return a.thisObject.toString().trim(); };
 
+	static var getTrailingIntValue(Args a) { return a.thisObject.toString().getTrailingIntValue(); }
+	static var getIntValue(Args a) { return a.thisObject.toString().getLargeIntValue(); }
+	static var hash(Args a) { return a.thisObject.toString().hashCode64(); }
+	static var fromFirstOccurrenceOf(Args a) { return a.thisObject.toString().fromFirstOccurrenceOf(getString(a, 0), false, false); }
+	static var fromLastOccurrenceOf(Args a) { return a.thisObject.toString().fromLastOccurrenceOf(getString(a, 0), false, false); }
+	static var upToFirstOccurrenceOf(Args a) { return a.thisObject.toString().upToFirstOccurrenceOf(getString(a, 0), false, false); }
+	static var upToLastOccurrenceOf(Args a) { return a.thisObject.toString().upToLastOccurrenceOf(getString(a, 0), false, false); }
+
 	static var concat(Args a)
 	{
 		String r = a.thisObject.toString();
 
 		for (int i = 0; i < a.numArguments; i++)
-		{
 			r << getString(a, i);
-		}
 
 		return var(r);
 	}
@@ -631,6 +670,56 @@ struct HiseJavascriptEngine::RootObject::StringClass : public DynamicObject
 		return array;
 	}
 	
+	static var splitCamelCase(Args a)
+	{
+		auto trimmed = a.thisObject.toString().removeCharacters(" \t\n\r");
+		auto current = trimmed.begin();
+		auto end = trimmed.end();
+		
+		Array<var> list;
+
+		String currentToken;
+
+		auto flush = [&]()
+		{
+			if (currentToken.isNotEmpty())
+			{
+				list.add(currentToken);
+				currentToken = {};
+			}
+		};
+
+		while (current != end)
+		{
+			if (CharacterFunctions::isDigit(*current))
+			{
+				flush();
+
+				while (CharacterFunctions::isDigit(*current))
+					currentToken << *current++;
+
+				continue;
+			}
+			
+			if (CharacterFunctions::isUpperCase(*current))
+			{
+				flush();
+
+				while (CharacterFunctions::isUpperCase(*current))
+					currentToken << *current++;
+				
+				continue;
+			}
+			
+
+			currentToken << *current++;
+		}
+
+		flush();
+
+		return var(list);
+	}
+
 	static var capitalize(Args a)
 	{
 		const String str(a.thisObject.toString());
@@ -651,14 +740,48 @@ struct HiseJavascriptEngine::RootObject::StringClass : public DynamicObject
 		return var(result.joinIntoString(" ", 0, -1));
 	}
 
+	static var encrypt(Args a)
+	{
+		const String str(a.thisObject.toString());
+		const String key(getString(a, 0));
+
+		auto data = key.getCharPointer().getAddress();
+		auto size = jlimit(0, 72, key.length());
+
+		BlowFish bf(data, size);
+
+		MemoryOutputStream mos;
+		mos.writeString(str);
+		mos.flush();
+		
+		auto out = mos.getMemoryBlock();
+
+		bf.encrypt(out);
+
+		return out.toBase64Encoding();
+	}
+
+	static var decrypt(Args a)
+	{
+		const String encStr(a.thisObject.toString());
+		const String key(getString(a, 0));
+
+		auto data = key.getCharPointer().getAddress();
+		auto size = jlimit(0, 72, key.length());
+
+		BlowFish bf(data, size);
+
+		MemoryBlock in;
+		
+		in.fromBase64Encoding(encStr);
+		bf.decrypt(in);
+
+		return in.toString();
+	}
 };
 
 #define Array Array<var>
 
-#if JUCE_MSVC
-#pragma warning (push)
-#pragma warning (disable: 4100)
-#endif
 
 /** Doxy functions for String operations. */
 class DoxygenStringFunctions
@@ -689,22 +812,52 @@ public:
 	/** Converts a string to lowercase letters. */
 	String toLowerCase() { return String(); }
 
+	/** Checks if the string contains the given substring. */
+	bool contains(String otherString) { return false; }
+
 	/** Converts a string to uppercase letters. */
 	String toUpperCase() { return String(); }
 	
 	/** Converts a string to start case (first letter of every word is uppercase). */
 	String capitalize() { return String(); }
 
+	/** Splits the string at uppercase characters (so MyValue becomes ["My", "Value"]. */
+	Array splitCamelCase();
+
 	/** Returns a copy of this string with any whitespace characters removed from the start and end. */
 	String trim() { return String(); }
 
 	/** Joins two or more strings, and returns a new joined strings. */
 	String concat(var stringlist) { return String(); }
+
+	/** Encrypt a string using Blowfish encryption. */
+	String encrypt(var key) { return String(); }
+
+	/** Decrypt a string from Blowfish encryption. */
+	String decrypt(var key) { return String(); }
+
+	/** Attempts to parse a integer number at the end of the string. */
+	int getTrailingIntValue() { return 0; }
+
+	/** Attempts to parse the string as integer number. */
+	int getIntValue() { return 0; };
+
+	/** Creates a unique hash from the string. */
+	int64 hash() { return 0; }
+
+	/* Returns a section of the string starting from a given substring. */
+	String fromFirstOccurrenceOf(String subString) { return {}; }
+
+	/* Returns a section of the string starting from a given substring. */
+	String fromLastOccurrenceOf(String subString) { return {}; }
+
+	/* Returns a section of the string up to a given substring. */
+	String upToFirstOccurrenceOf(String subString) { return {}; }
+
+	/* Returns a section of the string up to a given substring. */
+	String upToLastOccurrenceOf(String subString) { return {}; }
 };
 
-#if JUCE_MSVC
-#pragma warning (pop)
-#endif
 
 
 #undef Array

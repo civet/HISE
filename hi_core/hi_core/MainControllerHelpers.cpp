@@ -37,7 +37,8 @@ namespace hise { using namespace juce;
 MidiControllerAutomationHandler::MidiControllerAutomationHandler(MainController *mc_) :
 anyUsed(false),
 mpeData(mc_),
-mc(mc_)
+mc(mc_),
+ccName("MIDI CC")
 {
 	tempBuffer.ensureSize(2048);
 
@@ -82,7 +83,14 @@ void MidiControllerAutomationHandler::setUnlearndedMidiControlNumber(int ccNumbe
 
 	unlearnedData.ccNumber = ccNumber;
 
-	automationData[ccNumber].addIfNotAlreadyThere(unlearnedData);
+	if (exclusiveMode)
+	{
+		automationData[ccNumber].clearQuick();
+		automationData[ccNumber].add(unlearnedData);
+	}
+	else
+		automationData[ccNumber].addIfNotAlreadyThere(unlearnedData);
+
 	unlearnedData = AutomationData();
 
 	anyUsed = true;
@@ -213,14 +221,33 @@ void MidiControllerAutomationHandler::AutomationData::restoreFromValueTree(const
 	// The parameter was stored correctly as ID
 	if (isParameterId && processor.get() != nullptr)
 	{
-		const Identifier pId(attributeString);
+		auto numCustomAutomationSlots = processor->getMainController()->getUserPresetHandler().getNumCustomAutomationData();
 
-		for (int j = 0; j < processor->getNumParameters(); j++)
+		if (numCustomAutomationSlots != 0)
 		{
-			if (processor->getIdentifierForParameterIndex(j) == pId)
+			for (int j = 0; j < numCustomAutomationSlots; j++)
 			{
-				attribute = j;
-				break;
+				if (auto ah = processor->getMainController()->getUserPresetHandler().getCustomAutomationData(j))
+				{
+					if (ah->id.toString() == attributeString)
+					{
+						attribute = j;
+						break;
+					}
+				}
+			}
+		}
+		else
+		{
+			const Identifier pId(attributeString);
+
+			for (int j = 0; j < processor->getNumParameters(); j++)
+			{
+				if (processor->getIdentifierForParameterIndex(j) == pId)
+				{
+					attribute = j;
+					break;
+				}
 			}
 		}
 	}
@@ -276,7 +303,16 @@ juce::ValueTree MidiControllerAutomationHandler::AutomationData::exportAsValueTr
 	cc.setProperty("FullEnd", fullRange.end, nullptr);
 	cc.setProperty("Skew", parameterRange.skew, nullptr);
 	cc.setProperty("Interval", parameterRange.interval, nullptr);
-	cc.setProperty("Attribute", processor->getIdentifierForParameterIndex(attribute).toString(), nullptr);
+
+	if (auto ap = processor->getMainController()->getUserPresetHandler().getCustomAutomationData(attribute))
+	{
+		cc.setProperty("Attribute", ap->id.toString(), nullptr);
+	}
+	else
+	{
+		cc.setProperty("Attribute", processor->getIdentifierForParameterIndex(attribute).toString(), nullptr);
+	}
+
 	cc.setProperty("Inverted", inverted, nullptr);
 
 	return cc;
@@ -620,6 +656,9 @@ bool MidiControllerAutomationHandler::MPEData::contains(MPEModulator* mod) const
 
 ValueTree MidiControllerAutomationHandler::exportAsValueTree() const
 {
+	if (unloadedData.isValid())
+		return unloadedData;
+
 	ValueTree v("MidiAutomation");
 
 	for (int i = 0; i < 128; i++)
@@ -659,7 +698,10 @@ void MidiControllerAutomationHandler::restoreFromValueTree(const ValueTree &v)
 		aArray.addIfNotAlreadyThere(a);
 	}
 
-	sendChangeMessage();
+    if(mc->getUserPresetHandler().isInternalPresetLoad())
+        sendSynchronousChangeMessage();
+    else
+        sendChangeMessage();
 
 	refreshAnyUsedState();
 }
@@ -746,7 +788,7 @@ bool MidiControllerAutomationHandler::handleControllerMessage(const HiseEvent& e
 				}
 			}
 
-			return true;
+			return consumeEvents;
 		}
 	}
 
@@ -1113,38 +1155,15 @@ bool CircularAudioSampleBuffer::readMidiEvents(MidiBuffer& destination, int offs
 
 void DelayedRenderer::processWrapped(AudioSampleBuffer& buffer, MidiBuffer& midiMessages)
 {
-	if (illegalBufferSize)
-	{
-		mc->getKillStateHandler().handleKillState();
-		return;
-	}
-		
-
-	if (shouldDelayRendering())
-	{
+	// So FL Studio seems to violate the convention of not exceeding the buffer size set
+	// in the prepareToPlay() callback
+	auto maxBlockSize = jmin(mc->getMaximumBlockSize(), mc->getOriginalBufferSize());
 	
-		circularInputBuffer.writeSamples(buffer, 0, buffer.getNumSamples());
-
-		INSTRUMENT_ONLY(circularInputBuffer.writeMidiEvents(midiMessages, 0, buffer.getNumSamples()));
-		INSTRUMENT_ONLY(buffer.clear());
-
-		while (circularInputBuffer.getNumAvailableSamples() >= fullBlockSize)
-		{
-			delayedMidiBuffer.clear();
-
-			circularInputBuffer.readSamples(processBuffer, 0, fullBlockSize);
-
-			INSTRUMENT_ONLY(circularInputBuffer.readMidiEvents(delayedMidiBuffer, 0, fullBlockSize));
-			
-			mc->processBlockCommon(processBuffer, delayedMidiBuffer);
-
-			circularOutputBuffer.writeSamples(processBuffer, 0, fullBlockSize);
-		}
-
-		circularOutputBuffer.readSamples(buffer, 0, buffer.getNumSamples());
-	}
-	else if (buffer.getNumSamples() > HISE_MAX_PROCESSING_BLOCKSIZE)
+	if (buffer.getNumSamples() > maxBlockSize)
 	{
+		// We'll recursively call this method with a smaller buffer to stay within the
+		// buffer size limits...
+
 		int numChannels = buffer.getNumChannels();
 		int numToDo = buffer.getNumSamples();
 
@@ -1156,9 +1175,7 @@ void DelayedRenderer::processWrapped(AudioSampleBuffer& buffer, MidiBuffer& midi
 
 		while (numToDo > 0)
 		{
-			auto numThisTime = jmin(numToDo, HISE_MAX_PROCESSING_BLOCKSIZE);
-
-			jassert(numThisTime % HISE_EVENT_RASTER == 0);
+			auto numThisTime = jmin(numToDo, maxBlockSize);
 
 			AudioSampleBuffer chunk(ptrs, numChannels, numThisTime);
 			
@@ -1171,10 +1188,11 @@ void DelayedRenderer::processWrapped(AudioSampleBuffer& buffer, MidiBuffer& midi
 			for (int i = 0; i < numChannels; i++)
 				ptrs[i] += numThisTime;
 
-			mc->processBlockCommon(chunk, delayedMidiBuffer);
+			processWrapped(chunk, delayedMidiBuffer);
 		}
-	}
 
+		return;
+	}
 	else if (buffer.getNumSamples() % HISE_EVENT_RASTER != 0 || numLeftOvers != 0)
 	{
 #if FRONTEND_IS_PLUGIN
@@ -1182,16 +1200,42 @@ void DelayedRenderer::processWrapped(AudioSampleBuffer& buffer, MidiBuffer& midi
 		buffer.clear();
 #else
 
-		DBG(buffer.getNumSamples());
-
 		int numSamplesToCalculate = buffer.getNumSamples() - numLeftOvers;
 
+		if (numSamplesToCalculate <= 0)
+		{
+			// we need to calculate less samples than we have already available, so we can just return
+			// the samples and skip the process for this buffer
+			int numToCopy = buffer.getNumSamples();
+
+			for (int c = 0; c < buffer.getNumChannels(); c++)
+			{
+				leftOverChannels[c] = leftOverData + c * HISE_EVENT_RASTER;
+
+				for (int i = 0; i < numLeftOvers; i++)
+				{
+					if (i < numToCopy)
+					{
+						// Copy the sample to the buffer
+						buffer.setSample(c, i, leftOverChannels[c][i]);
+					}
+					else
+					{
+						// shift the sample data in the left over buffer to the left by numCopy samples
+						leftOverChannels[c][i - numToCopy] = leftOverChannels[c][i];
+					}
+				}
+			}
+
+			numLeftOvers -= numToCopy;
+			return;
+		}
+		
 		// use a temp buffer and pad to the event raster size...
 		auto oddSampleAmount = numSamplesToCalculate % HISE_EVENT_RASTER;
 		auto thisLeftOver = (HISE_EVENT_RASTER - oddSampleAmount) % HISE_EVENT_RASTER;
 
 		int paddedBufferSize = (numSamplesToCalculate + thisLeftOver);
-
 		int numToCopy = jmin(paddedBufferSize, buffer.getNumSamples());
 
 		auto data = (float*)alloca(sizeof(float) * buffer.getNumChannels() * paddedBufferSize);
@@ -1212,7 +1256,32 @@ void DelayedRenderer::processWrapped(AudioSampleBuffer& buffer, MidiBuffer& midi
 
 		if (paddedBufferSize > 0)
 		{
+			auto lastTimestamp = (int)midiMessages.getLastEventTime();
+
+            ignoreUnused(lastTimestamp);
+			jassert(lastTimestamp < buffer.getNumSamples());
+
 			AudioSampleBuffer tempBuffer(ptrs, buffer.getNumChannels(), paddedBufferSize);
+
+			const int lastEventTime = midiMessages.getLastEventTime();
+
+			if (lastEventTime > numSamplesToCalculate)
+			{
+				MidiBuffer other;
+				MidiBuffer::Iterator it(midiMessages);
+
+				MidiMessage m;
+				int pos;
+
+				while (it.getNextEvent(m, pos))
+				{
+					other.addEvent(m, jmin(pos, numSamplesToCalculate));
+				}
+
+				other.swapWith(midiMessages);
+
+				//jassertfalse;
+			}
 
 			mc->setMaxEventTimestamp(numSamplesToCalculate);
 			mc->processBlockCommon(tempBuffer, midiMessages);
@@ -1226,6 +1295,8 @@ void DelayedRenderer::processWrapped(AudioSampleBuffer& buffer, MidiBuffer& midi
 
 			if(numSamplesToCalculate > 0)
 				FloatVectorOperations::copy(buffer.getWritePointer(i, numLeftOvers), ptrs[i], numSamplesToCalculate);
+
+			
 
 			if(thisLeftOver != 0)
 				FloatVectorOperations::copy(leftOverChannels[i], ptrs[i] + numSamplesToCalculate, thisLeftOver);
@@ -1242,44 +1313,17 @@ void DelayedRenderer::processWrapped(AudioSampleBuffer& buffer, MidiBuffer& midi
 
 void DelayedRenderer::prepareToPlayWrapped(double sampleRate, int samplesPerBlock)
 {
-	if (shouldDelayRendering())
-	{
-		if (samplesPerBlock > lastBlockSize)
-		{
-			lastBlockSize = samplesPerBlock;
+	illegalBufferSize = !(samplesPerBlock % HISE_EVENT_RASTER == 0);
 
-#if FRONTEND_IS_PLUGIN
-			fullBlockSize = samplesPerBlock;
-#else
-			fullBlockSize = jmin<int>(256, samplesPerBlock);
+#if HISE_COMPLAIN_ABOUT_ILLEGAL_BUFFER_SIZE
+	if (illegalBufferSize)
+		mc->sendOverlayMessage(OverlayMessageBroadcaster::IllegalBufferSize);
 #endif
 
-			circularInputBuffer = CircularAudioSampleBuffer(2, 3 * samplesPerBlock);
+    if(samplesPerBlock % HISE_EVENT_RASTER != 0)
+        samplesPerBlock += HISE_EVENT_RASTER - (samplesPerBlock % HISE_EVENT_RASTER);
 
-
-
-			circularOutputBuffer = CircularAudioSampleBuffer(2, 3 * samplesPerBlock);
-
-			circularOutputBuffer.setReadDelta(fullBlockSize);
-
-			processBuffer.setSize(2, fullBlockSize);
-
-			delayedMidiBuffer.ensureSize(1024);
-
-			dynamic_cast<AudioProcessor*>(mc)->setLatencySamples(fullBlockSize);
-
-
-		}
-        
-        if(!(mc->getMainSynthChain()->getLargestBlockSize() == fullBlockSize && sampleRate == mc->getMainSynthChain()->getSampleRate()))
-            mc->prepareToPlay(sampleRate, fullBlockSize);
-	}
-	else
-	{
-		illegalBufferSize = !(samplesPerBlock % HISE_EVENT_RASTER == 0);
-
-		mc->prepareToPlay(sampleRate, jmin(samplesPerBlock, HISE_MAX_PROCESSING_BLOCKSIZE));
-	}
+	mc->prepareToPlay(sampleRate, jmin(samplesPerBlock, mc->getMaximumBlockSize()));
 }
 
 
@@ -1290,17 +1334,99 @@ void OverlayMessageBroadcaster::sendOverlayMessage(int newState, const String& n
 
 #if USE_BACKEND
 
-	ignoreUnused(newState);
+	
 
 	// Just print it on the console
 	Logger::getCurrentLogger()->writeToLog("!" + newCustomMessage);
-#else
+#endif
 
 	currentState = newState;
 	customMessage = newCustomMessage;
 
 	internalUpdater.triggerAsyncUpdate();
+}
+
+String OverlayMessageBroadcaster::getOverlayTextMessage(State s) const
+{
+	switch (s)
+	{
+	case AppDataDirectoryNotFound:
+		return "The application directory is not found. (The installation seems to be broken. Please reinstall this software.)";
+		break;
+	case IllegalBufferSize:
+	{
+		String s;
+		s << "The audio buffer size should be a multiple of " << String(HISE_EVENT_RASTER) << ". Please adjust your audio settings";
+		return s;
+	}
+	case SamplesNotFound:
+		return "The sample directory could not be located. \nClick below to choose the sample folder.";
+		break;
+	case SamplesNotInstalled:
+#if HISE_SAMPLE_DIALOG_SHOW_INSTALL_BUTTON && HISE_SAMPLE_DIALOG_SHOW_LOCATE_BUTTON
+		return "Please click below to install the samples from the downloaded archive or point to the location where you've already installed the samples.";
+#elif HISE_SAMPLE_DIALOG_SHOW_INSTALL_BUTTON
+		return "Please click below to install the samples from the downloaded archive.";
+#elif HISE_SAMPLE_DIALOG_SHOW_LOCATE_BUTTON
+		return "Please click below to point to the location where you've already installed the samples.";
+#else
+		return "This should never show :)";
+		jassertfalse;
 #endif
+
+		break;
+	case LicenseNotFound:
+	{
+#if USE_COPY_PROTECTION
+#if HISE_ALLOW_OFFLINE_ACTIVATION
+		return "This computer is not registered.\nClick below to authenticate this machine using either online authorization or by loading a license key.";
+#else
+		return "This computer is not registered.";
+#endif
+#else
+		return "";
+#endif
+	}
+	case ProductNotMatching:
+		return "The license key is invalid (wrong plugin name / version).\nClick below to locate the correct license key for this plugin / version";
+		break;
+	case MachineNumbersNotMatching:
+		return "The machine ID is invalid / not matching.\nThis might be caused by a major OS / or system hardware update which change the identification of this computer.\nIn order to solve the issue, just repeat the activation process again to register this system with the new specifications.";
+		break;
+	case UserNameNotMatching:
+		return "The user name is invalid.\nThis means usually a corrupt or rogued license key file. Please contact support to get a new license key.";
+		break;
+	case EmailNotMatching:
+		return "The email name is invalid.\nThis means usually a corrupt or rogued license key file. Please contact support to get a new license key.";
+		break;
+	case LicenseInvalid:
+	{
+#if USE_COPY_PROTECTION && !USE_SCRIPT_COPY_PROTECTION
+		auto ul = &dynamic_cast<const FrontendProcessor*>(this)->unlocker;
+		return ul->getProductErrorMessage();
+#else
+		return "";
+#endif
+	}
+	case LicenseExpired:
+	{
+#if USE_COPY_PROTECTION
+		return "The license key is expired. Press OK to reauthenticate (you'll need to be online for this)";
+#else
+		return "";
+#endif
+	}
+	case State::CustomErrorMessage:
+	case State::CriticalCustomErrorMessage:
+	case State::CustomInformation:
+	case State::numReasons:
+		jassertfalse;
+		break;
+	default:
+		break;
+	}
+
+	return String();
 }
 
 ScopedSoftBypassDisabler::ScopedSoftBypassDisabler(MainController* mc) :

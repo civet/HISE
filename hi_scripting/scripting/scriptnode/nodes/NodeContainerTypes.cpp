@@ -649,6 +649,49 @@ void SingleSampleBlockX::handleHiseEvent(HiseEvent& e)
 	obj.handleHiseEvent(e);
 }
 
+SidechainNode::SidechainNode(DspNetwork* n, ValueTree d) :
+    SerialNode(n, d)
+{
+    initListeners();
+    obj.getObject().initialise(this);
+}
+
+void SidechainNode::prepare(PrepareSpecs ps)
+{
+    obj.prepare(ps);
+    NodeBase::prepare(ps);
+    ps.numChannels *= 2;
+    prepareNodes(ps);
+}
+
+void SidechainNode::reset()
+{
+    obj.reset();
+}
+
+void SidechainNode::process(ProcessDataDyn& data)
+{
+    NodeProfiler np(this, isBypassed() ? data.getNumSamples() : 1);
+    ProcessDataPeakChecker pd(this, data);
+    obj.process(data);
+}
+
+void SidechainNode::processFrame(NodeBase::FrameType& data)
+{
+    FrameDataPeakChecker fd(this, data.begin(), data.size());
+    obj.processFrame(data);
+}
+
+int SidechainNode::getBlockSizeForChildNodes() const
+{
+    return originalBlockSize;
+}
+
+void SidechainNode::handleHiseEvent(HiseEvent& e)
+{
+    obj.handleHiseEvent(e);
+}
+
 MidiChainNode::MidiChainNode(DspNetwork* n, ValueTree t):
 	SerialNode(n, t)
 {
@@ -725,6 +768,7 @@ void OfflineChainNode::handleHiseEvent(HiseEvent& e)
 
 void OfflineChainNode::reset()
 {
+	obj.reset();
 }
 
 struct CloneOptionComponent : public Component,
@@ -1330,10 +1374,14 @@ void NoMidiChainNode::reset()
 }
 
 SoftBypassNode::SoftBypassNode(DspNetwork* n, ValueTree t):
-	SerialNode(n, t)
+	SerialNode(n, t),
+	smoothingTime(PropertyIds::SmoothingTime, 20)
 {
 	initListeners();
 	obj.initialise(this);
+
+	smoothingTime.initialise(this);
+	smoothingTime.setAdditionalCallback(BIND_MEMBER_FUNCTION_2(SoftBypassNode::updateSmoothingTime), true);
 }
 
 void SoftBypassNode::processFrame(FrameType& data) noexcept
@@ -1366,11 +1414,22 @@ void SoftBypassNode::reset()
 	obj.reset();
 }
 
+void SoftBypassNode::updateSmoothingTime(Identifier id, var newValue)
+{
+	if (id == PropertyIds::Value)
+	{
+		auto newTime = (int)newValue;
+		obj.setSmoothingTime(newTime);
+	}
+}
+
 void SoftBypassNode::setBypassed(bool shouldBeBypassed)
 {
 	SerialNode::setBypassed(shouldBeBypassed);
 	WrapperType::setParameter<bypass::ParameterId>(&this->obj, (double)shouldBeBypassed);
 }
+
+
 
 
 

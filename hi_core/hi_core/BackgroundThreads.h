@@ -343,6 +343,8 @@ public:
 		}
 	}
 	
+	void stopThread();
+
 	void setAdditionalLogFunction(const LogFunction& additionalLogFunction)
 	{
 		logData.logFunction = additionalLogFunction;
@@ -353,6 +355,11 @@ public:
 	void setAdditionalFinishCallback(const std::function<void()>& f)
 	{
 		additionalFinishCallback = f;
+	}
+
+	void setDestroyWhenFinished(bool shouldBeDestroyed)
+	{
+		destroyWhenFinished = shouldBeDestroyed;
 	}
 
 protected:
@@ -396,6 +403,8 @@ protected:
 
 private:
 
+	bool destroyWhenFinished = true;
+
 	ScopedPointer<LookAndFeel> laf;
 
 	std::function<void()> additionalFinishCallback;
@@ -412,9 +421,14 @@ private:
 	public:
 
 		LoadingThread(DialogWindowWithBackgroundThread *parent_) :
-			Thread(parent_->getName()),
+			Thread(parent_->getName(), HISE_DEFAULT_STACK_SIZE),
 			parent(parent_)
 		{};
+
+		~LoadingThread()
+		{
+			
+		}
 
 		void run() override
 		{

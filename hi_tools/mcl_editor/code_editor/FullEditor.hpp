@@ -26,11 +26,31 @@
 namespace TextEditorSettings
 {
 	DECLARE_ID(MapWidth);
+	DECLARE_ID(EnableMap);
 	DECLARE_ID(LineBreaks);
 	DECLARE_ID(EnableHover);
     DECLARE_ID(AutoAutocomplete);
     DECLARE_ID(FixWeirdTab);
 }
+
+namespace TextEditorShortcuts
+{
+	DECLARE_ID(show_fold_map);
+	DECLARE_ID(show_autocomplete);
+	DECLARE_ID(goto_definition);
+	DECLARE_ID(goto_file);
+	DECLARE_ID(show_search);
+	DECLARE_ID(show_full_search);
+	DECLARE_ID(breakpoint_resume);
+	DECLARE_ID(show_search_replace);
+	DECLARE_ID(add_autocomplete_template);
+	DECLARE_ID(clear_autocomplete_templates);
+	DECLARE_ID(select_token);
+    DECLARE_ID(comment_line);
+    DECLARE_ID(goto_undo);
+    DECLARE_ID(goto_redo);
+}
+
 #undef DECLARE_ID
 
 
@@ -76,7 +96,11 @@ struct FullEditor: public Component,
 
 		editor.setLineBreakEnabled(s.getProperty(TextEditorSettings::LineBreaks, true));
 		mapWidth = s.getProperty(TextEditorSettings::MapWidth, 150);
+		
+		mapButton.setToggleStateAndUpdateIcon(s.getProperty(TextEditorSettings::EnableMap, false));
+
 		resized();
+
 		codeMap.allowHover = s.getProperty(TextEditorSettings::EnableHover, true);
         editor.showAutocompleteAfterDelay = s.getProperty(TextEditorSettings::AutoAutocomplete, true);
 	}
@@ -109,6 +133,11 @@ struct FullEditor: public Component,
 		if (id == TextEditorSettings::LineBreaks)
 		{
 			pe->editor.setLineBreakEnabled((bool)newValue);
+		}
+		if (id == TextEditorSettings::EnableMap)
+		{
+			pe->mapButton.setToggleStateAndUpdateIcon((bool)newValue);
+			pe->resized();
 		}
 	}
 
@@ -151,6 +180,8 @@ struct FullEditor: public Component,
 	{
 		editor.gutter.setBreakpointsEnabled(shouldBeEnabled);
 	}
+
+	static void initKeyPresses(Component* root);
 
 	static mcl::FoldableLineRange::List createMarkdownLineRange(const CodeDocument& doc);
 

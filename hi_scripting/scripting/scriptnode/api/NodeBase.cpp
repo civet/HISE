@@ -211,6 +211,25 @@ juce::Rectangle<int> NodeBase::getPositionInCanvas(Point<int> topLeft) const
 	return body;
 }
 
+bool NodeBase::sendResizeMessage(Component* childComponent, bool async)
+{
+    if(auto p = childComponent->findParentComponentOfClass<DspNetworkGraph>())
+    {
+        auto f = [](DspNetworkGraph& g)
+        {
+            g.resizeNodes();
+        };
+        
+        if(async)
+            SafeAsyncCall::call<DspNetworkGraph>(*p, f);
+        else
+            f(*p);
+        
+        return true;
+    }
+    
+    return false;
+}
 juce::var NodeBase::addModulationConnection(var source, Parameter* targetParameter)
 {
 	jassertfalse;
@@ -319,6 +338,9 @@ juce::Rectangle<int> NodeBase::getBoundsToDisplay(Rectangle<int> originalHeight)
 		originalHeight.setHeight(jmax<int>(originalHeight.getHeight(), helpBounds.getHeight()));
 	}
 
+	if (getRootNetwork()->getExceptionHandler().getErrorMessage(this).isNotEmpty())
+		originalHeight.setHeight(jmax(originalHeight.getHeight(), 150));
+
 	return originalHeight;
 }
 
@@ -421,6 +443,18 @@ void NodeBase::addParameter(Parameter* p)
 void NodeBase::removeParameter(int index)
 {
 	parameters.remove(index);
+}
+
+void NodeBase::removeParameter(const String& id)
+{
+    for (int i=0; i<getNumParameters(); i++)
+    {
+        if (parameters[i]->getId() == id)
+        {
+            removeParameter(i);
+            return;
+        }
+    }
 }
 
 void NodeBase::setParentNode(Ptr newParentNode)
@@ -1081,7 +1115,7 @@ juce::Array<NodeBase::Parameter*> NodeBase::Parameter::getConnectedMacroParamete
 
 	if (auto n = parent)
 	{
-		while ((n = n->getParentNode()))
+		while ((n = n->getParentNode()) != nullptr)
 		{
 			for (auto m : NodeBase::ParameterIterator(*n))
 			{
@@ -1216,7 +1250,6 @@ ConnectionBase::ConnectionBase(DspNetwork* network_, ValueTree data_) :
 	ADD_API_METHOD_0(isConnected);
 	ADD_API_METHOD_0(getConnectionType);
 	ADD_API_METHOD_0(getUpdateRate);
-	ADD_API_METHOD_0(getTarget);
 
 	auto nodeId = data[PropertyIds::NodeId].toString();
 

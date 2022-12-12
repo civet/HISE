@@ -162,9 +162,13 @@ public:
 
 	String getNodeDescription() const override { return "Allows soft bypassing without clicks"; }
 
+	void updateSmoothingTime(Identifier id, var newValue);
+
 private:
 
-	using WrapperType = bypass::smoothed<SerialNode::DynamicSerialProcessor>;
+	NodePropertyT<int> smoothingTime;
+
+	using WrapperType = bypass::smoothed<-1, SerialNode::DynamicSerialProcessor>;
 	
 	WrapperType obj;
 };
@@ -185,7 +189,7 @@ public:
 
 private:
 
-	wrap::data<wrap::offline<SerialNode::DynamicSerialProcessor>, scriptnode::data::dynamic::audiofile> obj;
+	wrap::offline<SerialNode::DynamicSerialProcessor> obj;
 };
 
 namespace wrap {
@@ -230,6 +234,7 @@ public:
 	}
 
 	SN_PARAMETER_MEMBER_FUNCTION;
+	SN_REGISTER_CALLBACK(CloneNode);
 
 	SCRIPTNODE_FACTORY(CloneNode, "clone");
 
@@ -750,6 +755,27 @@ public:
 
 	wrap::frame_x<SerialNode::DynamicSerialProcessor> obj;
 	AudioSampleBuffer leftoverBuffer;
+};
+
+class SidechainNode : public SerialNode
+{
+public:
+
+    SidechainNode(DspNetwork* n, ValueTree d);
+
+    SCRIPTNODE_FACTORY(SidechainNode, "sidechain");
+
+    String getNodeDescription() const override { return "Creates a empty audio by duplicating the channel amount for sidechain routing."; }
+
+    void prepare(PrepareSpecs ps) final override;
+    void reset() final override;
+    void process(ProcessDataDyn& data) final override;
+    void processFrame(FrameType& data) final override;
+    int getBlockSizeForChildNodes() const override;;
+    int getNumChannelsToDisplay() const override { return lastSpecs.numChannels * 2; };
+    void handleHiseEvent(HiseEvent& e) override;
+
+    wrap::sidechain<SerialNode::DynamicSerialProcessor> obj;
 };
 
 template <int NumChannels> class SingleSampleBlock : public SerialNode

@@ -81,6 +81,8 @@ DECLARE_ID(AAXCategoryFX);
 DECLARE_ID(SupportMonoFX);
 DECLARE_ID(EnableSoundGeneratorsFX);
 DECLARE_ID(EnableMidiInputFX);
+DECLARE_ID(EnableMidiOut);
+DECLARE_ID(EnableGlobalPreprocessor);
 DECLARE_ID(UseRawFrontend);
 DECLARE_ID(VST3Support);
 DECLARE_ID(ExpansionType);
@@ -88,6 +90,8 @@ DECLARE_ID(EncryptionKey);
 DECLARE_ID(LinkExpansionsToProject);
 DECLARE_ID(ReadOnlyFactoryPresets);
 DECLARE_ID(ForceStereoOutput);
+DECLARE_ID(AdminPermissions);
+DECLARE_ID(EmbedUserPresets);
 
 Array<Identifier> getAllIds();
 
@@ -102,6 +106,8 @@ DECLARE_ID(LegacyCPUSupport);
 DECLARE_ID(RebuildPoolFiles);
 DECLARE_ID(Support32BitMacOS);
 DECLARE_ID(CustomNodePath);
+DECLARE_ID(FaustPath);
+DECLARE_ID(FaustExternalEditor);
 
 Array<Identifier> getAllIds();
 
@@ -125,7 +131,9 @@ DECLARE_ID(EnableCallstack);
 DECLARE_ID(GlobalScriptPath);
 DECLARE_ID(CompileTimeout);
 DECLARE_ID(CodeFontSize);
+DECLARE_ID(EnableOptimizations);
 DECLARE_ID(EnableDebugMode);
+DECLARE_ID(SaveConnectedFilesOnCompile);
 
 Array<Identifier> getAllIds();
 
@@ -193,10 +201,14 @@ struct Data: public SafeChangeBroadcaster
 
 	File getFileForSetting(const Identifier& id) const;
 
+    File getFaustPath() const;
+    
 	void loadDataFromFiles();
 	void refreshProjectData();
 	void loadSettingsFromFile(const Identifier& id);
 
+    var getExtraDefinitionsAsObject() const;
+    
 	var getSetting(const Identifier& id) const;
 
 	void initialiseAudioDriverData(bool forceReload = false);
@@ -218,24 +230,26 @@ struct Data: public SafeChangeBroadcaster
 
 	void settingWasChanged(const Identifier& id, const var& newValue);
 
+    String getTemporaryDefinitionsAsString() const;
+    
+    void addTemporaryDefinitions(const NamedValueSet& list)
+    {
+        temporaryExtraDefinitions = list;
+    }
+    
 private:
-
 
 	struct TestFunctions
 	{
-
 		static bool isValidNumberBetween(var value, Range<float> range);
-
 	};
 
-
-	void addSetting(ValueTree& v, const Identifier& id);
+    void addSetting(ValueTree& v, const Identifier& id);
 	void addMissingSettings(ValueTree& v, const Identifier &id);
 
 	AudioDeviceManager* getDeviceManager();
-
 	MainController* mc;
-
+    NamedValueSet temporaryExtraDefinitions;
 };
 
 

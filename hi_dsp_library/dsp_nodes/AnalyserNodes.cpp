@@ -141,7 +141,7 @@ void Helpers::FFT::transformReadBuffer(AudioSampleBuffer& b)
 }
 
 
-juce::Path Helpers::FFT::createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds) const
+juce::Path Helpers::FFT::createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds, double) const
 {
 	ScopedLock sl(fftLock);
 
@@ -214,7 +214,7 @@ juce::Path Helpers::FFT::createPath(Range<int> sampleRange, Range<float> valueRa
 
 
 
-juce::Path Helpers::Oscilloscope::createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds) const
+juce::Path Helpers::Oscilloscope::createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds, double startValue) const
 {
 	bool isStereo = buffer->getReadBuffer().getNumChannels() == 2;
 
@@ -265,7 +265,7 @@ void Helpers::Oscilloscope::drawPath(Path& p, Rectangle<float> bounds, int chann
 		p.startNewSubPath(0.0f, -1.0f);
 		p.startNewSubPath(0.0f, 0.0f);
 
-		float x;
+		float x = 0.0f;
 
 		bool mirrorMode = stride > 100;
 

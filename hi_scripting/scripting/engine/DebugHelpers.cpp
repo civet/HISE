@@ -154,15 +154,36 @@ Component* DebugInformation::createPopupComponent(const MouseEvent& e, Component
 	{
 #if USE_BACKEND
 
-		auto p = componentToNotify->findParentComponentOfClass<PanelWithProcessorConnection>()->getProcessor();
-		auto holder = dynamic_cast<ApiProviderBase::Holder*>(p);
-		jassert(holder != nullptr);
+		PanelWithProcessorConnection* pc = componentToNotify->findParentComponentOfClass<PanelWithProcessorConnection>();
 
-		auto display = new BufferViewer(this, holder);
-		return display;
-#else
-		return nullptr;
+		if (pc == nullptr)
+		{
+			auto co = dynamic_cast<ControlledObject*>(componentToNotify);
+
+			if (co == nullptr)
+				co = componentToNotify->findParentComponentOfClass<ControlledObject>();
+
+			if (co != nullptr)
+			{
+				if (auto activeEditor = co->getMainController()->getLastActiveEditor())
+				{
+					pc = activeEditor->findParentComponentOfClass<PanelWithProcessorConnection>();
+				}
+			}
+		}
+
+		if (pc != nullptr)
+		{
+			auto p = pc->getProcessor();
+			auto holder = dynamic_cast<ApiProviderBase::Holder*>(p);
+			jassert(holder != nullptr);
+
+			auto display = new BufferViewer(this, holder);
+			return display;
+		}
+
 #endif
+		return nullptr;
 	}
 
 	if (v.isObject() || v.isArray())
@@ -226,38 +247,230 @@ String DebugInformation::toString()
 	return output;
 }
 
-
-void gotoLocationInternal(Processor* processor, DebugableObject::Location location)
-{
 #if USE_BACKEND
-	auto editor = processor->getMainController()->getLastActiveEditor();
-
-	if (editor == nullptr)
-		return;
-
-	if (auto editorPanel = editor->findParentComponentOfClass<CodeEditorPanel>())
+CodeEditorPanel* findOrCreateEditorPanel(CodeEditorPanel* panel, Processor* processor, DebugableObject::Location location)
+{
+	auto getSanitizedId = [](DebugableObject::Location l)
 	{
-		editorPanel->gotoLocation(processor, location.fileName, location.charNumber);
-	}
-	else if (location.fileName.isNotEmpty())
-	{
-		auto jsp = dynamic_cast<JavascriptProcessor*>(processor);
+		auto s = l.fileName;
 
-		File f(location.fileName);
+		if (s.isEmpty())
+			return String("onInit");
 
-		jsp->showPopupForFile(f, location.charNumber);
-	}
-	else if (auto scriptEditor = editor->findParentComponentOfClass<ScriptingEditor>())
+		if (s.contains("("))
+			return s.removeCharacters("()");
+			
+		if (File::isAbsolutePath(s))
+			return File(s).getFileName();
+
+		return s;
+	};
+
+	auto matches = [&](CodeEditorPanel* p)
 	{
-		scriptEditor->showOnInitCallback();
-		scriptEditor->gotoChar(location.charNumber);
+		if (p->getConnectedProcessor() == processor)
+		{
+			StringArray indexList;
+			p->fillIndexList(indexList);
+			auto idx = p->getCurrentIndex();
+			auto id = indexList[idx];
+
+			auto expId = getSanitizedId(location);
+
+			if (expId == id)
+				return true;
+		}
+
+		return false;
+	};
+	
+	if (matches(panel))
+		return panel;
+
+	if (auto tabs = panel->getParentShell()->findParentComponentOfClass<FloatingTabComponent>())
+	{
+		int idx = 0;
+		if (location.fileName.isNotEmpty())
+		{
+			StringArray indexList;
+			panel->fillIndexList(indexList);
+
+			auto expId = getSanitizedId(location);
+			idx = indexList.indexOf(expId);
+		}
+
+		return CodeEditorPanel::showOrCreateTab(tabs, dynamic_cast<JavascriptProcessor*>(processor), idx);
 	}
+
+	return panel;
+}
+
+
+struct UndoableLocationSwitch: public UndoableAction
+{
+    static String getLocationString(JavascriptProcessor* p, const String& indexString)
+    {
+        if(indexString == "onInit")
+            return "";
+        
+        for(int i = 0; i < p->getNumWatchedFiles(); i++)
+        {
+            auto f = p->getWatchedFile(i);
+            
+            if(f.getFileName() == indexString)
+            {
+                return f.getFullPathName();
+            }
+        }
+        
+        return indexString + "()";
+    }
+    
+    static String getDescription(Processor* p)
+    {
+        String d;
+        
+        if (auto editor = p->getMainController()->getLastActiveEditor())
+        {
+            if (auto editorPanel = editor->findParentComponentOfClass<CodeEditorPanel>())
+            {
+                mcl::TextEditor& e = dynamic_cast<mcl::FullEditor*>(editor)->editor;
+                auto s = e.getTextDocument().getSelection(0).head;
+                
+                StringArray indexList;
+                editorPanel->fillIndexList(indexList);
+                auto idx = editorPanel->getCurrentIndex();
+                d << indexList[idx];
+                d << ":";
+                d << String(s.x);
+                
+            }
+        }
+        
+        
+        
+        return d;
+    }
+    
+    DebugableObject::Location getPosition(Processor* p)
+    {
+        DebugableObject::Location location;
+        
+        if (auto editor = p->getMainController()->getLastActiveEditor())
+        {
+            if (auto editorPanel = editor->findParentComponentOfClass<CodeEditorPanel>())
+            {
+                mcl::TextEditor& e = dynamic_cast<mcl::FullEditor*>(editor)->editor;
+                auto s = e.getTextDocument().getSelection(0).head;
+                
+                CodeDocument::Position pos(e.getDocument(), s.x, s.y);
+                
+                StringArray indexList;
+                editorPanel->fillIndexList(indexList);
+                auto idx = editorPanel->getCurrentIndex();
+                
+                location.charNumber = pos.getPosition();
+                location.fileName = getLocationString(dynamic_cast<JavascriptProcessor*>(p), indexList[idx]);
+            }
+        }
+        
+        return location;
+    }
+    
+    UndoableLocationSwitch(Processor* p, DebugableObject::Location location)
+    {
+        newProcessor = p;
+        newLocation = location;
+        
+        if (auto editor = p->getMainController()->getLastActiveEditor())
+        {
+            if (auto editorPanel = editor->findParentComponentOfClass<CodeEditorPanel>())
+                oldProcessor = editorPanel->getConnectedProcessor();
+        }
+        
+        oldLocation = getPosition(oldProcessor);
+    }
+    
+    bool perform() override
+    {
+        if(oldProcessor != nullptr)
+            oldLocation = getPosition(oldProcessor);
+        
+        return gotoInternal(newProcessor.get(), newLocation);
+    }
+    
+    bool undo() override
+    {
+        if(newProcessor != nullptr)
+            newLocation = getPosition(newProcessor);
+        
+        return gotoInternal(oldProcessor.get(), oldLocation);
+    }
+    
+    bool gotoInternal(Processor* processor, DebugableObject::Location location)
+    {
+        if(processor == nullptr)
+            return false;
+        
+        auto editor = processor->getMainController()->getLastActiveEditor();
+
+        if (editor == nullptr)
+            return false;
+
+        if (auto editorPanel = editor->findParentComponentOfClass<CodeEditorPanel>())
+        {
+            editorPanel = findOrCreateEditorPanel(editorPanel, processor, location);
+            editorPanel->gotoLocation(processor, location.fileName, location.charNumber);
+            return true;
+        }
+        else if (location.fileName.isNotEmpty())
+        {
+            auto jsp = dynamic_cast<JavascriptProcessor*>(processor);
+
+            File f(location.fileName);
+
+            jsp->showPopupForFile(f, location.charNumber);
+            return true;
+        }
+        else if (auto scriptEditor = editor->findParentComponentOfClass<ScriptingEditor>())
+        {
+            scriptEditor->showOnInitCallback();
+            scriptEditor->gotoChar(location.charNumber);
+            return true;
+        }
+    
+        return false;
+    }
+    
+    WeakReference<Processor> oldProcessor, newProcessor;
+    DebugableObject::Location oldLocation, newLocation;
+};
+#endif
+
+bool gotoLocationInternal(Processor* processor, DebugableObject::Location location)
+{
+    if(!location)
+        return false;
+    
+#if USE_BACKEND
+    
+    auto um = processor->getMainController()->getLocationUndoManager();
+    
+    um->beginNewTransaction();
+    um->perform(new UndoableLocationSwitch(processor, location),
+                UndoableLocationSwitch::getDescription(processor));
+    
+    processor->getMainController()->getCommandManager()->commandStatusChanged();
+    
+    return true;
+    
 #else
-	ignoreUnused(processor, location);
+    ignoreUnused(processor, location);
+    return false;
 #endif
 }
 
-void DebugableObject::Helpers::gotoLocation(Component* ed, JavascriptProcessor* sp, const Location& location)
+bool DebugableObject::Helpers::gotoLocation(Component* ed, JavascriptProcessor* sp, const Location& location)
 {
 #if USE_BACKEND
 	auto handler = dynamic_cast<ScriptEditHandler*>(ed);
@@ -271,23 +484,42 @@ void DebugableObject::Helpers::gotoLocation(Component* ed, JavascriptProcessor* 
 	{
 		// You have to somehow manage to pass the processor here...
 		jassertfalse;
-		return;
+		return false;
 	}
 
-	gotoLocationInternal(dynamic_cast<Processor*>(sp), location);
+	return gotoLocationInternal(dynamic_cast<Processor*>(sp), location);
 
 #else
 	ignoreUnused(ed, sp, location);
+	return false;
 #endif
 }
 
 
-void DebugableObject::Helpers::gotoLocation(Processor* processor, DebugInformationBase* info)
+bool DebugableObject::Helpers::gotoLocation(Processor* processor, DebugInformationBase* info)
 {
-	gotoLocationInternal(processor, info->getLocation());
+	return gotoLocationInternal(processor, info->getLocation());
 }
 
 
+
+DebugableObject::Location DebugableObject::Helpers::getLocationFromProvider(Processor* p, DebugableObjectBase* obj)
+{
+	auto loc = obj->getLocation();
+
+	if (loc.charNumber != 0 || loc.fileName.isNotEmpty())
+		return loc;
+
+	if (auto asProvider = dynamic_cast<ApiProviderBase::Holder*>(p))
+	{
+		auto engine = asProvider->getProviderBase();
+
+		if (auto ptr = getDebugInformation(engine, obj))
+			return ptr->getLocation();
+	}
+
+	return loc;
+}
 
 Component* DebugableObject::Helpers::showProcessorEditorPopup(const MouseEvent& e, Component* table, Processor* p)
 {
@@ -378,14 +610,67 @@ var DebugableObject::Helpers::getCleanedObjectForJSONDisplay(const var& object)
 		return object;
 }
 
+DebugInformationBase::List DebugableObject::Helpers::getDebugInformationFromString(ApiProviderBase* engine, const String& token)
+{
+    DebugInformationBase::List list;
+    
+    for (int i = 0; i < engine->getNumDebugObjects(); i++)
+    {
+        auto dobj = engine->getDebugInformation(i);
+        auto thisList = getDebugInformationFromString(dobj, token);
+        list.addArray(thisList);
+    }
+
+    StringArray textValues;
+    
+    for(int i = 0; i < list.size(); i++)
+    {
+        auto n = list[i]->getTextForName();
+        
+        if(n.contains(".locals") || n.contains(".args") ||
+           n.contains("[") || textValues.contains(n))
+            list.remove(i--);
+        else
+            textValues.add(n);
+    }
+    
+    return list;
+}
+
+DebugInformationBase::List DebugableObject::Helpers::getDebugInformationFromString(DebugInformationBase::Ptr parent, const String& token)
+{
+    DebugInformationBase::List thisList;
+    
+    auto text = parent->getTextForName();
+    
+    if(text.startsWith(token))
+        thisList.add(parent);
+        
+    
+    if(!token.containsChar('.') && text.containsChar('.'))
+    {
+        // Try to resolve it "inside the namespace"...
+        if(text.fromFirstOccurrenceOf(".", false, false).startsWith(token))
+            thisList.add(parent);
+    }
+    
+    for(int i = 0; i < parent->getNumChildElements(); i++)
+    {
+        auto childList = getDebugInformationFromString(parent->getChildElement(i), token);
+        thisList.addArray(childList);
+    }
+    
+    return thisList;
+}
+
 DebugInformationBase::Ptr DebugableObject::Helpers::getDebugInformation(ApiProviderBase* engine, DebugableObjectBase* object)
 {
 	for (int i = 0; i < engine->getNumDebugObjects(); i++)
 	{
-		if (engine->getDebugInformation(i)->getObject() == object)
-		{
-			return engine->getDebugInformation(i);
-		}
+		auto dobj = engine->getDebugInformation(i);
+
+		if (auto ptr = getDebugInformation(dobj, object))
+			return ptr;
 	}
 
 	return nullptr;
@@ -406,6 +691,23 @@ DebugInformationBase::Ptr DebugableObject::Helpers::getDebugInformation(ApiProvi
 		{
 			if(dbg->getVariantCopy() == v)
 				return b;
+		}
+	}
+
+	return nullptr;
+}
+
+hise::DebugInformationBase::Ptr DebugableObject::Helpers::getDebugInformation(DebugInformationBase::Ptr parent, DebugableObjectBase* object)
+{
+	if (parent->getObject() == object)
+		return parent;
+
+	for (int i = 0; i < parent->getNumChildElements(); i++)
+	{
+		if (auto c = parent->getChildElement(i))
+		{
+			if (auto p = getDebugInformation(c, object))
+				return p;
 		}
 	}
 

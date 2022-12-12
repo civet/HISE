@@ -32,20 +32,13 @@
 
 namespace hise { using namespace juce;
 
-ModulatorSynthChain::ModulatorSynthChain(MainController *mc, const String &id, int numVoices_, UndoManager *viewUndoManager /*= nullptr*/) :
+ModulatorSynthChain::ModulatorSynthChain(MainController *mc, const String &id, int numVoices_) :
 	MacroControlBroadcaster(this),
 	ModulatorSynth(mc, id, numVoices_),
-#if USE_BACKEND
-	ViewManager(this, viewUndoManager),
-#endif
 	numVoices(numVoices_),
 	handler(this),
 	vuValue(0.0f)
 {
-#if USE_BACKEND == 0
-	ignoreUnused(viewUndoManager);
-#endif
-
 	finaliseModChains();
 
 	FactoryType *t = new ModulatorSynthChainFactoryType(numVoices, this);
@@ -282,7 +275,9 @@ void ModulatorSynthChain::renderNextBlockWithModulators(AudioSampleBuffer &buffe
 
 	effectChain->renderMasterEffects(internalBuffer);
 
-	if (internalBuffer.getNumChannels() != 2)
+	if (internalBuffer.getNumChannels() != 2 || 
+		getMatrix().getConnectionForSourceChannel(0) != 0 ||
+		getMatrix().getConnectionForSourceChannel(1) != 1)
 	{
 		jassert(internalBuffer.getNumChannels() == getMatrix().getNumSourceChannels());
 
@@ -380,10 +375,6 @@ void ModulatorSynthChain::reset()
 	{
 		setAttribute(i, getDefaultValue(i), dontSendNotification);
 	}
-
-#if USE_BACKEND
-    clearAllViews();
-#endif
     
     clearAllMacroControls();
     

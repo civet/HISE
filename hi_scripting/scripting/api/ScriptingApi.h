@@ -162,6 +162,9 @@ public:
 		/** Sets a callback that will be performed when an all notes off message is received. */
 		void setAllNotesOffCallback(var onAllNotesOffCallback);
 
+		/** This will forward the message to the MIDI out of the plugin. */
+		void sendToMidiOut();
+
 		// ============================================================================================================
 
 		void setHiseEvent(HiseEvent &m);
@@ -226,8 +229,14 @@ public:
 		/** Sets the minimum sample rate for the global processing (and adds oversampling if the current samplerate is lower). */
 		bool setMinimumSampleRate(double minimumSampleRate);
 
+		/** Sets the maximum buffer size that is processed at once. If the buffer size from the audio driver / host is bigger than this number, it will split up the incoming buffer and call process multiple times. */
+		void setMaximumBlockSize(int numSamplesPerBlock);
+
 		/** Returns the current sample rate. */
 		double getSampleRate() const;
+
+		/** Returns the current maximum processing block size. */
+		int getBufferSize() const;
 
 		/** Converts milli seconds to samples */
 		double getSamplesForMilliSeconds(double milliSeconds) const;;
@@ -283,6 +292,9 @@ public:
 		/** Iterates the given sub-directory of the Samples folder and returns a list with all references to audio files. */
 		var getSampleFilesFromDirectory(const String& relativePathFromSampleFolder, bool recursive);
 
+		/** Returns the platform specific extra definitions from the Project settings as JSON object. */
+		var getExtraDefinitionsInBackend();
+		
 		/** Shows a message with a question and executes the function after the user has selected his choice. */
 		void showYesNoWindow(String title, String markdownMessage, var callback);
 
@@ -291,6 +303,12 @@ public:
 
 		/** Creates a (or returns an existing ) script look and feel object. */
 		var createGlobalScriptLookAndFeel();
+
+		/** Performs an action that can be undone via Engine.undo(). */
+		bool performUndoAction(var thisObject, var undoAction);
+
+		/** Returns the amount of output channels. */
+		int getNumPluginChannels() const;
 
 		var createFFT();
 
@@ -312,8 +330,14 @@ public:
 		/** Creates (and activates) the expansion handler. */
 		var createExpansionHandler();
 
+		/** Creates a MIDI Automation handler. */
+		var createMidiAutomationHandler();
+
 		/** Creates an user preset handler. */
 		var createUserPresetHandler();
+
+		/** Creates a broadcaster that can send messages to attached listeners. */
+		var createBroadcaster(var defaultValues);
 
 		/** Creates a reference to the DSP network of another script processor. */
 		var getDspNetworkReference(String processorId, String id);
@@ -329,6 +353,12 @@ public:
         
 		/** Creates a reference to the script license manager. */
 		var createLicenseUnlocker();
+
+		/** Renders a MIDI event list as audio data on a background thread and calls a function when it's ready. */
+		void renderAudio(var eventList, var finishCallback);
+
+		/** Previews a audio buffer with a callback indicating the state. */
+		void playBuffer(var bufferData, var callback);
 
 		/** Sends an allNotesOff message at the next buffer. */
 		void allNotesOff();
@@ -552,12 +582,18 @@ public:
 		/** Matches the string against the regex token. */
 		bool matchesRegex(String stringToMatch, String regex);
 
-    /** Returns an array with all matches. */
-    var getRegexMatches(String stringToMatch, String regex);
+		/** Creates an error handler that reacts on initialisation errors. */
+		var createErrorHandler();
 
-    /** Returns a string of the value with the supplied number of digits. */
-    String doubleToString(double value, int digits);
+		/** Returns an array with all matches. */
+		var getRegexMatches(String stringToMatch, String regex);
+
+		/** Returns a string of the value with the supplied number of digits. */
+		String doubleToString(double value, int digits);
 		
+		/** Returns the width of the string for the given font properties. */
+		float getStringWidth(String text, String fontName, float fontSize, float fontSpacing);
+
 		String intToHexString(int value);
 
 		/** Signals that the application should terminate. */
@@ -583,6 +619,12 @@ public:
 		double unused = 0.0;
 
 		ScriptBaseMidiProcessor* parentMidiProcessor;
+
+		ScopedPointer<Thread> currentExportThread;
+
+		struct PreviewHandler;
+
+		ScopedPointer<PreviewHandler> previewHandler;
 
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Engine);
 	};
@@ -696,6 +738,8 @@ public:
 
 	private:
 
+		
+
 		GlobalSettingManager* gm;
 		AudioProcessorDriver* driver;
 		MainController* mc;
@@ -713,7 +757,9 @@ public:
 		Sampler(ProcessorWithScriptingContent *p, ModulatorSampler *sampler);
 		~Sampler() {};
 
-		Identifier getObjectName() const override { return "Sampler"; }
+		static Identifier getClassName() { RETURN_STATIC_IDENTIFIER("Sampler"); }
+
+		Identifier getObjectName() const override { return getClassName(); }
 		bool objectDeleted() const override { return sampler.get() == nullptr; }
 		bool objectExists() const override { return sampler.get() != nullptr; }
 
@@ -949,6 +995,9 @@ public:
 		/** Returns the attribute of the parent synth. */
 		float getAttribute(int attributeIndex) const;
 
+		/** Creates a Builder object that can be used to create the module tree. */
+		var createBuilder();
+
 		/** Adds a note on to the buffer. */
 		int addNoteOn(int channel, int noteNumber, int velocity, int timeStampSamples);
 
@@ -1115,7 +1164,6 @@ public:
 
 		friend class ModuleHandler;
 
-		
 		WeakReference<Message> messageObject;
 
 		ModulatorSynth * const owner;
@@ -1250,7 +1298,7 @@ public:
 
 		struct Callback: public PooledUIUpdater::Broadcaster
 		{
-			Callback(TransportHandler* p, const var& f, bool sync, int numArgs);
+			Callback(TransportHandler* p, const String& name, const var& f, bool sync, int numArgs);
 
 			void call(var arg1, var arg2 = {}, var arg3 = {}, bool forceSynchronous = false);
 
@@ -1275,23 +1323,26 @@ public:
 		// ======================================================================================
 
 		/** Registers a callback to tempo changes. */
-		void setOnTempoChange(bool sync, var f);
+		void setOnTempoChange(var sync, var f);
 
 		/** Registers a callback to transport state changes (playing / stopping). */
-		void setOnTransportChange(bool sync, var f);
+		void setOnTransportChange(var sync, var f);
 
 		/** Registers a callback to time signature changes. */
-		void setOnSignatureChange(bool sync, var f);
+		void setOnSignatureChange(var sync, var f);
 
 		/** Registers a callback to changes in the musical position (bars / beats). */
-		void setOnBeatChange(bool sync, var f);
+		void setOnBeatChange(var sync, var f);
 
 		/** Registers a callback to changes in the grid. */
-		void setOnGridChange(bool sync, var f);
+		void setOnGridChange(var sync, var f);
 
 		/** Enables a high precision grid timer. */
 		void setEnableGrid(bool shouldBeEnabled, int tempoFactor);
 
+        /** Sets the internal clock to stop when the external clock was stopped. */
+        void stopInternalClockOnExternalStop(bool shouldStop);
+        
 		/** Starts the internal master clock. */
 		void startInternalClock(int timestamp);
 
@@ -1300,6 +1351,9 @@ public:
 
 		/** Sets the sync mode for the global clock. */
 		void setSyncMode(int syncMode);
+
+		/** sends a message on the next grid callback to resync the external clock. */
+		void sendGridSyncOnNextCallback();
 
 	private:
 
@@ -1336,7 +1390,7 @@ public:
 
 		void tempoChanged(double newTempo) override;
 
-		void onTransportChange(bool isPlaying) override;
+		void onTransportChange(bool isPlaying, double ppqPosition) override;
 
 		void onBeatChange(int newBeat, bool isNewBar) override;
 
@@ -1486,6 +1540,9 @@ public:
 		/** Returns a file object from an absolute path (eg. C:/Windows/MyProgram.exe). */
 		var fromAbsolutePath(String path);
 
+		/** Returns a file object for the given location type and the reference string which can either contain a wildcard like `{PROJECT_FOLDER}` or a full file path. */
+		var fromReferenceString(String referenceStringOrFullPath, var locationType);
+
 		/** Returns a list of all child files of a directory that match the wildcard. */
 		var findFiles(var directory, String wildcard, bool recursive);
 
@@ -1519,6 +1576,8 @@ public:
 		void browseInternally(File startFolder, bool forSaving, bool isDirectory, String wildcard, var callback);
 
 		File getFile(SpecialLocations l);
+
+		FileHandlerBase::SubDirectories getSubdirectory(var locationType);
 
 		struct Wrapper;
 

@@ -235,6 +235,7 @@ TemplateParameter::List TemplateParameter::ListOps::merge(const TemplateParamete
 	if (arguments.isEmpty() && parameters.isEmpty())
 		return parameters;
 
+#if JUCE_DEBUG
 	for (auto& a : arguments)
 	{
 		// The argument array must contain Template arguments only...
@@ -247,6 +248,7 @@ TemplateParameter::List TemplateParameter::ListOps::merge(const TemplateParamete
 		// (ParameterType::Type or ParameterType::Constant)
 		jassert(!p.isTemplateArgument());
 	}
+#endif
 
 	TemplateParameter::List instanceParameters;
 
@@ -254,6 +256,8 @@ TemplateParameter::List TemplateParameter::ListOps::merge(const TemplateParamete
 	auto numDefinedParameters = parameters.size();
 	auto lastArgIsVariadic = arguments.getLast().isVariadic();
 	auto lastParamIsVariadic = parameters.getLast().isVariadic();
+
+	ignoreUnused(lastParamIsVariadic);
 
 	if (numDefinedParameters > numArgs && !lastArgIsVariadic)
 	{
@@ -537,10 +541,12 @@ snex::jit::ComplexType::Ptr TemplatedComplexType::createTemplatedInstance(const 
 		}
 	}
 
+#if JUCE_DEBUG
 	for (auto& p : instanceParameters)
 	{
 		jassert(p.isResolvedOrTemplateType());
 	}
+#endif
 
 	TemplateObject::ConstructData instanceData = d;
 	instanceData.tp = instanceParameters;

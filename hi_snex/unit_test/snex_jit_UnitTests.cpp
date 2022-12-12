@@ -342,7 +342,7 @@ public:
 
 	ProcessType::ChannelDataType makeChannelData()
 	{
-		return Types::ProcessDataHelpers<NumChannels>::makeChannelData(data);
+		return Types::ProcessDataHelpers<NumChannels>::makeChannelData(data, -1);
 	}
 
 	ProcessTestCase(UnitTest* test, GlobalScope& memory, const juce::String& code)
@@ -359,8 +359,8 @@ public:
 		b.addEvent(on);
 		b.addEvent(off);
 		
-		auto cd = Types::ProcessDataHelpers<NumChannels>::makeChannelData(data);
-		int numSamples = Types::ProcessDataHelpers<NumChannels>::getNumSamplesForConsequentData(data);
+		auto cd = Types::ProcessDataHelpers<NumChannels>::makeChannelData(data, -1);
+		int numSamples = Types::ProcessDataHelpers<NumChannels>::getNumSamplesForConsequentData(data, -1);
 		ProcessType d(cd.begin(), numSamples);
 		
 		d.setEventBuffer(b);
@@ -470,47 +470,6 @@ public:
 #define START_BENCHMARK const double start = Time::getMillisecondCounterHiRes();
 #define STOP_BENCHMARK_AND_LOG const double end = Time::getMillisecondCounterHiRes(); logPerformanceMessage(m->executionTime, end - start);
 
-namespace AccessTestClasses
-{
-struct A
-{
-	SN_GET_SELF_AS_OBJECT(A);
-
-	static constexpr int getValue() { return 3; }
-};
-
-struct B
-{
-	SN_GET_SELF_AS_OBJECT(B);
-
-	static constexpr int getValue() { return 7; }
-};
-
-struct WrappedA
-{
-	SN_SELF_AWARE_WRAPPER(WrappedA, A);
-
-	static constexpr int getValue() { return A::getValue() * getOtherValue(); };
-	static constexpr int getOtherValue() { return 8; }
-
-	A obj;
-};
-
-template <typename T> struct OpaqueT
-{
-	SN_OPAQUE_WRAPPER(OpaqueT, T);
-
-	static constexpr int getValue() { return T::getValue() * 5; };
-
-	T obj;
-};
-
-using OpaqueB = OpaqueT<B>;
-using OpaqueSquare = OpaqueT<OpaqueT<B>>;
-using OpaqueAccessible = OpaqueT<WrappedA>;
-
-
-}
 #endif
 
 
@@ -522,44 +481,6 @@ public:
 
 	HiseJITUnitTest() : UnitTest("HiseJIT UnitTest", "snex") {}
 
-#if INCLUDE_SNEX_BIG_TESTSUITE
-	void testAccessWrappers()
-	{
-#define expect_access(expr, result, error) expectEquals<int>(expr, result, error);
-#define test_constexpr(expr, result, error) static_assert(expr == (result), error);
-#define test_and_constexpr(expr, result, error) expect_access(expr, result, error); test_constexpr(expr, result, error);
-
-		constexpr AccessTestClasses::A a;
-		constexpr AccessTestClasses::WrappedA wa;
-		constexpr AccessTestClasses::B b;
-		constexpr AccessTestClasses::OpaqueB wb;
-		constexpr AccessTestClasses::OpaqueSquare os;
-
-		constexpr AccessTestClasses::OpaqueAccessible oa;
-
-		test_and_constexpr(a.getValue(), 3, "A doesn't work");
-		test_and_constexpr(wa.getValue(), 3 * 8, "WrappedA doesn't work");
-		test_and_constexpr(wa.getWrappedObject().getValue(), 3, "WrappedObject::getWrappedObject doesn't return wrapped object");
-		test_and_constexpr(wa.getObject().getValue(), 3 * 8, "WrappedA::getObject() doesn't return itself");
-
-
-		test_and_constexpr(b.getValue(), 7, "B doesn't work");
-		test_and_constexpr(wb.getValue(), 7 * 5, "OpaqueB doesn't work");
-		test_and_constexpr(wb.getObject().getValue(), 7, "OpaqueB::getObject() doesn't return wrapped object");
-
-		test_and_constexpr(os.getValue(), 7 * 5 * 5, "OpaqueSquare doesn't work");
-
-		test_and_constexpr(os.getWrappedObject().getValue(), 7, "OpaqueSquare::getObject() doesn't return most nested object");
-
-		test_and_constexpr(oa.getValue(), 120, "OpaqueAccessible doesn't work");
-
-		test_and_constexpr(oa.getObject().getValue(), 8 * 3, "OpaqueAccesible::getObject() doesn't return accessible");
-
-		test_and_constexpr(oa.getWrappedObject().getValue(), 3, "OpaqueAccessible::getWrappedObject() doesn't work");
-
-		test_and_constexpr(oa.getObject().getOtherValue(), 8, "OpaqueAccessible::getObject part II");
-	}
-#endif
 	
 
 
@@ -599,62 +520,26 @@ public:
 
 	void testIndexTypes()
 	{
+        beginTest("Test index types");
+        
 		testIntegerIndex<index::looped<9, false>>();
 		testIntegerIndex<index::looped<64, false>>();
-		testIntegerIndex<index::looped<32, true>>();
-		testIntegerIndex<index::looped<51, true>>();
-
-#if TEST_ALL_INDEXES
 		testIntegerIndex<index::wrapped<32, false>>();
 		testIntegerIndex<index::wrapped<91, false>>();
-		testIntegerIndex<index::wrapped<64, true>>();
-		testIntegerIndex<index::wrapped<51, true>>();
 		testIntegerIndex<index::clamped<32, false>>();
 		testIntegerIndex<index::clamped<91, false>>();
-		testIntegerIndex<index::clamped<64, true>>();
-		testIntegerIndex<index::clamped<51, true>>();
-		testIntegerIndex<index::unsafe<32, false>>();
 		testIntegerIndex<index::unsafe<91, false>>();
 		testIntegerIndex<index::unsafe<64, true>>();
-		testIntegerIndex<index::unsafe<51, true>>();
-#endif
 	}
 
 	void runTest() override
 	{
-		
-
-		return;
-		beginTest("Funky");
-		optimizations = OptimizationIds::getAllIds();
-        testIndexTypes();
-		runTestFiles("");
-		return;
-
-		optimizations = OptimizationIds::getAllIds();
-		testIndexTypes();
-		runTestFiles("mono_sample2");
-		//runTestFiles("");
-		
-		
-		return;
-
-		testSpanOperators();
-
-		optimizations = OptimizationIds::getDefaultIds();
-		
-
-		return;
-#if INCLUDE_SNEX_BIG_TESTSUITE
-		
 		optimizations = {};
 		testOptimizations();
 		testInlining();
 
 		runTestsWithOptimisation({});
-		runTestsWithOptimisation(OptimizationIds::getDefaultIds());
 		runTestsWithOptimisation(OptimizationIds::getAllIds());
-#endif
 	}
 
 #if INCLUDE_SNEX_BIG_TESTSUITE
@@ -868,7 +753,7 @@ public:
 		testMacOSRelocation();
 
 		testExternalFunctionCalls();
-		testAccessWrappers();
+		
 		testEvents();
 
 		runTestFiles();
@@ -919,8 +804,13 @@ public:
 			if (!isFolder && soloTest.isNotEmpty() && f.getFileName() != soloTest)
 				continue;
 
+#if JUCE_DEBUG
 			if (printDebugInfoForSingleTest)
+			{
 				DBG(f.getFileName());
+			}
+#endif
+				
 
 			int numInstances = ComplexType::numInstances;
 
@@ -2218,7 +2108,9 @@ private:
 		else
 		{
 			auto diff = abs((double)actual - (double)expected);
-			expect(diff < 0.00001, errorMessage);
+			expect(diff < 0.0001, errorMessage);
+            
+            
 		}
 	}
 
@@ -2297,7 +2189,7 @@ private:
 		JitRuntime rt;
 		CodeHolder ch;
 
-		ok = ch.init(rt.codeInfo());
+        ok = ch.init(rt.environment());
 
 
 		X86Compiler cc(&ch);
@@ -2306,7 +2198,7 @@ private:
 		sig.setRetT<double>();
 		sig.addArgT<double>();
 
-		cc.addFunc(sig);
+		auto funcNode = cc.addFunc(sig);
 
 		auto r1 = cc.newXmmSd();
 		
@@ -2314,7 +2206,7 @@ private:
 		
 		st.setSize(8);
 
-		cc.setArg(0, r1);
+		funcNode->setArg(0, r1);
 
 		cc.movsd(st, r1);
 		cc.fld(st);
@@ -2351,7 +2243,7 @@ private:
         JitRuntime rt;
         CodeHolder ch;
         
-        ok = ch.init(rt.codeInfo());
+        ok = ch.init(rt.environment());
         
         
         X86Compiler cc(&ch);
@@ -2360,7 +2252,7 @@ private:
         sig.setRetT<float>();
         sig.addArgT<float>();
         
-        cc.addFunc(sig);
+        auto funcNode = cc.addFunc(sig);
         
         // a dummy external data location
         float x = 18.0f;
@@ -2382,7 +2274,7 @@ private:
         
         //auto mem = cc.newFloatConst(ConstPool::kScopeLocal, 18.0f);
         
-        ok = cc.setArg(0, r1);
+        funcNode->setArg(0, r1);
         ok = cc.movss(r1, mem);
         cc.ret(r1);
         
@@ -3537,7 +3429,7 @@ private:
 
 		span<float, 2> d1 = { 5.0f, 6.0f };
 		span<float, 3> d2 = { 5.0f, 6.0f };
-		float s = 0.8;
+		auto s = 0.8f;
 		expectEquals<float>(d1[0], 5.0f, "init assign1");
 		expectEquals<float>(d1[1], 6.0f, "init assign2");
 

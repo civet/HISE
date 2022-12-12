@@ -60,11 +60,6 @@ namespace FactoryIds
 	{
 		return id.toString() == "container::multi";
 	}
-
-	static bool isParameter(const NamespacedIdentifier& id)
-	{
-		return id.getParent().getIdentifier() == parameter;
-	}
 };
 
 struct CloneHelpers
@@ -401,8 +396,6 @@ Node::Ptr ValueTreeBuilder::getNode(const ValueTree& n, bool allowZeroMatch)
 	}
 	else
 	{
-		
-
 		if (allowZeroMatch)
 			return nullptr;
 		else
@@ -411,8 +404,6 @@ Node::Ptr ValueTreeBuilder::getNode(const ValueTree& n, bool allowZeroMatch)
 			e.v = n;
 			e.errorMessage = "Can't find node";
 			throw e;
-
-			RETURN_IF_NO_THROW(nullptr);
 		}
 	}
 }
@@ -431,8 +422,6 @@ Node::Ptr ValueTreeBuilder::getNode(const NamespacedIdentifier& id, bool allowZe
 	Error e;
 	e.errorMessage = "Can't find node " + id.toString();
 	throw e;
-
-	RETURN_IF_NO_THROW(nullptr);
 }
 
 
@@ -466,7 +455,25 @@ Node::Ptr ValueTreeBuilder::parseNode(const ValueTree& n)
 		newNode = wrapNode(newNode, NamespacedIdentifier::fromString("wrap::no_process"));
 	}
 
-	return parseRoutingNode(newNode);
+	return parseFaustNode(newNode);
+}
+
+Node::Ptr ValueTreeBuilder::parseFaustNode(Node::Ptr u)
+{
+	if (u->nodeTree[PropertyIds::FactoryPath].toString() == "core.faust")
+	{
+		auto nodeProperties = u->nodeTree.getChildWithName(PropertyIds::Properties);
+		auto faustClass = nodeProperties.getChildWithProperty(PropertyIds::ID, PropertyIds::ClassId.toString())[PropertyIds::Value].toString();
+		auto faustPath = "project::" + faustClass;
+		u = createNode(u->nodeTree, getNodeId(u->nodeTree).getIdentifier(), faustPath);
+		// add Template argument "NV" (polyphony)
+		u->addTemplateIntegerArgument("NV", true);
+
+		faustClassIds->insert(faustClass);
+		DBG("Exporting faust scriptnode, class: " + faustClass);
+	}
+		
+	return parseRoutingNode(u);
 }
 
 Node::Ptr ValueTreeBuilder::parseRoutingNode(Node::Ptr u)
@@ -476,7 +483,80 @@ Node::Ptr ValueTreeBuilder::parseRoutingNode(Node::Ptr u)
 
 	if (np.getIdentifier() == Identifier("matrix"))
 	{
-		jassertfalse;
+		auto mid = getNodeId(u->nodeTree).getIdentifier().toString();
+
+		mid << "_matrix";
+
+		auto b64 = ValueTreeIterator::getNodeProperty(u->nodeTree, PropertyIds::EmbeddedData).toString();
+
+		MemoryBlock mb;
+		mb.fromBase64Encoding(b64);
+
+		auto v = ValueTree::readFromGZIPData(mb.getData(), mb.getSize());
+
+		Array<int> channelIndexes;
+		Array<int> sendChannelIndexes;
+
+		bool hasSendConnections = false;
+
+		if (v.isValid())
+		{
+			for (int i = 0; i < numChannelsToCompile; i++)
+			{
+				Identifier c("Channel" + String(i));
+				Identifier s("Send" + String(i));
+
+				channelIndexes.add(v.getProperty(c, i));
+				auto si = (int)v.getProperty(s, -1);
+				hasSendConnections |= (si != -1);
+
+				sendChannelIndexes.add(si);
+			}
+		}
+
+		String bc = "routing::static_matrix<";
+		bc << String(numChannelsToCompile) << ", " << mid << ", " << (hasSendConnections ? "true" : "false") << ">";
+
+		Array<NamespacedIdentifier> bc2 = { NamespacedIdentifier::fromString(bc) };
+
+		Struct mClass(*this, Identifier(mid), bc2, {}, false);
+
+		String l1, l2;
+
+		l1 << "static constexpr int channels[" << String(numChannelsToCompile) << "] = ";
+		*this << l1;
+		{
+			StatementBlock s(*this, true);
+			String initValues;
+
+			for (int i = 0; i < numChannelsToCompile; i++)
+			{
+				initValues << String(channelIndexes[i]) << ", ";
+			}
+
+			*this << initValues.upToLastOccurrenceOf(", ", false, false);
+		}
+
+		if (hasSendConnections)
+		{
+			l2 << "static constexpr int sendChannels[" << String(numChannelsToCompile) << "] = ";
+			*this << l2;
+			{
+				StatementBlock s(*this, true);
+				String initValues;
+
+				for (int i = 0; i < numChannelsToCompile; i++)
+				{
+					initValues << String(sendChannelIndexes[i]) << ", ";
+				}
+
+				*this << initValues.upToLastOccurrenceOf(", ", false, false);
+			}
+		}
+
+		mClass.flushIfNot();
+
+		*u << mClass;
 	}
 	else if (u->hasProperty(PropertyIds::IsRoutingNode, false))
 	{
@@ -616,7 +696,12 @@ Node::Ptr ValueTreeBuilder::parseContainer(Node::Ptr u)
 
 		auto realPath = u->nodeTree[PropertyIds::FactoryPath].toString().fromFirstOccurrenceOf("container.", false, false);
 
-        ScopedChannelSetter sns(*this, numToUse, false);
+        auto isSidechain = realPath.startsWith("sidechain");
+        
+        if(isSidechain)
+            numToUse *= 2;
+        
+        ScopedChannelSetter sns(*this, numToUse, isSidechain);
         
 		for (auto c : u->nodeTree.getChildWithName(PropertyIds::Nodes))
         {
@@ -646,12 +731,25 @@ Node::Ptr ValueTreeBuilder::parseContainer(Node::Ptr u)
 		}
 		if (realPath.startsWith("soft_bypass"))
 		{
-			u = wrapNode(u, NamespacedIdentifier::fromString("bypass::smoothed"));
+			auto smoothingTime = (int)ValueTreeIterator::getNodeProperty(u->nodeTree, PropertyIds::SmoothingTime);
+
+			if (smoothingTime == 0)
+				smoothingTime = 20;
+
+			u = wrapNode(u, NamespacedIdentifier::fromString("bypass::smoothed"), smoothingTime);
 		}
 		if (useSpecialWrapper && realPath.startsWith("midi"))
 		{
 			u = wrapNode(u, NamespacedIdentifier::fromString("wrap::event"));
 		}
+		if (realPath.startsWith("offline"))
+		{
+			u = wrapNode(u, NamespacedIdentifier::fromString("wrap::offline"));
+		}
+        if (isSidechain)
+        {
+            u = wrapNode(u, NamespacedIdentifier::fromString("wrap::sidechain"));
+        }
 		if (realPath.startsWith("no_midi"))
 		{
 			u = wrapNode(u, NamespacedIdentifier::fromString("wrap::no_midi"));
@@ -659,6 +757,20 @@ Node::Ptr ValueTreeBuilder::parseContainer(Node::Ptr u)
 		if (useSpecialWrapper && realPath.startsWith("fix"))
 		{
 			auto bs = realPath.fromFirstOccurrenceOf("fix", false, false).getIntValue();
+            
+            if(bs == 0)
+            {
+                // fetch the block size from the property
+                bs = ValueTreeIterator::getNodeProperty(u->nodeTree, PropertyIds::BlockSize);
+            }
+            
+            if(bs == 0 || !isPowerOfTwo(bs))
+            {
+                Error e;
+                e.errorMessage << "Illegal block size for fix_block container: " << String(bs);
+                throw e;
+            }
+            
 			u = wrapNode(u, NamespacedIdentifier::fromString("wrap::fix_block"), bs);
 		}
 		if (useSpecialWrapper && realPath.startsWith("oversample"))
@@ -822,14 +934,6 @@ void ValueTreeBuilder::parseContainerParameters(Node::Ptr c)
 	auto pTree = c->nodeTree.getChildWithName(PropertyIds::Parameters);
 	auto numParameters = pTree.getNumChildren();
 
-    if(c->isRootNode() && numParameters > OpaqueNode::NumMaxParameters)
-    {
-        Error e;
-        e.v = c->nodeTree;
-        e.errorMessage = "Too many parameters in the root node.\n> If you need that many parameters, raise the `OpaqueNode::NumMaxParameter` constant in `hi_dsp_library/node_api/nodes/OpaqueNode.h` and recompile HISE.";
-        throw e;
-    }
-    
 	Namespace n(*this, c->scopedId.getIdentifier().toString() + "_parameters", !ValueTreeIterator::hasRealParameters(c->nodeTree));
 
 	if(numParameters == 0)
@@ -1835,8 +1939,6 @@ snex::cppgen::Node::Ptr ValueTreeBuilder::RootContainerBuilder::parse()
 		{
 			StatementBlock sb(parent);
 
-			int index = 0;
-
 			parent.addComment("Node References", Base::CommentType::FillTo80Light);
 			
 			createStackVariablesForChildNodes();
@@ -1952,17 +2054,9 @@ void ValueTreeBuilder::RootContainerBuilder::addDefaultParameters()
 
 	for (auto sv : stackVariables)
 	{
-		int pIndex = 0;
-
 		auto child = sv->nodeTree;
 
-        auto isCloneContainer = CloneHelpers::isCloneContainer(child);
-        
 		auto pTree = child.getChildWithName(PropertyIds::Parameters);
-
-		
-
-		auto numParameters = getNumParametersToInitialise(child);
 
 		for (auto p : pTree)
 		{
@@ -2089,16 +2183,12 @@ void ValueTreeBuilder::RootContainerBuilder::addMetadata()
 
 	parent.addEmptyLine();
 
-	auto numChannels = parent.numChannelsToCompile;
-
 	Macro(parent, "SNEX_METADATA_ID", { root->nodeTree[PropertyIds::ID].toString() });
 	Macro(parent, "SNEX_METADATA_NUM_CHANNELS", { String(parent.numChannelsToCompile) });
 
 	auto pCopy = root->nodeTree.getChildWithName(PropertyIds::Parameters).createCopy();
 
 	scriptnode::parameter::encoder encoder(pCopy);
-
-	int ssi = sizeof(NormalisableRange<double>);
 
 	cppgen::EncodedParameterMacro(parent, encoder);
 	m.flushIfNot();
@@ -2107,8 +2197,6 @@ void ValueTreeBuilder::RootContainerBuilder::addMetadata()
 
 void ValueTreeBuilder::RootContainerBuilder::addParameterConnections()
 {
-	auto index = 0;
-
 	auto pList = getContainersWithParameter();
 
 	if (!pList.isEmpty())
@@ -2667,10 +2755,51 @@ Node::Ptr ValueTreeBuilder::ComplexDataBuilder::parseExternalDataNode(ExternalDa
 	return wn;
 }
 
+bool needsMatrix(const ValueTree& nodeTree)
+{
+	int numThisTime = -1;
+	ExternalData::DataType dt = ExternalData::DataType::numDataTypes;
+	bool multipleDataTypes = false;
+
+	// Check if multiple data types are defined
+	ExternalData::forEachType([&](ExternalData::DataType t)
+	{
+		int num = ValueTreeIterator::getNumDataTypes(nodeTree, t);
+
+		if (num == 0)
+			return;
+
+		if (numThisTime == -1)
+		{
+			numThisTime = num;
+			dt = t;
+		}
+			
+		else if ( numThisTime != num)
+			multipleDataTypes = true;
+	});
+
+	if (multipleDataTypes)
+		return true;
+
+	for (int i = 0; i < numThisTime; i++)
+	{
+		auto slotIndex = ValueTreeIterator::getDataIndex(nodeTree, dt, i);
+
+		if (i != slotIndex)
+			return true;
+	}
+
+	return false;
+}
+
 Node::Ptr ValueTreeBuilder::ComplexDataBuilder::parseMatrixDataNode()
 {
 	if (ValueTreeIterator::getMaxDataTypeIndex(n->nodeTree, ExternalData::DataType::DisplayBuffer) > 0)
 		n = parseSingleDisplayBufferNode(true);
+
+	if (!needsMatrix(n->nodeTree))
+		return n;
 
 	Node::Ptr wn = new Node(parent, n->scopedId.id, NamespacedIdentifier("wrap::data"));
 	wn->nodeTree = n->nodeTree;
@@ -2685,14 +2814,6 @@ Node::Ptr ValueTreeBuilder::ComplexDataBuilder::parseMatrixDataNode()
 		numMax = jmax(numMax, ValueTreeIterator::getNumDataTypes(n->nodeTree, t));
 	});
 
-#if 0
-	auto numTables = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::Table);
-	auto numSliderPacks = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::SliderPack);
-	auto numAudioFiles = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::AudioFile);
-	auto numFilters = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::FilterCoefficients);
-	auto numDisplayBuffers = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::DisplayBuffer);
-	auto numMax = jmax(numTables, numSliderPacks, numAudioFiles, numFilters, numDisplayBuffers);
-#endif
 
 	auto sId = n->scopedId;
 	StringHelpers::addSuffix(sId, "_matrix");
@@ -2706,15 +2827,6 @@ Node::Ptr ValueTreeBuilder::ComplexDataBuilder::parseMatrixDataNode()
 		l << "static const int " << ExternalData::getNumIdentifier(t) << " = " << num << ";";
 		parent << l;
 	});
-
-#if 0
-	String l1, l2, l3, l4, l5;
-	l1 << "static const int NumTables = " << numTables << ";";
-	l2 << "static const int NumSliderPacks = " << numSliderPacks << ";";
-	l3 << "static const int NumAudioFiles = " << numAudioFiles << ";";
-	l3 << "static const int NumFilters = " << numFilters << ";";
-	l4 << "static const int NumDisplayBuffers = " << numDisplayBuffers << ";";
-#endif
 
 	String l5;
 	l5 << "const int matrix[3][" << numMax << "] =";
@@ -2888,37 +3000,35 @@ Node::Ptr ValueTreeBuilder::SnexNodeBuilder::parse()
 		throw e;
 	}
 
-	// You have to set a code provider
-	jassert(parent.codeProvider != nullptr);
-	code = parent.codeProvider->getCode(getNodePath(n->nodeTree), classId);
+	if (!parent.definedSnexClasses.contains(classId))
+	{
+		// You have to set a code provider
+		jassert(parent.codeProvider != nullptr);
+		code = parent.codeProvider->getCode(getNodePath(n->nodeTree), classId);
+
+		parent << code;
+		parent.addEmptyLine();
+		parent.definedSnexClasses.add(classId);
+	}
 
 	if (needsWrapper(p))
-	{
 		return parseWrappedSnexNode();
-	}
 	else
-	{
 		return parseUnwrappedSnexNode();
-	}
 }
 
 Node::Ptr ValueTreeBuilder::SnexNodeBuilder::parseWrappedSnexNode()
 {
 	Node::Ptr wn = new Node(parent, n->scopedId.id, p);
 	wn->nodeTree = n->nodeTree;
-	
-	parent << code;
-	parent.addEmptyLine();
-
+		
 	if (CustomNodeProperties::nodeHasProperty(wn->nodeTree, PropertyIds::IsPolyphonic))
 		wn->addTemplateIntegerArgument("NV", true);
 
 	UsingTemplate ud(parent, "unused", NamespacedIdentifier(classId));
 
 	if (wn->hasProperty(PropertyIds::TemplateArgumentIsPolyphonic))
-	{
 		ud.addTemplateIntegerArgument("NV", true);
-	}
 
 	*wn << ud;
 
@@ -2934,9 +3044,6 @@ Node::Ptr ValueTreeBuilder::SnexNodeBuilder::parseUnwrappedSnexNode()
 	wn->nodeTree = n->nodeTree;
 
 	wn->addTemplateIntegerArgument("NV", true);
-
-	parent << code;
-	parent.addEmptyLine();
 
 	return wn;
 }

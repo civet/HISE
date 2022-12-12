@@ -39,6 +39,8 @@ void MarkdownParser::parse()
 {
 	try
 	{
+		containsLinks = false;
+
 		if (it.getRestString().startsWith("---"))
 		{
 			parseMarkdownHeader();
@@ -384,6 +386,7 @@ void MarkdownParser::parseText(bool stopAtEndOfLine)
 					hyperLink.valid = true;
 
 					currentLinks.add(std::move(hyperLink));
+					containsLinks = true;
 				}
 				else
 				{
@@ -615,9 +618,21 @@ void MarkdownParser::parseTable()
 
 	it.peek();
 
+	bool first = true;
+	
 	while (!Helpers::isEndOfLine(it.peek()))
 	{
 		skipTagAndTrailingSpace();
+
+		if (first)
+		{
+			auto isHeadless = (it.peek() == '-' || it.peek() == '=');
+
+			if (isHeadless)
+				break;
+
+			first = false;
+		}
 
 		resetForNewLine();
 		resetCurrentBlock();

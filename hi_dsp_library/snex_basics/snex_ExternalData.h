@@ -439,6 +439,8 @@ struct ExternalData
 		return std::is_same<B, D>() || std::is_base_of<B, D>();
 	}
 
+	static DataType getDataTypeForId(const Identifier& id, bool plural=false);
+
 	template <class DataClass> static constexpr DataType getDataTypeForClass()
 	{
 		if (isSameOrBase<hise::Table, DataClass>())
@@ -912,7 +914,13 @@ template <bool EnableBuffer> struct display_buffer_base : public base,
 		if (rb != nullptr)
 		{
 			auto numSamples = rb->getReadBuffer().getNumSamples();
+
+			ignoreUnused(numSamples);
+			
+#if !HI_EXPORT_AS_PROJECT_DLL
+			// We can only reallocate here if we're not in the dll memory space
 			rb->setRingBufferSize(ps.numChannels, numSamples);
+#endif
 			rb->setSamplerate(ps.sampleRate);
 		}
 	}

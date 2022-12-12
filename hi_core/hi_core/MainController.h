@@ -493,6 +493,8 @@ public:
 		void addPresetLoadListener(PresetLoadListener* l)
 		{
 			presetLoadListeners.addIfNotAlreadyThere(l);
+
+			l->newHisePresetLoaded();
 		}
 
 		void removePresetLoadListener(PresetLoadListener* l)
@@ -580,6 +582,25 @@ public:
 	{
 	public:
 
+        struct ScopedInternalPresetLoadSetter: public ControlledObject
+        {
+            ScopedInternalPresetLoadSetter(MainController* mc):
+              ControlledObject(mc)
+            {
+                auto& flag = getMainController()->getUserPresetHandler().isInternalPresetLoadFlag;
+                prevValue = flag;
+                flag = true;
+            }
+            
+            ~ScopedInternalPresetLoadSetter()
+            {
+                getMainController()->getUserPresetHandler().isInternalPresetLoadFlag = prevValue;
+            }
+            
+            
+            bool prevValue;
+        };
+        
 		struct StoredModuleData : public ReferenceCountedObject
 		{
 			using Ptr = ReferenceCountedObjectPtr<StoredModuleData>;
@@ -601,14 +622,21 @@ public:
 			JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StoredModuleData);
 		};
 
-		struct CustomAutomationData : public ReferenceCountedObject
+		struct CustomAutomationData : public ReferenceCountedObject,
+									  public ControlledObject
 		{
+			using WeakPtr = WeakReference<CustomAutomationData>;
 			using Ptr = ReferenceCountedObjectPtr<CustomAutomationData>;
 			using List = ReferenceCountedArray<CustomAutomationData>;
 
-			CustomAutomationData(MainController* mc, int index_, const var& d);
+			CustomAutomationData(CustomAutomationData::List newList, MainController* mc, int index_, const var& d);
 
-			void call(float newValue);
+			
+
+			void updateFromConnectionValue(int preferredIndex);
+
+			bool isConnectedToMidi() const;
+			bool isConnectedToComponent() const;
 
 			const int index;
 			Identifier id;
@@ -622,22 +650,78 @@ public:
 			LambdaBroadcaster<var*> syncListeners;
 			LambdaBroadcaster<int, float> asyncListeners;
 
-			struct ProcessorConnection
+			struct ConnectionBase: public ReferenceCountedObject
+			{
+				using Ptr = ReferenceCountedObjectPtr<ConnectionBase>;
+				using List = ReferenceCountedArray<ConnectionBase>;
+				
+				virtual ~ConnectionBase() {};
+				
+				virtual bool isValid() const = 0;
+				virtual void call(float v) const = 0;
+
+				virtual String getDisplayString() const = 0;
+
+				virtual float getLastValue() const = 0;
+
+				operator bool() const { return isValid(); }
+			};
+
+			void call(float newValue, bool sendToListeners = true, const std::function<bool(ConnectionBase*)>& connectionFilter = {});
+
+			ConnectionBase::Ptr parse(CustomAutomationData::List newList, MainController* mc, const var& jsonData);
+
+			struct MetaConnection : public ConnectionBase
+			{
+				void call(float v) const final override
+				{
+					target->call(v, true);
+				}
+
+				bool isValid() const final override
+				{
+					return target != nullptr;
+				}
+
+				String getDisplayString() const override
+				{
+					return "Automation: " + target->id;
+				}
+
+				float getLastValue() const final override
+				{
+					if (target != nullptr)
+						return target->lastValue;
+                    
+                    return 0.0;
+				}
+
+				CustomAutomationData::Ptr target;
+			};
+
+			struct CableConnection;
+
+			struct ProcessorConnection : public ConnectionBase
 			{
 				WeakReference<Processor> connectedProcessor;
 				int connectedParameterIndex = -1;
 
-				operator bool() const
+				bool isValid() const final override
 				{
 					return connectedProcessor != nullptr && connectedParameterIndex != -1;
 				}
 
-				void call(float v) const;
+				String getDisplayString() const final override;
+
+				float getLastValue() const final override;
+
+				void call(float v) const final override;
 			};
 
-			Array<ProcessorConnection> processorConnections;
+			ConnectionBase::List connectionList;
 
 			JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CustomAutomationData);
+			JUCE_DECLARE_WEAK_REFERENCEABLE(CustomAutomationData);
 		};
 
 		struct UndoableUserPresetLoad : public ControlledObject,
@@ -768,6 +852,8 @@ public:
 		/** @internal */
 		void sendRebuildMessage();
 
+        bool isInternalPresetLoad() const { return isInternalPresetLoadFlag; }
+        
 		bool isUsingCustomDataModel() const { return isUsingCustomData; };
 		
 		bool isUsingPersistentObject() const { return usePersistentObject; }
@@ -789,9 +875,11 @@ public:
 
 		StringArray getCustomAutomationIds() const;
 
-		CustomAutomationData::Ptr getCustomAutomationData(const Identifier& id);
+		int getNumCustomAutomationData() const { return customAutomationData.size(); }
 
-		CustomAutomationData::Ptr getCustomAutomationData(int index);
+		CustomAutomationData::Ptr getCustomAutomationData(const Identifier& id) const;
+
+		CustomAutomationData::Ptr getCustomAutomationData(int index) const;
 
 		StoredModuleData::List& getStoredModuleData() { return storedModuleData; }
 
@@ -819,6 +907,8 @@ public:
 		bool setCustomAutomationData(CustomAutomationData::List newList);
 
 		void setUseCustomDataModel(bool shouldUseCustomModel, bool usePersistentObject);
+
+		LambdaBroadcaster<bool> deferredAutomationListener;
 
 #if READ_ONLY_FACTORY_PRESETS
 	private:
@@ -865,6 +955,7 @@ public:
 
 		bool isUsingCustomData = false;
 		bool usePersistentObject = false;
+        bool isInternalPresetLoadFlag = false;
 
 		CustomAutomationData::List customAutomationData;
 
@@ -1090,6 +1181,7 @@ public:
 			MessageThread = 0,
 			SampleLoadingThread,
 			AudioThread,
+			AudioExportThread,
 			ScriptingThread,
 			numTargetThreads,
 			UnknownThread,
@@ -1112,6 +1204,8 @@ public:
 		/** Returns false if there is a pending action somewhere that prevents clickless voice rendering. */
 		bool voiceStartIsDisabled() const;
 
+        bool isCurrentlyExporting() const { return threadIds[TargetThread::AudioExportThread] != nullptr; }
+        
 		/** Call this in the processBlock method and it will check whether voice starts are allowed.
 		*
 		*	It checks if anything is pending and if yes, voiceStartIsDisabled() will return true for the callback.
@@ -1139,6 +1233,8 @@ public:
 		TargetThread getCurrentThread() const;
 
 		void addThreadIdToAudioThreadList();
+
+		void removeThreadIdFromAudioThreadList();
 
 		bool test() const noexcept override;
 
@@ -1175,7 +1271,8 @@ public:
 
 		bool handleBufferDuringSuspension(AudioSampleBuffer& b);
 
-		
+        void setCurrentExportThread(void* exportThread);
+        
 	private:
 
 		friend class SuspendHelpers::ScopedTicket;
@@ -1374,8 +1471,11 @@ public:
 	void loadPresetFromValueTree(const ValueTree &v, Component *mainEditor=nullptr);
     void clearPreset();
     
+
 	/** Compiles all scripts in the main synth chain */
 	void compileAllScripts();
+
+	void sendToMidiOut(const HiseEvent& e);
 
 	/** Call this if you want all voices to stop. */
 	void allNotesOff(bool resetSoftBypassState=false);;
@@ -1485,24 +1585,53 @@ public:
 	
 	void setWatchedScriptProcessor(JavascriptProcessor *p, Component *editor);
 
+	/** Use this and the main controller will ignore all threading issues and just does what it wants until the
+		bad babysitter leaves the scope.
 	
-
-#endif
-
-	void setAllowFlakyThreading(bool shouldAllowWeirdThreadingStuff)
+		This is mostly used for creating objects during documentation generation or other non-critical tasks
+		which couldn't care less about race conditions...
+	*/
+	struct ScopedBadBabysitter
 	{
-		flakyThreadingAllowed = shouldAllowWeirdThreadingStuff;
-	}
+		ScopedBadBabysitter(MainController* mc_):
+			mc(mc_),
+			prevValue(mc->flakyThreadingAllowed)
+		{
+			mc->flakyThreadingAllowed = true;
+		}
+		
+		~ScopedBadBabysitter()
+		{
+			mc->flakyThreadingAllowed = prevValue;
+		}
+
+		MainController* mc;
+		bool prevValue;
+	};
 
 	bool isFlakyThreadingAllowed() const noexcept 
 	{ 
 		return flakyThreadingAllowed; 
 	}
 
+#else
+
+	/** There is no use for a bad babysitter in exported projects so this is just a dummy class. */
+	struct ScopedBadBabysitter
+	{
+		ScopedBadBabysitter(MainController*) {};
+	};
+
+	bool isFlakyThreadingAllowed() const noexcept
+	{
+		return false;
+	}
+
+#endif
+
+
 	void setPlotter(Plotter *p);
 
-	void setCurrentViewChanged();
-	
 	DynamicObject *getGlobalVariableObject() { return globalVariableObject.get(); };
 
 	DynamicObject *getHostInfoObject() { return hostInfo.get(); }
@@ -1521,6 +1650,14 @@ public:
 		minimumSamplerate = jlimit<double>(1.0, 96000.0 * 4.0, newMinimumSampleRate);
 		return refreshOversampling();
 	}
+
+	void setMaximumBlockSize(int newBlockSize);
+
+	/** Returns the maximum block size that HISE will use for its process callback. 
+	
+		It defaults to HISE_MAX_PROCESSING_BLOCKSIZE (which is 512) but it can be set with Engine.setMaximumBlockSize()
+	*/
+	int getMaximumBlockSize() const { return maximumBlockSize; }
 
 	/** Returns the time that the plugin spends in its processBlock method. */
 	float getCpuUsage() const {return usagePercent.load();};
@@ -1542,6 +1679,8 @@ public:
 			lastActiveEditor->repaint();
 	}
 
+    UndoManager* getLocationUndoManager() { return &locationUndoManager; }
+    
 	Component* getLastActiveEditor()
 	{
 		return lastActiveEditor.getComponent();
@@ -1580,7 +1719,19 @@ public:
     
     float getGlobalCodeFontSize() const;;
     
+	
 
+	bool isUsingDynamicBufferSize() const
+	{
+#if USE_BACKEND
+		return simulateDynamicBufferSize;
+#else
+		return false;
+#endif
+	}
+
+    ReferenceCountedObject* getGlobalPreprocessor();
+    
 	bool shouldAbortMessageThreadOperation() const noexcept
 	{
 		return false;
@@ -1595,6 +1746,11 @@ public:
     {
         globalPitchFactor = pow(2, pitchFactorInSemiTones / 12.0);
     }
+
+	void setGlobalMidiPlaybackSpeed(double newGlobalPlaybackSpeed)
+	{
+		globalPlaybackSpeed = newGlobalPlaybackSpeed;
+	}
     
     /** This returns the global pitch factor. 
     *
@@ -1614,6 +1770,11 @@ public:
         return log2(globalPitchFactor) * 12.0;
     }
     
+	double getGlobalPlaybackSpeed() const
+	{
+		return globalPlaybackSpeed;
+	}
+
 	bool &getPluginParameterUpdateState() { return enablePluginParameterUpdate; }
 
 	const CriticalSection& getIteratorLock() const { return iteratorLock; }
@@ -1685,11 +1846,13 @@ private: // Never call this directly, but wrap it through DelayedRenderer...
 	/** This is the main processing loop that is shared among all subclasses. */
 	void processBlockCommon(AudioSampleBuffer &b, MidiBuffer &mb);
 
-	/** Sets the sample rate for the cpu meter. */
-	void prepareToPlay(double sampleRate_, int samplesPerBlock);
+	
 
 protected:
 
+    /** Sets the sample rate for the cpu meter. */
+    void prepareToPlay(double sampleRate_, int samplesPerBlock);
+    
 	bool deletePendingFlag = false;
 
 	/** sets the new BPM and sends a message to all registered tempo listeners if the tempo changed. */
@@ -1738,13 +1901,16 @@ protected:
 
 	void killAndCallOnLoadingThread(const ProcessorFunction& f);
 
+	
 
 	void setMaxEventTimestamp(int newMaxTimestamp)
 	{
 		maxEventTimestamp = newMaxTimestamp;
 	}
 
-	
+#if USE_BACKEND
+	bool simulateDynamicBufferSize = false;
+#endif
 
 private:
 
@@ -1754,12 +1920,14 @@ private:
 
 	bool refreshOversampling();
 
-	double getOriginalSamplerate() const { return sampleRate / getOversampleFactor(); }
+	double getOriginalSamplerate() const { return originalSampleRate; }
 
-	int getOriginalBufferSize() const { return (int)((double)maxBufferSize.get() / getOversampleFactor()); }
+	int getOriginalBufferSize() const { return originalBufferSize; }
 
 	int getOversampleFactor() const { return currentOversampleFactor; }
 	
+	void processMidiOutBuffer(MidiBuffer& mb, int numSamples);
+
 
 #if HISE_INCLUDE_RLOTTIE
 	ScopedPointer<RLottieManager> rLottieManager;
@@ -1807,6 +1975,8 @@ private:
 	UnorderedStack<HiseEvent> suspendedNoteOns;
 
 	HiseEventBuffer masterEventBuffer;
+	SimpleReadWriteLock midiOutputLock;
+	HiseEventBuffer outputMidiBuffer;
 	EventIdHandler eventIdHandler;
 	LockFreeDispatcher lockfreeDispatcher;
 	UserPresetHandler userPresetHandler;
@@ -1835,7 +2005,11 @@ private:
 
 	ScopedPointer<juce::dsp::Oversampling<float>> oversampler;
 	double minimumSamplerate = 0.0;
+	int maximumBlockSize = HISE_MAX_PROCESSING_BLOCKSIZE;
 	int currentOversampleFactor = 1;
+
+	int originalBufferSize = 0;
+	double originalSampleRate = 0.0;
 	
 	Array<CustomTypeFace> customTypeFaces;
 	ValueTree customTypeFaceData;
@@ -1849,6 +2023,8 @@ private:
 	ScopedPointer<ProjectDocDatabaseHolder> projectDocHolder;
 	WeakReference<MarkdownContentProcessor> currentPreview;
 
+    ReferenceCountedObjectPtr<ReferenceCountedObject> preprocessor;
+    
 	ScopedPointer<SampleManager> sampleManager;
 	ExpansionHandler expansionHandler;
 	
@@ -1859,7 +2035,7 @@ private:
 
 	Component::SafePointer<Plotter> plotter;
 
-	Atomic<int> maxBufferSize;
+	Atomic<int> processingBufferSize;
 
 	Atomic<int> cpuBufferSize;
 
@@ -1868,6 +2044,8 @@ private:
 	Atomic<int> presetLoadRampFlag;
 
 	AudioPlayHead::CurrentPositionInfo lastPosInfo;
+
+	double globalPlaybackSpeed = 1.0;
 
 	double fallbackBpm = -1.0;
 	double* hostBpmPointer = &fallbackBpm;
@@ -1878,6 +2056,7 @@ private:
 
 	Font globalFont;
 
+    UndoManager locationUndoManager;
 	Component::SafePointer<Component> lastActiveEditor;
 	int lastCharacterPositionOfSelectedEditor;
 
@@ -1927,10 +2106,12 @@ private:
     
     bool midiInputFlag;
 	
-	double sampleRate;
+	double processingSampleRate = 0.0;
     std::atomic<double> temp_usage;
 	int scrollY;
 	BigInteger shownComponents;
+
+
 
     // Make sure that this is alive all the time...
     snex::cppgen::CustomNodeProperties data;

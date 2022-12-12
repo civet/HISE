@@ -1728,6 +1728,9 @@ JavascriptCodeEditor::AutoCompletePopup::RowInfo::RowInfo(DebugInformationBase::
 
 hise::CommonEditorFunctions::EditorType* CommonEditorFunctions::as(Component* c)
 {
+	if (c == nullptr)
+		return nullptr;
+
 	if (auto e = dynamic_cast<EditorType*>(c))
 		return e;
 
@@ -1737,7 +1740,7 @@ hise::CommonEditorFunctions::EditorType* CommonEditorFunctions::as(Component* c)
 	{
 		for (int i = 0; i < c->getNumChildComponents(); i++)
 		{
-			if ((e = dynamic_cast<EditorType*>(c->getChildComponent(i))))
+			if ((e = dynamic_cast<EditorType*>(c->getChildComponent(i))) != nullptr)
 				return e;
 		}
 	}

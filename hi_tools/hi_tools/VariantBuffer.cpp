@@ -167,7 +167,6 @@ void VariantBuffer::addMethods()
 			if (n.numArguments == 0)
 			{
 				throw String("samplerate expected as first argument");
-				return var(0);
 			}
 
 			auto sampleRate = (double)n.arguments[0];
@@ -279,13 +278,16 @@ void VariantBuffer::addMethods()
 		{
 			int numSamples = bf->buffer.getNumSamples();
 
+			if (numSamples == 0)
+				return var(0.0f);
+
 			if (n.numArguments > 1)
-				numSamples = jmin(numSamples, (int)n.arguments[1]);
+				numSamples = jlimit(0, numSamples, (int)n.arguments[1]);
 
 			int offset = 0;
 
 			if (n.numArguments > 0)
-				offset = jmin((int)n.arguments[0], bf->buffer.getNumSamples() - numSamples);
+				offset = jlimit(0, jmax(0, bf->buffer.getNumSamples() - numSamples), (int)n.arguments[0]);
 
 			return var(bf->buffer.getMagnitude(0, offset, numSamples));
 		}
@@ -315,6 +317,31 @@ void VariantBuffer::addMethods()
 		return var(0);
 	});
 
+    setMethod("trim", [](const var::NativeFunctionArgs& n)
+    {
+        if(auto bf = n.thisObject.getBuffer())
+        {
+            int numToTrimFromStart = 0;
+            int numToTrimFromEnd = 0;
+            
+            if(n.numArguments > 0)
+                numToTrimFromStart = jlimit(0, bf->size - 1, (int)n.arguments[0]);
+            if(n.numArguments > 1)
+                numToTrimFromEnd = jlimit(0, bf->size - numToTrimFromStart, (int)n.arguments[1]);
+            
+            auto ptr = bf->buffer.getWritePointer(0, numToTrimFromStart);
+            auto newSize = bf->size - numToTrimFromStart - numToTrimFromEnd;
+            
+            auto newBuffer = new VariantBuffer(newSize);
+            
+            FloatVectorOperations::copy(newBuffer->buffer.getWritePointer(0), ptr, newSize);
+            
+            return var(newBuffer);
+        }
+        
+        return var();
+    });
+    
 	setMethod("getPeakRange", [](const var::NativeFunctionArgs& n)
 	{
 		Array<var> range;

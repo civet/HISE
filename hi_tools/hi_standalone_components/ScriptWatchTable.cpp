@@ -32,6 +32,50 @@
 
 namespace hise { using namespace juce;
 
+juce::var ScriptWatchTable::getColumnVisiblilityData() const
+{
+	Array<var> visibleColumns;
+
+	auto& header = table->getHeader();
+	auto numColumns = header.getNumColumns(true);
+
+	for (int i = 0; i < numColumns; i++)
+	{
+		auto id = header.getColumnIdOfIndex(i, true);
+		visibleColumns.add(header.getColumnName(id));
+	}
+
+	return var(visibleColumns);
+}
+
+void ScriptWatchTable::restoreColumnVisibility(const var& d)
+{
+	if (auto a = d.getArray())
+	{
+		auto& header = table->getHeader();
+		auto numColumns = header.getNumColumns(false);
+
+		for (int i = 0; i < numColumns; i++)
+			header.setColumnVisible(i, false);
+
+		for (const auto& v : *a)
+		{
+			auto name = v.toString();
+
+			for (int i = 0; i < numColumns; i++)
+			{
+				auto id = header.getColumnIdOfIndex(i, false);
+
+				if (header.getColumnName(id) == name)
+				{
+					header.setColumnVisible(id, true);
+					break;
+				}
+			}
+		}
+	}
+}
+
 ScriptWatchTable::ScriptWatchTable() :
 	rebuilder(this),
 	ApiComponentBase(nullptr),
@@ -80,6 +124,8 @@ ScriptWatchTable::ScriptWatchTable() :
 
 	table->addMouseListener(this, true);
 
+	
+
 	addAndMakeVisible(fuzzySearchBox = new TextEditor());
 
 	GlobalHiseLookAndFeel::setTextEditorColours(*fuzzySearchBox);
@@ -103,7 +149,7 @@ ScriptWatchTable::~ScriptWatchTable()
 
 void ScriptWatchTable::timerCallback()
 {
-	if (table != nullptr)
+	if (table != nullptr && isShowing())
 	{
 		refreshChangeStatus();
 	}
@@ -240,7 +286,9 @@ void ScriptWatchTable::applySearchFilter()
 				if (!viewInfo.matchesRoot(i))
 					return false;
 
-				if (i->name.contains(filterText) || filterText.isEmpty())
+				if (filterText.isEmpty() ||
+					i->name.containsIgnoreCase(filterText) ||
+					i->dataType.containsIgnoreCase(filterText))
 					filteredFlatList.add(i);
 
 				return false;
@@ -911,12 +959,15 @@ ScriptWatchTable::Info::Info(DebugInformationBase::Ptr di, Info* p_, int l /*= 0
 	
 	auto numElements = di->getNumChildElements();
 
-	for (int i = 0; i < numElements; i++)
+	if (l < 10)
 	{
-		if (auto li = di->getChildElement(i))
+		for (int i = 0; i < numElements; i++)
 		{
-			if (li->isWatchable())
-				children.add(new Info(li, this, l + 1));
+			if (auto li = di->getChildElement(i))
+			{
+				if (li->isWatchable())
+					children.add(new Info(li, this, l + 1));
+			}
 		}
 	}
 }

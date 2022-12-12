@@ -77,6 +77,8 @@ private:
 
 struct OscData
 {
+	OscData() = default;
+
 	void reset()
 	{
 		uptime = 0.0;
@@ -89,6 +91,11 @@ struct OscData
 			auto freq = e.getFrequency();
 			uptimeDelta = freq / sampleRate;
 		}
+	}
+
+	float getNyquistAttenuationGain() const noexcept
+	{
+		return (float)(1 - (int)((multiplier * uptimeDelta) > 1024.0));
 	}
 
 	double tick()
@@ -145,7 +152,7 @@ struct OscillatorDisplayProvider: public scriptnode::data::display_buffer_base<t
 
 		RingBufferComponentBase* createComponent() override;;
 
-		Path createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds) const override;
+		Path createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds, double ) const override;
 
 		bool validateInt(const Identifier& id, int& v) const override;
 		void transformReadBuffer(AudioSampleBuffer& b) override;

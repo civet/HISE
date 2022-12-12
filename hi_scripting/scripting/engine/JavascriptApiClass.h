@@ -265,7 +265,61 @@ public:
 
 	bool isAutocompleteable() const override { return true; }
 
+	void setFunctionIsInlineable(const Identifier& id)
+	{
+		inlineableFunctions.add(id);
+	}
+
+	bool isInlineableFunction(const Identifier& id) const
+	{
+		return inlineableFunctions.contains(id);
+	}
+
+	var getListOfOptimizableFunctions() const
+	{
+		Array<var> l;
+
+		for (auto o : optimizableFunctions)
+		{
+			if (o != nullptr)
+				l.add(var(dynamic_cast<ReferenceCountedObject*>(o.get())));
+		}
+
+		return var(l);
+	}
+
+	void addOptimizableFunction(const var& functionObject)
+	{
+		if (auto obj = dynamic_cast<DebugableObjectBase*>(functionObject.getObject()))
+		{
+			optimizableFunctions.addIfNotAlreadyThere(obj);
+		}
+	}
+
+	DebugableObjectBase::Location getCurrentLocationInFunctionCall()
+	{
+		return currentLocation;
+	}
+
+	void setWantsCurrentLocation(bool shouldSaveCurrentLocation)
+	{
+		wantsLocation = shouldSaveCurrentLocation;
+	}
+
+	bool wantsCurrentLocation() const { return wantsLocation; }
+
+	void setCurrentLocation(const String& file, int charNumber)
+	{
+		currentLocation.fileName = file;
+		currentLocation.charNumber = charNumber;
+	}
+
 private:
+
+	bool wantsLocation = false;
+	DebugableObjectBase::Location currentLocation;
+
+	Array<WeakReference<DebugableObjectBase>> optimizableFunctions;
 
 	// ================================================================================================================
 
@@ -302,6 +356,8 @@ private:
 	Constant* constantsToUse;
 
 	Array<Constant> constantBigStorage;
+
+	Array<Identifier> inlineableFunctions;
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ApiClass)
 

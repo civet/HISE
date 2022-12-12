@@ -291,18 +291,54 @@ namespace ScriptedDrawActions
 	{
 		fillRoundedRect(Rectangle<float> area_, float cornerSize_) :
 			area(area_), cornerSize(cornerSize_) {};
-		void perform(Graphics& g) { g.fillRoundedRectangle(area, cornerSize); };
+		void perform(Graphics& g) 
+		{ 
+			if(allRounded)
+				g.fillRoundedRectangle(area, cornerSize); 
+			else if (!rounded[0] && !rounded[1] && !rounded[2] && !rounded[3])
+				g.fillRect(area);
+			else
+			{
+				Path p;
+				p.addRoundedRectangle(area.getX(), area.getY(), area.getWidth(), area.getHeight(), 
+									  cornerSize, cornerSize, 
+									  rounded[0], rounded[1], rounded[2], rounded[3]);
+
+				g.fillPath(p);
+			}
+		};
 		Rectangle<float> area;
 		float cornerSize;
+
+		bool allRounded = true;
+		bool rounded[4] = { true, true, true, true };
 	};
 
 	struct drawRoundedRectangle : public DrawActions::ActionBase
 	{
 		drawRoundedRectangle(Rectangle<float> area_, float borderSize_, float cornerSize_) :
 			area(area_), borderSize(borderSize_), cornerSize(cornerSize_) {};
-		void perform(Graphics& g) { g.drawRoundedRectangle(area, cornerSize, borderSize); };
+		void perform(Graphics& g) 
+		{ 
+			if(allRounded)
+				g.drawRoundedRectangle(area, cornerSize, borderSize); 
+			else if (!rounded[0] && !rounded[1] && !rounded[2] && !rounded[3])
+				g.drawRect(area, borderSize);
+			else
+			{
+				Path p;
+				p.addRoundedRectangle(area.getX(), area.getY(), area.getWidth(), area.getHeight(),
+					cornerSize, cornerSize,
+					rounded[0], rounded[1], rounded[2], rounded[3]);
+
+				g.strokePath(p, PathStrokeType(borderSize));
+			}
+		};
 		Rectangle<float> area;
 		float cornerSize, borderSize;
+
+		bool allRounded = true;
+		bool rounded[4] = { true, true, true, true };
 	};
 
 	struct drawImageWithin : public DrawActions::ActionBase
@@ -347,6 +383,14 @@ namespace ScriptedDrawActions
 			y(y_), x1(x1_), x2(x2_) {};
 		void perform(Graphics& g) { g.drawHorizontalLine(y, x1, x2); };
 		int y; float x1; float x2;
+	};
+
+	struct drawVerticalLine : public DrawActions::ActionBase
+	{
+		drawVerticalLine(int x_, float y1_, float y2_) :
+			x(x_), y1(y1_), y2(y2_) {};
+		void perform(Graphics& g) { g.drawVerticalLine(x, y1, y2); };
+		int x; float y1; float y2;
 	};
 
 	struct setOpacity : public DrawActions::ActionBase
@@ -490,6 +534,29 @@ namespace ScriptedDrawActions
 		Colour c;
 		int radius;
 	};
+
+    struct drawSVG: public DrawActions::ActionBase
+    {
+        drawSVG(var svgObject, Rectangle<float> bounds_, float opacity_):
+           svg(svgObject),
+           bounds(bounds_),
+          opacity(opacity_)
+        {
+            
+        };
+        
+        void perform(Graphics& g) override
+        {
+            if(auto obj = dynamic_cast<ScriptingObjects::SVGObject*>(svg.getObject()))
+            {
+                obj->draw(g, bounds, opacity);
+            }
+        }
+        
+        const float opacity;
+        const Rectangle<float> bounds;
+        var svg;
+    };
 
 	struct addShader : public DrawActions::ActionBase
 	{

@@ -43,11 +43,19 @@ namespace bypass
 
 static constexpr int ParameterId = 9000;
 
-template <class T> class smoothed: public SingleWrapper<T>
+template <int SmoothingTime, class T> class smoothed: public SingleWrapper<T>
 {
 public:
 
 	SN_SELF_AWARE_WRAPPER(smoothed, T);
+
+	smoothed()
+	{
+		smoothingTime = SmoothingTime;
+
+		if (smoothingTime == -1)
+			smoothingTime = 20;
+	}
 
 	constexpr OPTIONAL_BOOL_CLASS_FUNCTION(isProcessingHiseEvent);
 	constexpr OPTIONAL_BOOL_CLASS_FUNCTION(isPolyphonic);
@@ -102,8 +110,6 @@ public:
 			this->obj.process(data);
 	}
 
-	
-
 	void processFrame(snex::Types::dyn<float>& data) noexcept
 	{
 		FrameConverters::forwardToFixFrame16(this, data);
@@ -150,7 +156,8 @@ public:
 
 	void prepare(PrepareSpecs ps)
 	{
-		ramper.prepare(ps.sampleRate, 20.0);
+		sr = ps.sampleRate;
+		ramper.prepare(ps.sampleRate, (double)smoothingTime);
 		ramper.set(bypassed ? 0.0f : 1.0f);
 		ramper.reset();
 
@@ -165,9 +172,12 @@ public:
 
 	bool handleModulation(double& value) noexcept
 	{
-		if (!bypassed)
-			return this->obj.handleModulation(value);
-
+		if constexpr (prototypes::check::handleModulation<T>::value)
+		{
+			if (!bypassed)
+				return this->obj.handleModulation(value);
+		}
+		
 		return false;
 	}
 
@@ -181,13 +191,26 @@ public:
 		return this->obj.template get<Index>();
 	}
 
-
 	void setExternalData(const ExternalData& d, int index)
 	{
 		this->obj.setExternalData(d, index);
 	}
 
-private:
+	void setSmoothingTime(int newTime)
+	{
+		if (sr <= 0.0)
+			return;
+
+		if constexpr (SmoothingTime == -1)
+		{
+			smoothingTime = jlimit(0, 1000, newTime);
+			ramper.prepare(sr, smoothingTime);
+			ramper.set(bypassed ? 0.0f : 1.0f);
+			ramper.reset();
+		}
+	}
+
+
 
 	void setBypassed(bool shouldBeBypassed)
 	{
@@ -201,6 +224,10 @@ private:
 		}
 	}
 
+	private:
+
+	double sr = 0.0;
+	int smoothingTime;
 	sfloat ramper;
 	bool bypassed = false;
 };

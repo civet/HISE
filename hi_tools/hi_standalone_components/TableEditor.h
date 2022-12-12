@@ -270,10 +270,6 @@ public:
 
 			return;
 		}
-
-#if !HI_REMOVE_HISE_DEPENDENCY_FOR_TOOL_CLASSES
-		updateFromProcessor(b);
-#endif
 	}
 
 	Table *getEditedTable() const
@@ -309,6 +305,13 @@ public:
 		return "Table Data"; 
 	};
 
+    void setDrawTableValueLabel(bool shouldBeDisplayed)
+    {
+        displayPopup = shouldBeDisplayed;
+    }
+    
+    bool shouldDrawTableValueLabel() const { return displayPopup; }
+    
 	void copyAction() override { SystemClipboard::copyTextToClipboard(getEditedTable()->exportData()); };
 
 	virtual void pasteAction() override
@@ -319,8 +322,6 @@ public:
 		createDragPoints();
 		refreshGraph();
 	}
-
-	void connectToLookupTableProcessor(Processor *p, int tableIndex=0);
 
 	/** Set the display of the domain value to the desired type. If you want a scaled value to be displayed, pass a Range<int> object */
 	void setDomain(DomainType newDomainType, Range<int> newRange=Range<int>());
@@ -440,14 +441,8 @@ public:
 
 	void updateCurve(int x, int y, float newCurveValue, bool useUndoManager);
 
-	void updateFromProcessor(SafeChangeBroadcaster* b);
-
-	bool isInMainPanel() const;
-
-#if !HI_REMOVE_HISE_DEPENDENCY_FOR_TOOL_CLASSES
-	bool isInMainPanelInternal() const;
-#endif
-
+    
+    
 	/** You can set a value which is displayed as input here. If the value is changed, the table will be repainted. 
 	*
 	*	The range of newIndex is 0.0 - 1.0.
@@ -494,6 +489,8 @@ public:
 private:
 
 	float margin = 0.0f;
+    
+    bool displayPopup = true;
 
 	HiseTableLookAndFeel defaultLaf;
 

@@ -206,6 +206,8 @@ void Operations::Assignment::process(BaseCompiler* compiler, BaseScope* scope)
 
 		auto targetType = getTargetType();
 
+		ignoreUnused(targetType);
+
 		auto value = getSubRegister(0);
 		auto tReg = getSubRegister(1);
 
@@ -595,8 +597,12 @@ struct Operations::VectorOp::SerialisedVectorOp : public ReferenceCountedObject
 			opType = id.getCharPointer();
 			dbgString << "func " << fc->function.getSignature();
 
-			if (String(opType) == "abs")
-				immConst = cc.newXmmConst(ConstPool::kScopeGlobal, Data128::fromU32(0x7fffffff));
+            if (String(opType) == "abs")
+            {
+                auto cv = Data128::fromU32(0x7fffffff);
+                immConst = cc.newConst(ConstPoolScope::kGlobal, cv.getData(), cv.size());
+            }
+				
 		}
 		
 		if (s->getType() == Types::ID::Float)
@@ -607,8 +613,9 @@ struct Operations::VectorOp::SerialisedVectorOp : public ReferenceCountedObject
 				auto immValue = s->getConstExprValue().toFloat();
 				dbgString << "imm " << String(immValue);
 
-				immConst = cc.newXmmConst(ConstPool::kScopeGlobal,
-					Data128::fromF32(immValue));
+                auto cv = Data128::fromF32(immValue);
+                
+                immConst = cc.newConst(ConstPoolScope::kGlobal, cv.getData(), cv.size());
 			}
 			else
 			{
@@ -696,7 +703,7 @@ struct Operations::VectorOp::SerialisedVectorOp : public ReferenceCountedObject
 				{
 					cc.lea(addressReg, fatPointerAddress);
 					// make a better version if desired...
-					sizeMem = cc.newInt32Const(ConstPool::kScopeLocal, spanType->getNumElements());
+					sizeMem = cc.newInt32Const(ConstPoolScope::kLocal, spanType->getNumElements());
 				}
 				else
 				{
@@ -1028,7 +1035,8 @@ void Operations::VectorOp::emitVectorOp(BaseCompiler* compiler, BaseScope* scope
 
 		int l = 0;
 		DBG(root->toString(l));
-
+		ignoreUnused(l);
+			
 		auto sizeReg = cc.newGpd();
 
 		auto simdLoop = cc.newLabel();

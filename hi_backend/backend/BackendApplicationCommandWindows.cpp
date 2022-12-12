@@ -321,8 +321,12 @@ void XmlBackupFunctions::restoreAllScripts(ValueTree& v, ModulatorSynthChain *ma
 	if (v.getType() == Identifier(pr) && v[typ].toString().contains("Script"))
 	{
 		auto fileName = getSanitiziedName(v[id]);
+		const String t = v[scr];
 		
-		
+		if (t.startsWith("{EXTERNAL_SCRIPT}"))
+		{
+			return;
+		}
 
 		File scriptDirectory = getScriptDirectoryFor(masterChain, newId);
 
@@ -330,7 +334,12 @@ void XmlBackupFunctions::restoreAllScripts(ValueTree& v, ModulatorSynthChain *ma
 
 		if (!sf.existsAsFile())
 		{
-			jassertfalse;
+			auto isExternal = v.getProperty(scr).toString().startsWith("{EXTERNAL_SCRIPT}");
+
+			if (!isExternal)
+			{
+				PresetHandler::showMessageWindow("Script not found", "Error loading script " + fileName, PresetHandler::IconType::Error);
+			}
 		}
 
         for(auto f: RangedDirectoryIterator(scriptDirectory, false, "*.js", File::findFiles))
@@ -1123,6 +1132,86 @@ private:
 	BackendProcessorEditor* bpe;
 };
 
+
+
+struct ShortcutEditor : public QuasiModalComponent,
+						public Component,
+					    public PathFactory
+{
+	ShortcutEditor(BackendRootWindow* t) :
+		QuasiModalComponent(),
+		editor(t->getKeyPressMappingSet(), true),
+		closeButton("close", nullptr, *this)
+	{
+		addAndMakeVisible(editor);
+		setName("Edit Shortcuts");
+		setSize(600, 700);
+
+		editor.setLookAndFeel(&alaf);
+		editor.setColours(Colours::transparentBlack, alaf.bright);
+		setLookAndFeel(&alaf);
+		addAndMakeVisible(closeButton);
+
+		closeButton.onClick = [&]()
+		{
+			destroy();
+		};
+	};
+
+	Path createPath(const String&) const override
+	{
+		Path p;
+		p.loadPathFromData(HiBinaryData::ProcessorEditorHeaderIcons::closeIcon, sizeof(HiBinaryData::ProcessorEditorHeaderIcons::closeIcon));
+		return p;
+	}
+
+	void resized() override
+	{
+		auto b = getLocalBounds();
+		b.removeFromTop(32);
+
+		closeButton.setBounds(getLocalBounds().removeFromTop(37).removeFromRight(37).reduced(6));
+		editor.setBounds(b.reduced(10));
+	}
+
+	void mouseDown(const MouseEvent& e)
+	{
+		dragger.startDraggingComponent(this, e);
+	}
+
+	void mouseDrag(const MouseEvent& e)
+	{
+		dragger.dragComponent(this, e, nullptr);
+	}
+
+	juce::ComponentDragger dragger;
+
+	void paint(Graphics& g) override
+	{
+		ColourGradient grad(alaf.dark.withMultipliedBrightness(1.4f), 0.0f, 0.0f,
+			alaf.dark, 0.0f, (float)getHeight(), false);
+
+		auto a = getLocalBounds().removeFromTop(37).toFloat();
+
+		g.setFont(GLOBAL_BOLD_FONT().withHeight(17.0f));
+		g.setGradientFill(grad);
+		g.fillAll();
+		g.setColour(Colours::white.withAlpha(0.1f));
+		g.fillRect(a);
+		g.setColour(alaf.bright);
+
+		g.drawRect(getLocalBounds().toFloat());
+
+		g.drawText("Edit Shortcuts", a, Justification::centred);
+		
+		
+	}
+
+	HiseShapeButton closeButton;
+	AlertWindowLookAndFeel alaf;
+	juce::KeyMappingEditorComponent editor;
+};
+
 class SampleMapPropertySaverWithBackup : public DialogWindowWithBackgroundThread,
 										 public ControlledObject
 {
@@ -1873,6 +1962,482 @@ public:
 	ScopedPointer<PropertySelector> propertySelector;
 };
 
+class SVGToPathDataConverter : public Component,
+							   public Value::Listener,
+							   public QuasiModalComponent,
+							   public PathFactory,
+							   public juce::FileDragAndDropTarget
+{
+public:
+
+	enum class OutputFormat
+	{
+		Base64,
+		CppString,
+		HiseScriptNumbers,
+        Base64SVG,
+		numOutputFormats
+	};
+
+	SVGToPathDataConverter(BackendRootWindow* bpe):
+		QuasiModalComponent(),
+		loadClipboard("Load from clipboard"),
+		copyClipboard("Copy to clipboard"),
+		resizer(this, nullptr),
+		closeButton("close", nullptr, *this)
+	{
+		outputFormatSelector.addItemList({ "Base64 Path", "C++ Path String", "HiseScript Path number array", "Base64 SVG" }, 1);
+		
+		addAndMakeVisible(outputFormatSelector);
+		addAndMakeVisible(inputEditor);
+		addAndMakeVisible(outputEditor);
+		addAndMakeVisible(variableName);
+		addAndMakeVisible(loadClipboard);
+		addAndMakeVisible(copyClipboard);
+		addAndMakeVisible(resizer);
+		addAndMakeVisible(closeButton);
+
+		GlobalHiseLookAndFeel::setTextEditorColours(inputEditor);
+		GlobalHiseLookAndFeel::setTextEditorColours(outputEditor);
+		inputEditor.setFont(GLOBAL_MONOSPACE_FONT());
+		outputEditor.setFont(GLOBAL_MONOSPACE_FONT());
+		GlobalHiseLookAndFeel::setTextEditorColours(variableName);
+		
+		inputEditor.setFont(GLOBAL_MONOSPACE_FONT());
+		variableName.setFont(GLOBAL_MONOSPACE_FONT());
+
+		inputEditor.setMultiLine(true);
+		outputEditor.setMultiLine(true);
+
+		inputEditor.getTextValue().referTo(inputDoc);
+		outputEditor.getTextValue().referTo(outputDoc);
+		variableName.getTextValue().referTo(variableDoc);
+		variableDoc.addListener(this);
+
+		variableDoc.setValue("pathData");
+
+		outputFormatSelector.setSelectedItemIndex(0);
+
+		copyClipboard.setLookAndFeel(&alaf);
+		loadClipboard.setLookAndFeel(&alaf);
+		outputFormatSelector.setLookAndFeel(&alaf);
+
+		outputFormatSelector.onChange = [&]()
+		{
+			currentOutputFormat = (OutputFormat)outputFormatSelector.getSelectedItemIndex();
+			update();
+		};
+
+		loadClipboard.onClick = [&]()
+		{
+			inputDoc.setValue(SystemClipboard::getTextFromClipboard());
+		};
+
+		copyClipboard.onClick = [&]()
+		{
+			SystemClipboard::copyTextToClipboard(outputDoc.getValue().toString());
+		};
+
+		GlobalHiseLookAndFeel::setDefaultColours(outputFormatSelector);
+
+        inputDoc.setValue("Paste the SVG data here, drop a SVG file or use the Load from Clipboard button.\nThen select the output format xand variable name above, and click Copy to Clipboard to paste the path data.\nYou can also paste an array that you've previously exported to convert it to Base64");
+        
+		inputDoc.addListener(this);
+
+		closeButton.onClick = [this]()
+		{
+			this->destroy();
+		};
+
+		setSize(800, 600);
+	}
+
+	~SVGToPathDataConverter()
+	{
+		inputDoc.removeListener(this);
+		variableDoc.removeListener(this);
+	}
+
+	void valueChanged(Value& v) override
+	{
+		update();
+	}
+
+	void mouseDown(const MouseEvent& e) override
+	{
+		dragger.startDraggingComponent(this, e);
+	}
+
+	void mouseDrag(const MouseEvent& e) override
+	{
+		dragger.dragComponent(this, e, nullptr);
+	}
+
+	void mouseUp(const MouseEvent& e) override
+	{
+		
+	}
+
+	static bool isHiseScriptArray(const String& input)
+	{
+		return input.startsWith("const var") || input.startsWith("[");
+	}
+
+	static String parse(const String& input, OutputFormat format)
+	{
+		String rt = input.trim();
+
+		if (isHiseScriptArray(rt) || format == OutputFormat::Base64SVG)
+		{
+			return rt;
+		}
+
+		if (auto xml = XmlDocument::parse(input))
+		{
+			auto v = ValueTree::fromXml(*xml);
+
+			cppgen::ValueTreeIterator::forEach(v, snex::cppgen::ValueTreeIterator::Forward, [&](ValueTree& c)
+			{
+				if (c.hasType("path"))
+				{
+					rt = c["d"].toString();
+					return true;
+				}
+
+				return false;
+			});
+		}
+
+		return rt;
+	}
+
+	Path createPath(const String& url) const override
+	{
+		Path p;
+		p.loadPathFromData(HiBinaryData::ProcessorEditorHeaderIcons::closeIcon, sizeof(HiBinaryData::ProcessorEditorHeaderIcons::closeIcon));
+		return p;
+	}
+
+	Path pathFromPoints(String pointsText)
+	{
+		auto points = StringArray::fromTokens(pointsText, " ,", "");
+		points.removeEmptyStrings();
+
+		jassert(points.size() % 2 == 0);
+
+		Path p;
+
+		for (int i = 0; i < points.size() / 2; i++)
+		{
+			auto x = points[i * 2].getFloatValue();
+			auto y = points[i * 2 + 1].getFloatValue();
+
+			if (i == 0)
+				p.startNewSubPath({ x, y });
+			else
+				p.lineTo({ x, y });
+		}
+
+		p.closeSubPath();
+
+		return p;
+	}
+
+	bool isInterestedInFileDrag(const StringArray& files) override
+	{
+		return File(files[0]).getFileExtension() == ".svg";
+	}
+
+	void filesDropped(const StringArray& files, int x, int y) override
+	{
+		File f(files[0]);
+		auto filename = f.getFileNameWithoutExtension();
+		variableDoc.setValue(filename);
+		inputDoc.setValue(f.loadFileAsString());
+	}
+
+	void writeDataAsCppLiteral(const MemoryBlock& mb, OutputStream& out,
+		bool breakAtNewLines, bool allowStringBreaks, String bracketSet = "{}")
+	{
+		const int maxCharsOnLine = 250;
+
+		auto data = (const unsigned char*)mb.getData();
+		int charsOnLine = 0;
+
+		bool canUseStringLiteral = mb.getSize() < 32768; // MS compilers can't handle big string literals..
+
+		if (canUseStringLiteral)
+		{
+			unsigned int numEscaped = 0;
+
+			for (size_t i = 0; i < mb.getSize(); ++i)
+			{
+				auto num = (unsigned int)data[i];
+
+				if (!((num >= 32 && num < 127) || num == '\t' || num == '\r' || num == '\n'))
+				{
+					if (++numEscaped > mb.getSize() / 4)
+					{
+						canUseStringLiteral = false;
+						break;
+					}
+				}
+			}
+		}
+
+		if (!canUseStringLiteral)
+		{
+			out << bracketSet.substring(0, 1) << " ";
+
+			for (size_t i = 0; i < mb.getSize(); ++i)
+			{
+				auto num = (int)(unsigned int)data[i];
+				out << num << ',';
+
+				charsOnLine += 2;
+
+				if (num >= 10)
+				{
+					++charsOnLine;
+
+					if (num >= 100)
+						++charsOnLine;
+				}
+
+				if (charsOnLine >= maxCharsOnLine)
+				{
+					charsOnLine = 0;
+					out << newLine;
+				}
+			}
+
+			out << "0,0 " << bracketSet.substring(1) << ";";
+		}
+		
+	}
+
+	void update()
+	{
+        currentSVG = nullptr;
+        path = Path();
+        
+		auto inputText = parse(inputDoc.toString(), currentOutputFormat);
+
+		String result = "No path generated.. Not a valid SVG path string?";
+
+		if (isHiseScriptArray(inputText))
+		{
+			auto ar = JSON::parse(inputText.fromFirstOccurrenceOf("[", true, true));
+
+			if (ar.isArray())
+			{
+				MemoryOutputStream mos;
+
+				for (auto v : *ar.getArray())
+				{
+					auto byte = (uint8)(int)v;
+					mos.write(&byte, 1);
+				}
+				
+				mos.flush();
+
+				path.clear();
+				path.loadPathFromData(mos.getData(), mos.getDataSize());
+
+				auto b64 = mos.getMemoryBlock().toBase64Encoding();
+
+				result = {};
+
+				if (!inputText.startsWith("["))
+					result << inputText.upToFirstOccurrenceOf("[", false, false);
+
+				result << b64.quoted();
+
+				if (inputText.endsWith(";"))
+					result << ";";
+			}
+		}
+		else
+		{
+			auto text = inputText.trim().unquoted().trim();
+
+            if(currentOutputFormat == OutputFormat::Base64SVG)
+            {
+                if(auto xml = XmlDocument::parse(text))
+                {
+                    currentSVG = Drawable::createFromSVG(*xml);
+                    
+                    currentSVG->setTransformToFit(pathArea, RectanglePlacement::centred);
+                }
+            }
+            else
+            {
+                path = Drawable::parseSVGPath(text);
+
+                if (path.isEmpty())
+                    path = pathFromPoints(text);
+                
+                if(!path.isEmpty())
+                    PathFactory::scalePath(path, pathArea);
+            }
+
+            auto filename = snex::cppgen::StringHelpers::makeValidCppName(variableDoc.toString());
+
+			if (!path.isEmpty() || currentSVG != nullptr)
+			{
+				MemoryOutputStream data;
+                
+                MemoryBlock mb;
+                
+                if(currentSVG != nullptr)
+                {
+                    zstd::ZDefaultCompressor comp;
+                    
+                    comp.compress(text, mb);
+                }
+				else
+				{
+					path.writePathToStream(data);
+					mb = data.getMemoryBlock();
+				}
+                
+				MemoryOutputStream out;
+
+				if (currentOutputFormat == OutputFormat::CppString)
+				{
+					out << "static const unsigned char " << filename << "[] = ";
+
+					writeDataAsCppLiteral(mb, out, false, true, "{}");
+
+					out << newLine
+						<< newLine
+						<< "Path path;" << newLine
+						<< "path.loadPathFromData (" << filename << ", sizeof (" << filename << "));" << newLine;
+
+				}
+				else if (currentOutputFormat == OutputFormat::Base64 || currentOutputFormat == OutputFormat::Base64SVG)
+				{
+					out << "const var " << filename << " = ";
+					out << "\"" << mb.toBase64Encoding() << "\"";
+				}
+				else if (currentOutputFormat == OutputFormat::HiseScriptNumbers)
+				{
+					out << "const var " << filename << " = ";
+					writeDataAsCppLiteral(mb, out, false, true, "[]");
+
+					out << ";";
+				}
+
+				result = out.toString();
+			}
+		}
+		
+		outputDoc.setValue(result);
+
+		
+
+		repaint();
+	}
+
+	void paint(Graphics& g)
+	{
+		ColourGradient grad(alaf.dark.withMultipliedBrightness(1.4f), 0.0f, 0.0f,
+			alaf.dark, 0.0f, (float)getHeight(), false);
+
+		g.setGradientFill(grad);
+		g.fillAll();
+		g.setColour(Colours::white.withAlpha(0.1f));
+		g.fillRect(getLocalBounds().removeFromTop(37).toFloat());
+		g.setColour(alaf.bright);
+
+		g.drawRect(getLocalBounds().toFloat());
+
+		g.setFont(GLOBAL_BOLD_FONT().withHeight(17.0f));
+		g.drawText("SVG to Path converter", titleArea, Justification::centred);
+
+        if(currentSVG != nullptr)
+        {
+            currentSVG->draw(g, 1.0f);
+        }
+        else if(path.isEmpty())
+        {
+            g.setFont(GLOBAL_BOLD_FONT());
+            g.drawText("No valid path", pathArea, Justification::centred);
+        }
+        else
+        {
+            g.fillPath(path);
+            g.strokePath(path, PathStrokeType(1.0f));
+        }
+	}
+
+	void resized() override
+	{
+		auto b = getLocalBounds();
+		
+		titleArea = b.removeFromTop(37).toFloat();
+
+		b = b.reduced(10);
+
+		auto top = b.removeFromTop(32);
+
+
+		
+		outputFormatSelector.setBounds(top.removeFromLeft(300));
+
+		top.removeFromLeft(5);
+
+		variableName.setBounds(top.removeFromLeft(200));
+
+		auto bottom = b.removeFromBottom(32);
+
+		b.removeFromBottom(5);
+
+		bottom.removeFromRight(15);
+
+		auto w = getWidth() / 3;
+
+		inputEditor.setBounds(b.removeFromLeft(w-5));
+		b.removeFromLeft(5);
+		outputEditor.setBounds(b.removeFromLeft(w-5));
+		b.removeFromLeft(5);
+		pathArea = b.toFloat();
+
+		loadClipboard.setBounds(bottom.removeFromLeft(150));
+		bottom.removeFromLeft(10);
+		copyClipboard.setBounds(bottom.removeFromLeft(150));
+
+		resizer.setBounds(getLocalBounds().removeFromRight(15).removeFromBottom(15));
+		closeButton.setBounds(getLocalBounds().removeFromRight(titleArea.getHeight()).removeFromTop(titleArea.getHeight()).reduced(6));
+
+        if(!path.isEmpty())
+            scalePath(path, pathArea);
+        else if(currentSVG != nullptr)
+            currentSVG->setTransformToFit(pathArea, RectanglePlacement::centred);
+            
+		repaint();
+	}
+
+    std::unique_ptr<Drawable> currentSVG;
+	Path path;
+	Rectangle<float> pathArea;
+	Rectangle<float> titleArea;
+
+	Value inputDoc, outputDoc, variableDoc;
+
+	TextEditor inputEditor, outputEditor;
+	TextEditor variableName;
+
+	ComboBox outputFormatSelector;
+
+	OutputFormat currentOutputFormat = OutputFormat::Base64;
+	TextButton loadClipboard, copyClipboard;
+
+	ResizableCornerComponent resizer;
+	HiseShapeButton closeButton;
+	AlertWindowLookAndFeel alaf;
+	juce::ComponentDragger dragger;
+};
 
 class ProjectDownloader : public DialogWindowWithBackgroundThread,
 	public TextEditor::Listener

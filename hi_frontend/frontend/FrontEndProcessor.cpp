@@ -209,7 +209,7 @@ void FrontendProcessor::restorePool(InputStream* inputStream, FileHandlerBase::S
 
 		if (!resourceFile.existsAsFile())
 		{
-			sendOverlayMessage(DeactiveOverlay::CriticalCustomErrorMessage,
+			sendOverlayMessage(OverlayMessageBroadcaster::CriticalCustomErrorMessage,
 				"The file " + resourceFile.getFullPathName() + " can't be found.");
 			return;
 		}
@@ -342,6 +342,14 @@ updater(*this)
 	stereoCopy.setSize(2, 0);
 #endif
     
+#if USE_SCRIPT_COPY_PROTECTION
+
+	unlocker.loadKeyFile();
+
+	if (!unlocker.isUnlocked())
+		sendOverlayMessage(OverlayMessageBroadcaster::LicenseNotFound);
+#endif
+
     updater.suspendState = true;
     updater.updateDelayed();
 }
@@ -520,6 +528,8 @@ void FrontendProcessor::setStateInformation(const void *data, int sizeInBytes)
 
 	ScopedValueSetter<bool> svs(getKillStateHandler().getStateLoadFlag(), true);
 
+    UserPresetHandler::ScopedInternalPresetLoadSetter sipls(this);
+    
 #if USE_RAW_FRONTEND
 
 	MemoryInputStream in(data, sizeInBytes, false);

@@ -446,6 +446,18 @@ private:
 #define SIGNAL_COLOUR 0xFF90FFB1
 #endif
 
+#ifndef HISE_OK_COLOUR
+#define HISE_OK_COLOUR 0xFF4E8E35
+#endif
+
+#ifndef HISE_WARNING_COLOUR
+#define HISE_WARNING_COLOUR 0xFFFFBA00
+#endif
+
+#ifndef HISE_ERROR_COLOUR
+#define HISE_ERROR_COLOUR 0xFFBB3434
+#endif
+
 #define FLOAT_RECTANGLE(r) r.toFloat();
 #define INT_RECTANGLE(r) r.toInt();
 
@@ -470,5 +482,19 @@ private:
 #define BIND_MEMBER_FUNCTION_1(x) std::bind(&x, this, std::placeholders::_1)
 #define BIND_MEMBER_FUNCTION_2(x) std::bind(&x, this, std::placeholders::_1, std::placeholders::_2)
 #define BIND_MEMBER_FUNCTION_3(x) std::bind(&x, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3)
+
+#ifndef jassertEqual
+#if JUCE_DEBUG
+#define jassertEqual(expr1, expr2) jassert(expr1 == expr2)
+#else
+#define jassertEqual(expr1, expr2) ignoreUnused(expr1, expr2)
+#endif
+#endif
+
+/** This is set by the HISE projects to figure out the default VS version for the export. */
+#ifndef HISE_USE_VS2022
+#define HISE_USE_VS2022 0
+#endif
+
 
 } // namespace hise

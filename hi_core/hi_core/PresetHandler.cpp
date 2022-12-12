@@ -49,26 +49,8 @@ void UserPresetHelpers::saveUserPreset(ModulatorSynthChain *chain, const String&
 	}
 
 	if (!GET_PROJECT_HANDLER(chain).isActive()) return;
-
-	File userPresetDir = GET_PROJECT_HANDLER(chain).getSubDirectory(ProjectHandler::SubDirectories::UserPresets);
-
-#else
-
-    File userPresetDir;
-    
-    try
-    {
-        userPresetDir = FrontendHandler::getUserPresetDirectory();
-    }
-    catch(String& s)
-    {
-        chain->getMainController()->sendOverlayMessage(DeactiveOverlay::State::CriticalCustomErrorMessage, s);
-        return;
-    }
-
 #endif
-
-	
+    
 	File presetFile = File(targetFile);
 	
     String existingNote;
@@ -76,14 +58,13 @@ void UserPresetHelpers::saveUserPreset(ModulatorSynthChain *chain, const String&
     
 #if CONFIRM_PRESET_OVERWRITE
 
-	if (presetFile.existsAsFile() && PresetHandler::showYesNoWindow("Confirm overwrite", "Do you want to overwrite the preset (Press cancel to create a new user preset?"))
+	if (presetFile.existsAsFile() && (!MessageManager::getInstance()->isThisTheMessageThread() || PresetHandler::showYesNoWindow("Confirm overwrite", "Do you want to overwrite the preset (Press cancel to create a new user preset?")))
 	{
         existingNote = PresetBrowser::DataBaseHelpers::getNoteFromXml(presetFile);
         existingTags = PresetBrowser::DataBaseHelpers::getTagsFromXml(presetFile);
 
 		presetFile.deleteFile();
 	}
-
 #else
 
 	if (presetFile.existsAsFile())
@@ -93,7 +74,6 @@ void UserPresetHelpers::saveUserPreset(ModulatorSynthChain *chain, const String&
 
 		presetFile.deleteFile();
 	}
-
 #endif
 	
 	if (!presetFile.existsAsFile())
@@ -269,8 +249,12 @@ void UserPresetHelpers::restoreModuleStates(ModulatorSynthChain* chain, const Va
 	{
 		auto& md = chain->getMainController()->getUserPresetHandler().getStoredModuleData();
 
+		bool didSomething = false;
+
 		for (auto m : modules)
 		{
+			didSomething = true;
+
 			auto id = m["ID"].toString();
 			auto p = ProcessorHelpers::getFirstProcessorWithName(chain, id);
 
@@ -292,6 +276,19 @@ void UserPresetHelpers::restoreModuleStates(ModulatorSynthChain* chain, const Va
 					p->restoreFromValueTree(mcopy);
 					p->sendPooledChangeMessage();
 				}
+			}
+		}
+
+		auto& uph = chain->getMainController()->getUserPresetHandler();
+
+		if (didSomething && uph.isUsingCustomDataModel())
+		{
+			auto numDataObjects = uph.getNumCustomAutomationData();
+
+			// We might need to update the custom automation data values.
+			for (int i = 0; i < numDataObjects; i++)
+			{
+				uph.getCustomAutomationData(i)->updateFromConnectionValue(0);
 			}
 		}
 	}
@@ -356,31 +353,7 @@ String UserPresetHelpers::getCurrentVersionNumber(ModulatorSynthChain* chain)
 #endif
 }
 
-File UserPresetHelpers::getUserPresetFile(ModulatorSynthChain *chain, const String &fileNameWithoutExtension)
-{
-#if USE_BACKEND
-    return GET_PROJECT_HANDLER(chain).getSubDirectory(ProjectHandler::SubDirectories::UserPresets).getChildFile(fileNameWithoutExtension + ".preset");
-#else
 
-	ignoreUnused(chain);
-
-    
-    File userPresetDir;
-    
-    try
-    {
-        userPresetDir = FrontendHandler::getUserPresetDirectory();
-    }
-    catch(String& s)
-    {
-        chain->getMainController()->sendOverlayMessage(DeactiveOverlay::State::CriticalCustomErrorMessage, s);
-        return File();
-    }
-    
-    
-	return userPresetDir.getChildFile(fileNameWithoutExtension + ".preset");
-#endif
-}
 
 ValueTree parseUserPreset(const File& f)
 {
@@ -495,7 +468,7 @@ juce::StringArray UserPresetHelpers::getExpansionsForUserPreset(const File& user
 
 void UserPresetHelpers::extractUserPresets(const char* userPresetData, size_t size)
 {
-#if USE_FRONTEND
+#if USE_FRONTEND && !DONT_CREATE_USER_PRESET_FOLDER
 	auto userPresetDirectory = FrontendHandler::getUserPresetDirectory();
 
 	if (userPresetDirectory.isDirectory())
@@ -993,7 +966,17 @@ void ProjectHandler::createRSAKey() const
 
 	const int seeds[] = { r.nextInt(), r.nextInt(), r.nextInt(), r.nextInt(), r.nextInt(), r.nextInt() };
 
-	RSAKey::createKeyPair(publicKey, privateKey, 512, seeds, 6);
+	auto existingFile = getWorkDirectory().getChildFile("RSA.xml");
+
+	if (existingFile.existsAsFile())
+	{
+		publicKey = RSAKey(getPublicKeyFromFile(existingFile));
+		privateKey = RSAKey(getPrivateKeyFromFile(existingFile));
+	}
+	else
+		RSAKey::createKeyPair(publicKey, privateKey, 512, seeds, 6);
+
+	
 
 	AlertWindowLookAndFeel wlaf;
 
@@ -1031,10 +1014,26 @@ void ProjectHandler::createRSAKey() const
 		xml->getChildByName("PublicKey")->setAttribute("value", publicKey.toString());
 		xml->getChildByName("PrivateKey")->setAttribute("value", privateKey.toString());
 
+		auto key = privateKey.toString();
+		auto numbers = StringArray::fromTokens(key, ",", "");
+
+		BigInteger b1, b2;
+		b1.parseString(numbers[0], 16);
+		b2.parseString(numbers[1], 16);
+
+		auto n1 = b1.toString(10);
+		auto n2 = b2.toString(10);
+
+		xml->addChildElement(new XmlElement("ServerKey1"));
+		xml->addChildElement(new XmlElement("ServerKey2"));
+
+		xml->getChildByName("ServerKey1")->setAttribute("value", n1);
+		xml->getChildByName("ServerKey2")->setAttribute("value", n2);
+		
 		File rsaFile = getWorkDirectory().getChildFile("RSA.xml");
 
 		rsaFile.replaceWithText(xml->createDocument(""));
-
+		
 		PresetHandler::showMessageWindow("RSA keys exported to file", "The RSA Keys are written to the file " + rsaFile.getFullPathName(), PresetHandler::IconType::Info);
 	}
 }
@@ -1080,7 +1079,11 @@ void ProjectHandler::checkActiveProject()
 
 juce::File ProjectHandler::getAppDataRoot()
 {
+#if HISE_USE_SYSTEM_APP_DATA_FOLDER
+    const File::SpecialLocationType appDataDirectoryToUse = File::commonApplicationDataDirectory;
+#else
 	const File::SpecialLocationType appDataDirectoryToUse = File::userApplicationDataDirectory;
+#endif
     
 #if JUCE_IOS
 	return File::getSpecialLocation(appDataDirectoryToUse).getChildFile("Application Support/");
@@ -1104,7 +1107,7 @@ juce::File ProjectHandler::getAppDataRoot()
 juce::File ProjectHandler::getAppDataDirectory()
 {
 
-#if USE_COMMON_APP_DATA_FOLDER
+#if HISE_USE_SYSTEM_APP_DATA_FOLDER
 	const File::SpecialLocationType appDataDirectoryToUse = File::commonApplicationDataDirectory;
 #else
 	const File::SpecialLocationType appDataDirectoryToUse = File::userApplicationDataDirectory;
@@ -1443,13 +1446,7 @@ String FrontendHandler::getLicenseKeyExtension()
 {
 
 #if JUCE_WINDOWS
-
-#if JUCE_64BIT
 	return ".license_x64";
-#else
-	return ".license_x86";
-#endif
-
 #else
 	return ".license";
 #endif
@@ -1502,7 +1499,7 @@ File FrontendHandler::getSampleLinkFile()
 
 
 
-File FrontendHandler::getUserPresetDirectory()
+File FrontendHandler::getUserPresetDirectory(bool getRedirect)
 {
 #if HISE_IOS
     
@@ -1535,21 +1532,13 @@ File FrontendHandler::getUserPresetDirectory()
         userPresetDirectory.createDirectory();
         
         factoryPresets.copyDirectoryTo(userPresetDirectory);
-        
-        
-        
     }
     
     return userPresetDirectory;
     
 #else
-    
-    
 	File presetDir = getAppDataDirectory().getChildFile("User Presets");
-	
-
-	return presetDir;
-    
+    return FileHandlerBase::getFolderOrRedirect(presetDir);
 #endif
 }
 
@@ -2053,27 +2042,38 @@ void PresetHandler::buildProcessorDataBase(Processor *root)
 
 	ScopedPointer<FactoryType> t = new ModulatorSynthChainFactoryType(NUM_POLYPHONIC_VOICES, root);
 
-	xml->addChildElement(buildFactory(t, "ModulatorSynths"));
+	
 
-	t = new MidiProcessorFactoryType(root);
-	xml->addChildElement(buildFactory(t, "MidiProcessors"));
+	{
+		MainController::ScopedBadBabysitter sb(root->getMainController());
+
+		xml->addChildElement(buildFactory(t, "ModulatorSynths"));
+
+		t = new MidiProcessorFactoryType(root);
+		xml->addChildElement(buildFactory(t, "MidiProcessors"));
 
 
-	t = new VoiceStartModulatorFactoryType(NUM_POLYPHONIC_VOICES, Modulation::GainMode, root);
-	xml->addChildElement(buildFactory(t, "VoiceStartModulators"));
+		t = new VoiceStartModulatorFactoryType(NUM_POLYPHONIC_VOICES, Modulation::GainMode, root);
+		xml->addChildElement(buildFactory(t, "VoiceStartModulators"));
 
-	t = new TimeVariantModulatorFactoryType(Modulation::GainMode, root);
+		t = new TimeVariantModulatorFactoryType(Modulation::GainMode, root);
 
-	xml->addChildElement(buildFactory(t, "TimeVariantModulators"));
+		xml->addChildElement(buildFactory(t, "TimeVariantModulators"));
 
-	t = new EnvelopeModulatorFactoryType(NUM_POLYPHONIC_VOICES, Modulation::GainMode, root);
+		t = new EnvelopeModulatorFactoryType(NUM_POLYPHONIC_VOICES, Modulation::GainMode, root);
 
-	xml->addChildElement(buildFactory(t, "EnvelopeModulators"));
+		xml->addChildElement(buildFactory(t, "EnvelopeModulators"));
 
-	t = new EffectProcessorChainFactoryType(NUM_POLYPHONIC_VOICES, root);
+		t = new EffectProcessorChainFactoryType(NUM_POLYPHONIC_VOICES, root);
 
-	xml->addChildElement(buildFactory(t, "Effects"));
+		xml->addChildElement(buildFactory(t, "Effects"));
 
+		t = nullptr;
+	}
+
+	
+
+	
 
 	xml->writeToFile(f, "");
 #endif
@@ -2091,7 +2091,10 @@ XmlElement * PresetHandler::buildFactory(FactoryType *t, const String &factoryNa
 
 		if (p == nullptr) continue;
 
-		XmlElement *child = new XmlElement(p->getType());
+		// "Hardcoded Master FX", aaarg!
+		auto tagName = p->getType().toString().removeCharacters(" ");
+
+		XmlElement *child = new XmlElement(tagName);
 
 		for (int i = 0; i < p->getNumParameters(); i++)
 		{
@@ -2590,6 +2593,21 @@ juce::File FileHandlerBase::getLinkFile(const File &subDirectory)
 #endif
 }
 
+File FileHandlerBase::getFolderOrRedirect(const File& folder)
+{
+    auto lf = getLinkFile(folder);
+    
+    if(lf.existsAsFile())
+    {
+        auto rd = File(lf.loadFileAsString());
+        
+        if(rd.isDirectory())
+            return rd;
+    }
+    
+    return folder;
+}
+
 void FileHandlerBase::createLinkFile(SubDirectories dir, const File &relocation)
 {
 	File subDirectory = getRootFolder().getChildFile(getIdentifier(dir));
@@ -2603,6 +2621,9 @@ void FileHandlerBase::createLinkFileInFolder(const File& source, const File& tar
 
 	if (linkFile.existsAsFile())
 	{
+        if(linkFile.loadFileAsString() == target.getFullPathName())
+            return;
+        
 		if (!target.isDirectory())
 		{
 			linkFile.deleteFile();
@@ -2681,6 +2702,9 @@ FileHandlerBase::FileHandlerBase(MainController* mc_) :
 void FileHandlerBase::checkSubDirectories()
 {
 	subDirectories.clear();
+
+	if (!getRootFolder().isDirectory())
+		return;
 
 	auto subDirList = getSubDirectoryIds();
 
@@ -2814,6 +2838,7 @@ juce::Result FileHandlerBase::updateSampleMapIds(bool silentMode)
 
 juce::File FileHandlerBase::checkSubDirectory(SubDirectories dir)
 {
+	
 	File subDirectory = getRootFolder().getChildFile(getIdentifier(dir));
 
 	jassert(subDirectory.exists());

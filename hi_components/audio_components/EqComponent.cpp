@@ -72,6 +72,8 @@ public:
 		}
 	}
 
+	
+
 	juce::Identifier getProcessorTypeId() const
 	{
 		return PolyFilterEffect::getClassType();
@@ -232,7 +234,81 @@ private:
 
 struct FilterDragOverlay::Panel : public PanelWithProcessorConnection
 {
+	enum class SpecialProperties
+	{
+		AllowFilterResizing = (int)PanelWithProcessorConnection::SpecialPanelIds::numSpecialPanelIds,
+		AllowDynamicSpectrumAnalyser,
+		UseUndoManager,
+		numSpecialProperties
+	};
+
 	SET_PANEL_NAME("DraggableFilterPanel");
+	
+	int getNumDefaultableProperties() const override
+	{
+		return (int)SpecialProperties::numSpecialProperties;
+	}
+
+	Identifier getDefaultablePropertyId(int index) const override
+	{
+		if (isPositiveAndBelow(index, PanelWithProcessorConnection::SpecialPanelIds::numSpecialPanelIds))
+			return PanelWithProcessorConnection::getDefaultablePropertyId(index);
+
+		RETURN_DEFAULT_PROPERTY_ID(index, SpecialProperties::AllowFilterResizing, "AllowFilterResizing");
+		RETURN_DEFAULT_PROPERTY_ID(index, SpecialProperties::AllowDynamicSpectrumAnalyser, "AllowDynamicSpectrumAnalyser");
+		RETURN_DEFAULT_PROPERTY_ID(index, SpecialProperties::UseUndoManager, "UseUndoManager");
+
+		jassertfalse;
+		return {};
+	}
+
+	var getDefaultProperty(int index) const override
+	{
+		if (isPositiveAndBelow(index, PanelWithProcessorConnection::SpecialPanelIds::numSpecialPanelIds))
+			return PanelWithProcessorConnection::getDefaultProperty(index);
+
+		RETURN_DEFAULT_PROPERTY(index, SpecialProperties::AllowFilterResizing, var(true));
+		RETURN_DEFAULT_PROPERTY(index, SpecialProperties::AllowDynamicSpectrumAnalyser, var(0));
+		RETURN_DEFAULT_PROPERTY(index, SpecialProperties::UseUndoManager, var(false));
+
+		jassertfalse;
+
+		return {};
+	}
+
+	void fromDynamicObject(const var& object) override
+	{
+		PanelWithProcessorConnection::fromDynamicObject(object);
+
+		if (auto fd = getContent<FilterDragOverlay>())
+		{
+			auto r = (bool)getPropertyWithDefault(object, (int)SpecialProperties::AllowFilterResizing);
+			auto s = (int)getPropertyWithDefault(object, (int)SpecialProperties::AllowDynamicSpectrumAnalyser);
+
+			auto u = (bool)getPropertyWithDefault(object, (int)SpecialProperties::UseUndoManager);
+
+			if (u)
+				fd->setUndoManager(getMainController()->getControlUndoManager());
+			
+			fd->setAllowFilterResizing(r);
+			fd->setSpectrumVisibility((SpectrumVisibility)s);
+		}
+	}
+
+	var toDynamicObject() const override
+	{
+		auto obj = PanelWithProcessorConnection::toDynamicObject();
+
+		if (auto fd = getContent<FilterDragOverlay>())
+		{
+			storePropertyInObject(obj, (int)SpecialProperties::AllowFilterResizing, fd->allowFilterResizing);
+			storePropertyInObject(obj, (int)SpecialProperties::AllowDynamicSpectrumAnalyser, (int)fd->fftVisibility);
+
+			storePropertyInObject(obj, (int)SpecialProperties::UseUndoManager, fd->um != nullptr);
+		}
+
+		return obj;
+	}
 
 	Panel(FloatingTile* parent) :
 		PanelWithProcessorConnection(parent)
@@ -316,7 +392,8 @@ FilterDragOverlay::FilterDragOverlay(CurveEq* eq_, bool isInFloatingTile_ /*= fa
 
 FilterDragOverlay::~FilterDragOverlay()
 {
-	eq->removeChangeListener(this);
+	if(eq.get() != nullptr)
+		eq->removeChangeListener(this);
 }
 
 void FilterDragOverlay::paint(Graphics &g)
@@ -329,6 +406,59 @@ void FilterDragOverlay::paint(Graphics &g)
 	{
 		GlobalHiseLookAndFeel::drawHiBackground(g, 0, 0, getWidth(), getHeight());
 	}
+
+	
+}
+
+void FilterDragOverlay::paintOverChildren(Graphics& g)
+{
+	auto lafToUse = &defaultLaf;
+
+	if (auto l = dynamic_cast<LookAndFeelMethods*>(&getLookAndFeel()))
+		lafToUse = l;
+
+	auto draw = [&](FilterDragComponent* c)
+	{
+		auto index = c->getIndex();
+
+		if (eq == nullptr)
+			return;
+
+		if (auto b = eq->getFilterBand(index))
+		{
+			DragData d;
+			d.selected = c->isSelected();
+			d.dragging = c->isDragging();
+			d.enabled = b->isEnabled();
+			d.hover = c->isOver();
+			d.frequency = b->getFrequency();
+			d.gain = Decibels::gainToDecibels(b->getGain());
+			d.q = b->getQ();
+			d.type = b->getModes()[b->getType()];
+
+			lafToUse->drawFilterDragHandle(g, *this, c->getIndex(), c->getBoundsInParent().toFloat(), d);
+		}
+	};
+
+	FilterDragComponent* selected = nullptr;
+
+	for (auto c : dragComponents)
+	{
+		auto shouldBeLast = c->isSelected() || c->isOver() || c->isDragging();
+
+		if (shouldBeLast && selected == nullptr)
+		{
+			// Move it to the end so that
+			// it might overdraw other handles
+			selected = c; 
+			continue;
+		}
+			
+		draw(c);
+	}
+
+	if (selected != nullptr)
+		draw(selected);
 }
 
 void FilterDragOverlay::changeListenerCallback(SafeChangeBroadcaster *)
@@ -340,6 +470,9 @@ void FilterDragOverlay::changeListenerCallback(SafeChangeBroadcaster *)
 
 void FilterDragOverlay::checkEnabledBands()
 {
+	if (eq == nullptr)
+		return;
+
 	numFilters = eq->getNumFilterBands();
 
 	for (int i = 0; i < numFilters; i++)
@@ -358,6 +491,9 @@ void FilterDragOverlay::resized()
 
 void FilterDragOverlay::addFilterDragger(int index)
 {
+	if (eq == nullptr)
+		return;
+
 	if (auto fb = eq->getFilterBand(index))
 	{
 		FilterDragComponent *dc = new FilterDragComponent(*this, index);
@@ -382,6 +518,9 @@ void FilterDragOverlay::timerCallback()
 
 void FilterDragOverlay::updateFilters()
 {
+	if (eq == nullptr)
+		return;
+
 	numFilters = eq->getNumFilterBands();
 
 	if (numFilters != dragComponents.size())
@@ -405,6 +544,9 @@ void FilterDragOverlay::updateFilters()
 
 void FilterDragOverlay::updateCoefficients()
 {
+	if (eq == nullptr)
+		return;
+
 	for (int i = 0; i < eq->getNumFilterBands(); i++)
 	{
 		IIRCoefficients ic = eq->getCoefficients(i);
@@ -422,6 +564,12 @@ void FilterDragOverlay::addFilterToGraph(int filterIndex, int filterType)
 	case CurveEq::HighShelf:	filterGraph.addEqBand(BandType::HighShelf); break;
 	case CurveEq::Peak:			filterGraph.addEqBand(BandType::Peak); break;
 	}
+
+	if (eq == nullptr)
+		return;
+
+	if(auto b = eq->getFilterBand(filterIndex))
+		filterGraph.enableBand(filterIndex, b->isEnabled());
 
 	filterGraph.setCoefficients(filterIndex, eq->getSampleRate(), eq->getCoefficients(filterIndex));
 }
@@ -448,6 +596,9 @@ double FilterDragOverlay::getGain(int y)
 
 void FilterDragOverlay::removeFilter(int index)
 {
+	if (eq == nullptr)
+		return;
+
 	eq->removeFilterBand(index);
 
 	for (auto l : listeners)
@@ -468,6 +619,22 @@ void FilterDragOverlay::removeListener(Listener* l)
 	listeners.removeAllInstancesOf(l);
 }
 
+void FilterDragOverlay::setAllowFilterResizing(bool shouldBeAllowed)
+{
+	allowFilterResizing = shouldBeAllowed;
+}
+
+void FilterDragOverlay::setSpectrumVisibility(SpectrumVisibility m)
+{
+	fftVisibility = m;
+	fftAnalyser.setVisible(m != SpectrumVisibility::AlwaysOff);
+}
+
+void FilterDragOverlay::setUndoManager(UndoManager* newUndoManager)
+{
+	um = newUndoManager;
+}
+
 void FilterDragOverlay::mouseDrag(const MouseEvent &e)
 {
 	if (dragComponents[selectedIndex] != nullptr)
@@ -478,6 +645,9 @@ void FilterDragOverlay::mouseDrag(const MouseEvent &e)
 
 Point<int> FilterDragOverlay::getPosition(int index)
 {
+	if (eq == nullptr)
+		return {};
+
 	if (isPositiveAndBelow(index, eq->getNumFilterBands()))
 	{
 		const int freqIndex = eq->getParameterIndex(index, CurveEq::BandParameter::Freq);
@@ -492,8 +662,24 @@ Point<int> FilterDragOverlay::getPosition(int index)
 		return {};
 }
 
+void FilterDragOverlay::lookAndFeelChanged()
+{
+	if (auto l = dynamic_cast<FilterGraph::LookAndFeelMethods*>(&getLookAndFeel()))
+	{
+		filterGraph.setSpecialLookAndFeel(&getLookAndFeel());
+	}
+
+	if (auto l = dynamic_cast<RingBufferComponentBase::LookAndFeelMethods*>(&getLookAndFeel()))
+	{
+		fftAnalyser.setSpecialLookAndFeel(&getLookAndFeel());
+	}
+}
+
 void FilterDragOverlay::fillPopupMenu(PopupMenu& m, int handleIndex)
 {
+	if (eq == nullptr)
+		return;
+
 	if (handleIndex != -1)
 	{
 		StringArray sa = { "Low Pass", "High Pass", "Low Shelf", "High Shelf", "Peak" };
@@ -503,7 +689,9 @@ void FilterDragOverlay::fillPopupMenu(PopupMenu& m, int handleIndex)
 		{
 			int typeOffset = 8000;
 
-			m.addItem(9000, "Delete Band", true, false);
+			if(allowFilterResizing)
+				m.addItem(9000, "Delete Band", true, false);
+
 			m.addItem(10000, "Enable Band", true, thisBand->isEnabled());
 			m.addSeparator();
 
@@ -527,18 +715,24 @@ void FilterDragOverlay::fillPopupMenu(PopupMenu& m, int handleIndex)
 	}
 	else
 	{
-		m.addItem(1, "Delete all bands", true, false);
-		m.addItem(2, "Enable Spectrum Analyser", true, eq->getFFTBuffer()->isActive());
+		if(allowFilterResizing)
+			m.addItem(1, "Delete all bands", true, false);
+
+
+		if(fftVisibility == SpectrumVisibility::Dynamic)
+			m.addItem(2, "Enable Spectrum Analyser", true, eq->getFFTBuffer()->isActive());
+
 		m.addItem(3, "Cancel");
 	}
-
-	
 }
 
 
 
 void FilterDragOverlay::popupMenuAction(int result, int handleIndex)
 {
+	if (eq == nullptr)
+		return;
+
 	if (handleIndex != -1)
 	{
 		if (auto thisBand = eq->getFilterBand(handleIndex))
@@ -549,32 +743,20 @@ void FilterDragOverlay::popupMenuAction(int result, int handleIndex)
 				return;
 			else if (result == 9000)
 			{
-				auto tmp = this;
-				auto f = [tmp, handleIndex]()
-				{
-					tmp->removeFilter(handleIndex);
-				};
-
-				MessageManager::callAsync(f);
+				if (um != nullptr)
+					um->perform(new FilterResizeAction(eq, handleIndex, false));
+				else
+					eq->removeFilterBand(handleIndex);
 			}
 			else if (result == 10000)
 			{
-				auto enabled = thisBand->isEnabled();
-
-				auto pIndex = eq->getParameterIndex(handleIndex, CurveEq::BandParameter::Enabled);
-				eq->setAttribute(pIndex, enabled ? 0.0f : 1.0f, sendNotification);
-
-				// TODO EQUNDO
+				setEqAttribute(CurveEq::BandParameter::Enabled, handleIndex, 1.0f - (float)thisBand->isEnabled());
 			}
 			else
 			{
-				auto t = result - typeOffset;
-				auto pIndex = eq->getParameterIndex(handleIndex, CurveEq::BandParameter::Type);
-				eq->setAttribute(pIndex, (float)t, sendNotification);
+				setEqAttribute(CurveEq::BandParameter::Type, handleIndex, (float)(result - typeOffset));
 			}
 		}
-
-		
 	}
 	else
 	{
@@ -584,7 +766,12 @@ void FilterDragOverlay::popupMenuAction(int result, int handleIndex)
 		if (result == 1)
 		{
 			while (eq->getNumFilterBands() > 0)
-				eq->removeFilterBand(0);
+			{
+				if (um != nullptr)
+					um->perform(new FilterResizeAction(eq, 0, false));
+				else
+					eq->removeFilterBand(0);
+			}
 		}
 		else if (result == 2)
 			eq->enableSpectrumAnalyser(!eq->getFFTBuffer()->isActive());
@@ -593,6 +780,9 @@ void FilterDragOverlay::popupMenuAction(int result, int handleIndex)
 
 void FilterDragOverlay::mouseDown(const MouseEvent &e)
 {
+	if (eq == nullptr)
+		return;
+
 	if (e.mods.isRightButtonDown() || e.mods.isCommandDown())
 	{
 		PopupMenu m;
@@ -602,12 +792,15 @@ void FilterDragOverlay::mouseDown(const MouseEvent &e)
 		auto result = m.show();
 		popupMenuAction(result, -1);
 	}
-	else
+	else if (allowFilterResizing)
 	{
 		const double freq = (double)filterGraph.xToFreq((float)e.getPosition().x - offset);
 		const double gain = Decibels::decibelsToGain((double)getGain(e.getPosition().y - offset));
 
-		eq->addFilterBand(freq, gain);
+		if (um != nullptr)
+			um->perform(new FilterResizeAction(eq, -1, true, freq, gain));
+		else
+			eq->addFilterBand(freq, gain);
 	}
 }
 
@@ -645,8 +838,13 @@ void FilterDragOverlay::FilterDragComponent::mouseDown(const MouseEvent& e)
 {
 	if (e.mods.isRightButtonDown() || e.mods.isCommandDown())
 	{
+		over = false;
+		down = false;
+		menuActive = true;
+		parent.repaint();
+
 		PopupMenu m;
-		m.setLookAndFeel(parent.plaf);
+		m.setLookAndFeel(&parent.getLookAndFeel());
 
 		parent.fillPopupMenu(m, index);
 		auto result = m.show();
@@ -654,10 +852,13 @@ void FilterDragOverlay::FilterDragComponent::mouseDown(const MouseEvent& e)
 		if(result != 0)
 			parent.popupMenuAction(result, index);
 
-
+		menuActive = false;
+		over = isMouseOver();
+		
 	}
 	else
 	{
+		down = true;
 		parent.selectDragger(index);
 		dragger.startDraggingComponent(this, e);
 	}
@@ -665,6 +866,7 @@ void FilterDragOverlay::FilterDragComponent::mouseDown(const MouseEvent& e)
 
 void FilterDragOverlay::FilterDragComponent::mouseUp(const MouseEvent& )
 {
+	down = false;
 	draggin = false;
 	parent.selectDragger(-1);
 }
@@ -674,8 +876,16 @@ void FilterDragOverlay::FilterDragComponent::mouseDrag(const MouseEvent& e)
 {
 	auto te = e.getEventRelativeTo(this);
 
+	over = true;
+	down = true;
+
 	if (!draggin)
 	{
+		if (!parent.allowFilterResizing)
+		{
+			parent.setEqAttribute(CurveEq::BandParameter::Enabled, index, 1.0f);
+		}
+
 		dragger.startDraggingComponent(this, te);
 		draggin = true;
 	}
@@ -689,11 +899,8 @@ void FilterDragOverlay::FilterDragComponent::mouseDrag(const MouseEvent& e)
 
 	const double gain = parent.filterGraph.yToGain((float)y, 24.0f);
 
-	const int freqIndex = parent.eq->getParameterIndex(index, CurveEq::BandParameter::Freq);
-	const int gainIndex = parent.eq->getParameterIndex(index, CurveEq::BandParameter::Gain);
-
-	parent.eq->setAttribute(freqIndex, (float)freq, sendNotification);
-	parent.eq->setAttribute(gainIndex, (float)gain, sendNotification);
+	parent.setEqAttribute(CurveEq::BandParameter::Freq, index, freq);
+	parent.setEqAttribute(CurveEq::BandParameter::Gain, index, gain);
 }
 
 
@@ -701,6 +908,9 @@ void FilterDragOverlay::FilterDragComponent::mouseDrag(const MouseEvent& e)
 
 void FilterDragOverlay::FilterDragComponent::mouseWheelMove(const MouseEvent &e, const MouseWheelDetails &d)
 {
+	if (parent.eq == nullptr)
+		return;
+
 	if (e.mods.isCtrlDown() || parent.isInFloatingTile)
 	{
 		double q = parent.eq->getFilterBand(index)->getQ();
@@ -710,10 +920,7 @@ void FilterDragOverlay::FilterDragComponent::mouseWheelMove(const MouseEvent &e,
 		else
 			q = jmax<double>(0.1, q / 1.3);
 
-		const int qIndex = parent.eq->getParameterIndex(index, CurveEq::BandParameter::Q);
-
-		parent.eq->setAttribute(qIndex, (float)q, sendNotification);
-
+		parent.setEqAttribute(CurveEq::BandParameter::Q, index, q);
 	}
 	else
 	{
@@ -722,6 +929,19 @@ void FilterDragOverlay::FilterDragComponent::mouseWheelMove(const MouseEvent &e,
 }
 
 
+
+void FilterDragOverlay::FilterDragComponent::mouseDoubleClick(const MouseEvent& e)
+{
+	if (parent.eq == nullptr)
+		return;
+
+	if (parent.allowFilterResizing)
+		return;
+
+	auto enableIndex = parent.eq->getParameterIndex(index, CurveEq::BandParameter::Enabled);
+	auto v = 1.0f - parent.eq->getAttribute(enableIndex);
+	parent.setEqAttribute(CurveEq::BandParameter::Enabled, index, v);
+}
 
 FilterDragOverlay::FilterDragComponent::FilterDragComponent(FilterDragOverlay& parent_, int index_) :
 	parent(parent_),
@@ -735,41 +955,52 @@ void FilterDragOverlay::FilterDragComponent::setConstrainer(ComponentBoundsConst
 	constrainer = constrainer_;
 }
 
+void FilterDragOverlay::FilterDragComponent::mouseEnter(const MouseEvent& e)
+{
+	over = true;
+	parent.repaint();
+}
+
+void FilterDragOverlay::FilterDragComponent::mouseExit(const MouseEvent& e)
+{
+	over = false;
+	parent.repaint();
+}
+
 void FilterDragOverlay::FilterDragComponent::setSelected(bool shouldBeSelected)
 {
 	selected = shouldBeSelected;
+
+	over = Component::isMouseOverOrDragging(true);
+	down = Component::isMouseButtonDown(true);
+
 	repaint();
 }
 
 void FilterDragOverlay::FilterDragComponent::paint(Graphics &g)
 {
-	Rectangle<float> thisBounds = Rectangle<float>(0.0f, 0.0f, (float)getWidth(), (float)getHeight());
-
-	thisBounds.reduce(6.0f, 6.0f);
-
-	auto tc = parent.findColour(ColourIds::textColour);
-
-	auto fc = tc.contrasting();
-
-	g.setColour(fc.withAlpha(0.3f));
-	g.fillRoundedRectangle(thisBounds, 3.0f);
-
-	if (auto b = parent.eq->getFilterBand(index))
-	{
-		const bool enabled = b->isEnabled();
-
-		g.setColour(tc.withAlpha(enabled ? 1.0f : 0.3f));
-
-		g.drawRoundedRectangle(thisBounds, 3.0f, selected ? 2.0f : 1.0f);
-
-		g.setFont(parent.font);
-		g.drawText(String(index), getLocalBounds(), Justification::centred, false);
-	}
+	
 }
 
 void FilterDragOverlay::FilterDragComponent::setIndex(int newIndex)
 {
 	index = newIndex;
+}
+
+void FilterDragOverlay::setEqAttribute(int bp, int filterIndex, float value)
+{
+	if (eq == nullptr)
+		return;
+
+	auto idx = eq->getParameterIndex(filterIndex, bp);
+
+	if (um != nullptr)
+	{
+		auto oldValue = eq->getAttribute(idx);
+		um->perform(new MacroControlledObject::UndoableControlEvent(eq, idx, oldValue, value));
+	}
+	else
+		eq->setAttribute(idx, value, sendNotification);
 }
 
 FilterDragOverlay::FFTDisplay::FFTDisplay(FilterDragOverlay& parent_) :
@@ -784,12 +1015,18 @@ FilterDragOverlay::FFTDisplay::FFTDisplay(FilterDragOverlay& parent_) :
 
 void FilterDragOverlay::FFTDisplay::paint(Graphics& g)
 {
+	if (parent.eq == nullptr)
+		return;
+
 	if (rb != nullptr && rb->isActive() && !parent.eq->isBypassed())
 		FFTDisplayBase::drawSpectrum(g);
 }
 
 double FilterDragOverlay::FFTDisplay::getSamplerate() const
 {
+	if (parent.eq == nullptr)
+		return 44100.0;
+
 	return parent.eq->getSampleRate();
 }
 
@@ -877,6 +1114,84 @@ juce::Path FilterDragOverlay::Factory::createPath(const String& url) const
 	}
 
 	return path;
+}
+
+
+
+void FilterDragOverlay::LookAndFeelMethods::drawFilterDragHandle(Graphics& g, FilterDragOverlay& o, int index, Rectangle<float> handleBounds, const DragData& d)
+{
+	handleBounds.reduce(6.0f, 6.0f);
+	auto tc = o.findColour(ColourIds::textColour);
+	auto fc = tc.contrasting();
+	g.setColour(fc.withAlpha(0.3f));
+	g.fillRoundedRectangle(handleBounds, 3.0f);
+	g.setColour(tc.withAlpha(d.enabled ? 1.0f : 0.3f));
+	g.drawRoundedRectangle(handleBounds, 3.0f, d.selected ? 2.0f : 1.0f);
+	g.setFont(o.font);
+	g.drawText(String(index), handleBounds.expanded(6.0f), Justification::centred, false);
+}
+
+FilterDragOverlay::FilterResizeAction::FilterResizeAction(CurveEq* eq_, int index_, bool add, double freq_/*=0.0*/, double gain_/*=0.0*/) :
+	eq(eq_),
+	index(index_),
+	isAddAction(add),
+	freq(freq_),
+	gain(gain_)
+{
+
+}
+
+bool FilterDragOverlay::FilterResizeAction::perform()
+{
+	if (!eq)
+		return false;
+
+	if (isAddAction)
+	{
+		index = eq->getNumFilterBands();
+		eq.get()->addFilterBand(freq, gain);
+		return true;
+	}
+	else
+	{
+		if (auto b = eq->getFilterBand(index))
+		{
+			gain = b->getGain();
+			freq = b->getFrequency();
+			q = b->getQ();
+			type = b->getType();
+			enabled = b->isEnabled();
+		}
+
+		eq.get()->removeFilterBand(index);
+		return true;
+	}
+}
+
+bool FilterDragOverlay::FilterResizeAction::undo()
+{
+	if (!eq)
+		return false;
+
+	if (isAddAction)
+	{
+		eq.get()->removeFilterBand(index);
+		return true;
+	}
+	else
+	{
+		index = eq->getNumFilterBands();
+		eq->addFilterBand(freq, gain);
+
+		if (auto b = eq->getFilterBand(index))
+		{
+			b->setType(type);
+			b->setQ(q);
+			b->setEnabled(enabled);
+		}
+			
+		return true;
+	}
 }
 
 } // namespace hise;

@@ -248,6 +248,7 @@ CompileExporter::ErrorCodes CompileExporter::exportMainSynthChainAsMidiFx(BuildO
 CompileExporter::ErrorCodes CompileExporter::compileFromCommandLine(const String& commandLine, String& pluginFile)
 {
 
+    
 
 
 	//String options = commandLine.fromFirstOccurrenceOf("export ", false, false);
@@ -267,6 +268,9 @@ CompileExporter::ErrorCodes CompileExporter::compileFromCommandLine(const String
 		ScopedPointer<StandaloneProcessor> processor = new StandaloneProcessor();
 		ScopedPointer<BackendRootWindow> editor = dynamic_cast<BackendRootWindow*>(processor->createEditor());
 		ModulatorSynthChain* mainSynthChain = editor->getBackendProcessor()->getMainSynthChain();
+        
+        dynamic_cast<GlobalSettingManager*>(mainSynthChain->getMainController())->getSettingsObject().addTemporaryDefinitions(getTemporaryDefinitions(commandLine));
+        
 		File currentProjectFolder = GET_PROJECT_HANDLER(mainSynthChain).getWorkDirectory();
 
 		File presetFile;
@@ -291,6 +295,8 @@ CompileExporter::ErrorCodes CompileExporter::compileFromCommandLine(const String
 
 		CompileExporter exporter(mainSynthChain);
 
+        exporter.noLto = args.contains("-nolto");
+        
 		bool switchBack = false;
 
 		if (currentProjectFolder != projectDirectory)
@@ -480,9 +486,26 @@ CompileExporter::ErrorCodes CompileExporter::exportInternal(TargetTypes type, Bu
 	
 	if (!legacyCpuSupport) legacyCpuSupport = data.getSetting(HiseSettings::Compiler::LegacyCPUSupport);
 	    
-	if(!hisePath.isDirectory()) 
-		hisePath = data.getSetting(HiseSettings::Compiler::HisePath);
+	if (!hisePath.isDirectory())
+	{
+		if (isUsingCIMode())
+		{
+			auto appPath = File::getSpecialLocation(File::currentApplicationFile).getParentDirectory();
 
+			while (!appPath.isRoot() && !appPath.getChildFile("hi_core").isDirectory())
+			{
+				appPath = appPath.getParentDirectory();
+			}
+
+			if (!appPath.isRoot())
+				hisePath = appPath;
+		}
+		else
+		{
+			hisePath = data.getSetting(HiseSettings::Compiler::HisePath);
+		}
+	}
+	
 	if (!hisePath.isDirectory()) 
 		return ErrorCodes::HISEPathNotSpecified;
 
@@ -525,8 +548,8 @@ CompileExporter::ErrorCodes CompileExporter::exportInternal(TargetTypes type, Bu
 
 		const String directoryPath = tempDirectory.getFullPathName();
 
-		convertTccScriptsToCppClasses();
-
+        JavascriptProcessor::ScopedPreprocessorMerger sm(chainToExport->getMainController());
+        
 		compressValueTree<PresetDictionaryProvider>(exportPresetFile(), directoryPath, "preset");
 
 #if DONT_EMBED_FILES_IN_FRONTEND
@@ -536,8 +559,13 @@ CompileExporter::ErrorCodes CompileExporter::exportInternal(TargetTypes type, Bu
         const bool embedFiles = !BuildOptionHelpers::isIOS(option);
 #endif
 
+		auto embedUserPresets = data.getSetting(HiseSettings::Project::EmbedUserPresets);
+
+		auto userPresetTree = embedUserPresets ? UserPresetHelpers::collectAllUserPresets(chainToExport):
+												 ValueTree("UserPresets");
+
 		// Embed the user presets and extract them on first load
-		compressValueTree<UserPresetDictionaryProvider>(UserPresetHelpers::collectAllUserPresets(chainToExport), directoryPath, "userPresets");
+		compressValueTree<UserPresetDictionaryProvider>(userPresetTree, directoryPath, "userPresets");
 
 		// Always embed scripts and fonts, but don't embed samplemaps
 		compressValueTree<JavascriptDictionaryProvider>(exportEmbeddedFiles(), directoryPath, "externalFiles");
@@ -949,31 +977,19 @@ CompileExporter::BuildOption CompileExporter::showCompilePopup(TargetTypes type)
 	{
 	case CompileExporter::TargetTypes::InstrumentPlugin:
 		b->addItem("VSTi 64bit", BuildOption::VSTiWindowsx64);
-		b->addItem("VSTi 32bit", BuildOption::VSTiWindowsx86);
-		b->addItem("VSTi 32bit/64bit", BuildOption::VSTiWindowsx64x86);
 		b->addItem("AAX 64bit", BuildOption::AAXWindowsx64);
-		b->addItem("AAX 32bit", BuildOption::AAXWindowsx86);
-		b->addItem("AAX 32bit/64bit", BuildOption::AAXWindowsx86x64);
-        b->addItem("All platforms", BuildOption::AllPluginFormatsInstrument);
+		b->addItem("All platforms", BuildOption::AllPluginFormatsInstrument);
 		break;
 	case CompileExporter::TargetTypes::EffectPlugin:
 		b->addItem("VST 64bit", BuildOption::VSTWindowsx64);
-		b->addItem("VST 32bit", BuildOption::VSTWindowsx86);
-		b->addItem("VST 32bit/64bit", BuildOption::VSTWindowsx64x86);
 		b->addItem("AAX 64bit", BuildOption::AAXWindowsx64);
-		b->addItem("AAX 32bit", BuildOption::AAXWindowsx86);
-		b->addItem("AAX 32bit/64bit", BuildOption::AAXWindowsx86x64);
-        b->addItem("All Platforms", BuildOption::AllPluginFormatsFX);
+		b->addItem("All Platforms", BuildOption::AllPluginFormatsFX);
 		break;
 	case CompileExporter::TargetTypes::MidiEffectPlugin:
 		b->addItem("VST 64bit", BuildOption::MidiFXWIndowsx64);
-		b->addItem("VST 32bit", BuildOption::MidiFXWindowsx86);
-		b->addItem("VST 32bit/64bit", BuildOption::MidiFXWindowsx64x86);
 		break;
 	case CompileExporter::TargetTypes::StandaloneApplication:
 		b->addItem("Standalone 64bit", BuildOption::StandaloneWindowsx64);
-		b->addItem("Standalone 32bit", BuildOption::StandaloneWindowsx86);
-		b->addItem("Standalone 32bit/64bit", BuildOption::StandaloneWindowsx64x86);
 		break;
 	case CompileExporter::TargetTypes::numTargetTypes:
 		break;
@@ -986,7 +1002,6 @@ CompileExporter::BuildOption CompileExporter::showCompilePopup(TargetTypes type)
 	case CompileExporter::TargetTypes::InstrumentPlugin:
 		b->addItem("VSTi", BuildOption::VSTiLinux);
 		b->addItem("Headless VSTi", BuildOption::HeadlessLinuxVSTi);
-		
 		break;
 	case CompileExporter::TargetTypes::EffectPlugin:
 		b->addItem("VST", BuildOption::VSTLinux);
@@ -1043,7 +1058,8 @@ CompileExporter::BuildOption CompileExporter::showCompilePopup(TargetTypes type)
 	w.addButton("Cancel", 0, KeyPress(KeyPress::escapeKey));
 
 	w.getComboBoxComponent("buildOption")->setLookAndFeel(&pplaf);
-
+    w.getComboBoxComponent("buildOption")->setSelectedItemIndex(0, dontSendNotification);
+    
 	if (w.runModalLoop())
 	{
 		int i = w.getComboBoxComponent("buildOption")->getSelectedId();
@@ -1057,146 +1073,6 @@ CompileExporter::BuildOption CompileExporter::showCompilePopup(TargetTypes type)
 
 }
 
-StringArray CompileExporter::getTccSection(const StringArray &cLines, const String &sectionName)
-{
-	int startIndex = -1;
-	int endIndex = -1;
-
-	for (int i = 0; i < cLines.size(); i++)
-	{
-		if (cLines[i].startsWith("// [" + sectionName + "]")) startIndex = i;
-		if (cLines[i].startsWith("// [/" + sectionName + "]")) endIndex = i;
-	}
-
-	if (startIndex != -1 && (endIndex - startIndex) > 0)
-	{
-		StringArray section;
-		section.addArray(cLines, startIndex + 1, endIndex - startIndex-1);
-		return section;
-	}
-
-	return StringArray();	
-}
-
-void CompileExporter::convertTccScriptsToCppClasses()
-{
-	File targetDirectory = GET_PROJECT_HANDLER(chainToExport).getSubDirectory(ProjectHandler::SubDirectories::AdditionalSourceCode);
-
-	Array<File> scriptFiles;
-
-	Array<File> convertedCppFiles;
-
-	GET_PROJECT_HANDLER(chainToExport).getSubDirectory(ProjectHandler::SubDirectories::Scripts).findChildFiles(scriptFiles, File::findFiles, true, "*.c");
-
-	if (scriptFiles.size() == 0) 
-		return;
-
-	for (int i = 0; i < scriptFiles.size(); i++)
-	{
-		createCppFileFromTccScript(targetDirectory, scriptFiles[i], convertedCppFiles);
-	}
-
-	String output;
-
-	static const String tab = "\t";
-	static String sep = newLine;
-	static const String namespaceName = "TccConvertedScriptObjects";
-	sep << tab;
-
-	output << "/** Autogenerated Factory class for converted TCC scripts. */" << newLine;
-	output << newLine;
-	output << "#include <JuceHeader.h>" << newLine;
-	output << "#include \"AdditionalSourceCode.h\"" << newLine;
-	output << newLine;
-	output << "namespace " << namespaceName << newLine;
-	output << "{" << newLine;
-
-	for (int i = 0; i < convertedCppFiles.size(); i++)
-	{
-		output << "#include \"" << convertedCppFiles[i].getFileName() << "\"" << newLine;
-	}
-
-	output << "}" << newLine;
-	output << newLine;
-	
-	output << "void ConvertedTccScriptFactory::registerModules()" << newLine;
-	output << "{" << newLine;
-	
-	for (int i = 0; i < scriptFiles.size(); i++)
-	{
-		output << tab << "registerDspModule<" << namespaceName << "::" << scriptFiles[i].getFileNameWithoutExtension().replace("_Tcc", "") << ">();" << newLine;
-	}
-
-	output << "}" << newLine;
-	
-	output << newLine;
-
-	File outputFile = targetDirectory.getChildFile("ConvertedTccScriptFactory.cpp");
-
-	outputFile.deleteFile();
-
-	FileOutputStream fos(outputFile);
-
-	fos.writeText(output, false, false, nullptr);
-}
-
-void CompileExporter::createCppFileFromTccScript(File& targetDirectory, const File &f, Array<File>& convertedList)
-{
-	String className = f.getFileNameWithoutExtension();
-
-	File outputFile(targetDirectory.getChildFile("_Tcc" + f.getFileNameWithoutExtension() + ".cpp"));
-
-	StringArray sa;
-
-	f.readLines(sa);
-
-	StringArray includes = getTccSection(sa, "INCLUDE SECTION");
-	StringArray memberFunctions = getTccSection(sa, "CALLBACK SECTION");
-	StringArray privateMembers = getTccSection(sa, "PRIVATE MEMBER SECTION");
-
-	outputFile.deleteFile();
-
-	FileOutputStream fos(outputFile);
-
-	String output;
-
-	static const String tab = "\t";
-	static String sep = newLine;
-	sep << tab;
-
-	output << "/** Autogenerated CPP file from " << f.getFullPathName() << " */" << newLine;
-	output << newLine;
-	output << includes.joinIntoString(newLine) << newLine;
-	output << newLine;
-	output << "class " << className << ": public DspBaseObject, public TccLibraryFunctions" << newLine;
-	output << "{" << newLine << "public:" << newLine;
-	output << newLine;
-	output << tab << "// ============================================================================================" << newLine;
-	output << tab << newLine;
-	output << tab << className << "() { initialise(); }; " << newLine;
-	output << tab << "~" << className << "() { release(); }; " << newLine;
-	output << tab << "static Identifier getName() { RETURN_STATIC_IDENTIFIER(\"" << className << "\"); }" << newLine;
-	output << tab << newLine;
-	output << tab << "// ============================================================================================" << newLine;
-	output << tab << newLine;
-	output << tab << memberFunctions.joinIntoString(sep);
-	output << newLine;
-	output << newLine;
-	output << tab << "// ============================================================================================" << newLine;
-	output << tab << newLine;
-	output << "private:" << newLine;
-	output << tab << privateMembers.joinIntoString(sep);
-	output << newLine;
-	output << "};" << newLine;
-
-	output = output.replace("CPP_CONST", "const");
-
-	output = output.replace("CPP_OVERRIDE", "override");
-
-	convertedList.add(outputFile);
-
-	fos.writeText(output, false, false, nullptr);
-}
 
 CompileExporter::ErrorCodes CompileExporter::compileSolution(BuildOption buildOption, TargetTypes types)
 {
@@ -1431,7 +1307,7 @@ CompileExporter::ErrorCodes CompileExporter::createResourceFile(const String &so
 	resourcesFile << "  END" << "\n";
 	resourcesFile << "END" << "\n";
 
-    String year = HelperClasses::isUsingVisualStudio2015(dataObject) ? "2015" : "2017";
+    String year = HelperClasses::isUsingVisualStudio2017(dataObject) ? "2017" : "2022";
 
 	File resourcesFileObject(solutionDirectory + "/Builds/VisualStudio" + year + "/resources.rc");
 
@@ -1498,7 +1374,8 @@ hise::CompileExporter::ErrorCodes CompileExporter::createPluginProjucerFile(Targ
 	if (type == TargetTypes::EffectPlugin)
 	{
 		REPLACE_WILDCARD_WITH_STRING("%PLUGINISSYNTH%", "0");
-
+        REPLACE_WILDCARD_WITH_STRING("%PLUGIN_PRODUCES_MIDI_OUT%", "0");
+        
 		auto midiInputEnabled = GET_SETTING(HiseSettings::Project::EnableMidiInputFX);
 		auto soundGeneratorsEnabled = GET_SETTING(HiseSettings::Project::EnableSoundGeneratorsFX);
 
@@ -1517,7 +1394,12 @@ hise::CompileExporter::ErrorCodes CompileExporter::createPluginProjucerFile(Targ
 	else if (type == TargetTypes::MidiEffectPlugin)
 	{
 		REPLACE_WILDCARD_WITH_STRING("%PLUGINWANTSMIDIIN%", "1");
+        REPLACE_WILDCARD_WITH_STRING("%PLUGIN_PRODUCES_MIDI_OUT%", "1");
+        
 		REPLACE_WILDCARD_WITH_STRING("%PLUGINISSYNTH%", "0");
+        
+        
+        
 		REPLACE_WILDCARD_WITH_STRING("%PLUGINISMIDIFX%", "1");
 		REPLACE_WILDCARD_WITH_STRING("%PROCESS_SOUND_GENERATORS_IN_FX_PLUGIN%", "disabled");
 		REPLACE_WILDCARD_WITH_STRING("%FRONTEND_IS_PLUGIN%", "disabled");
@@ -1528,7 +1410,11 @@ hise::CompileExporter::ErrorCodes CompileExporter::createPluginProjucerFile(Targ
 	{
 		REPLACE_WILDCARD_WITH_STRING("%SUPPORT_MONO%", "disabled");
 		REPLACE_WILDCARD_WITH_STRING("%PLUGINISMIDIFX%", "0");
-		REPLACE_WILDCARD_WITH_STRING("%PLUGINISSYNTH%", "1");
+        
+        auto midiOutputEnabled = GET_SETTING(HiseSettings::Project::EnableMidiOut);
+        
+        REPLACE_WILDCARD_WITH_STRING("%PLUGIN_PRODUCES_MIDI_OUT%", midiOutputEnabled);
+        REPLACE_WILDCARD_WITH_STRING("%PLUGINISSYNTH%", "1");
 		REPLACE_WILDCARD_WITH_STRING("%PLUGINWANTSMIDIIN", "1");
 		REPLACE_WILDCARD_WITH_STRING("%ENABLE_MIDI_INPUT_FX%", "disabled");
 		REPLACE_WILDCARD_WITH_STRING("%PROCESS_SOUND_GENERATORS_IN_FX_PLUGIN%", "disabled");
@@ -1670,7 +1556,10 @@ hise::CompileExporter::ErrorCodes CompileExporter::createPluginProjucerFile(Targ
 			REPLACE_WILDCARD_WITH_STRING("%AAX_IDENTIFIER%", aaxIdentifier);
             
             // Only build 64bit Intel binaries for AAX
-            REPLACE_WILDCARD_WITH_STRING("%ARM_ARCH%", "x86_64");
+            // REPLACE_WILDCARD_WITH_STRING("%ARM_ARCH%", "x86_64");
+            
+            // Welcome to the future...
+            REPLACE_WILDCARD_WITH_STRING("%ARM_ARCH%", "arm64,arm64e,x86_64");
 		}
 		else
 		{
@@ -1764,23 +1653,72 @@ hise::CompileExporter::CompileExporter::ErrorCodes CompileExporter::createStanda
 }
 
 
+void CompileExporter::ProjectTemplateHelpers::handleCompilerWarnings(String& templateProject)
+{
+	// We'll deactivate these warnings
+	static Array<int> msvcWarnings = {
+		4100, // unused parameter
+		4127, // weird linker error in ASMJIT
+		4244, // possible precision loss (we're lazy here)
+		4661, // incomplete template definition
+		4456, // scope masking
+		4457, // scope masking
+		4458, // scope masking
+		4459  // scope masking
+	};
+
+	String warnings;
+
+	for (auto v : msvcWarnings)
+	{
+		warnings << " /wd&quot;" << String(v) << "&quot;";
+	}
+
+	REPLACE_WILDCARD_WITH_STRING("%MSVC_WARNINGS%", warnings);
+}
+
 void CompileExporter::ProjectTemplateHelpers::handleCompilerInfo(CompileExporter* exporter, String& templateProject)
 {
+	handleCompilerWarnings(templateProject);
+
 	const File jucePath = exporter->hisePath.getChildFile("JUCE/modules");
 
 	REPLACE_WILDCARD_WITH_STRING("%HISE_PATH%", exporter->hisePath.getFullPathName());
 	REPLACE_WILDCARD_WITH_STRING("%JUCE_PATH%", jucePath.getFullPathName());
 	
+    REPLACE_WILDCARD_WITH_STRING("%LINK_TIME_OPTIMISATION%", exporter->noLto ? "0" : "1");
+    
+	auto includeFaust = BackendDllManager::shouldIncludeFaust(exporter->chainToExport->getMainController());
+
+
+	REPLACE_WILDCARD_WITH_STRING("%HISE_INCLUDE_FAUST%", includeFaust ? "enabled" : "disabled");
+
+	if (includeFaust)
+	{
+		auto headerPath = exporter->dataObject.getFaustPath().getChildFile("include");
+		REPLACE_WILDCARD_WITH_STRING("%FAUST_HEADER_PATH%", headerPath.getFullPathName());
+	}
+	else
+	{
+		REPLACE_WILDCARD_WITH_STRING("%FAUST_HEADER_PATH%", "");
+	}
+
     REPLACE_WILDCARD_WITH_STRING("%USE_IPP%", exporter->useIpp ? "1" : "0");
-    REPLACE_WILDCARD_WITH_STRING("%IPP_WIN_SETTING%", exporter->useIpp ? "Sequential" : String());
+
+    REPLACE_WILDCARD_WITH_STRING("%IPP_1A%", exporter->useIpp ? "Static_Library" : String());
+		REPLACE_WILDCARD_WITH_STRING("%UAC_LEVEL%", exporter->dataObject.getSetting(HiseSettings::Project::AdminPermissions) ? "/MANIFESTUAC:level='requireAdministrator'" : String());
     
     REPLACE_WILDCARD_WITH_STRING("%LEGACY_CPU_SUPPORT%", exporter->legacyCpuSupport ? "1" : "0");
     
-    REPLACE_WILDCARD_WITH_STRING("%EXTRA_DEFINES_LINUX%", exporter->dataObject.getSetting(HiseSettings::Project::ExtraDefinitionsLinux).toString());
-	REPLACE_WILDCARD_WITH_STRING("%EXTRA_DEFINES_WIN%", exporter->dataObject.getSetting(HiseSettings::Project::ExtraDefinitionsWindows).toString());
-	REPLACE_WILDCARD_WITH_STRING("%EXTRA_DEFINES_OSX%", exporter->dataObject.getSetting(HiseSettings::Project::ExtraDefinitionsOSX).toString());
+    auto s = exporter->dataObject.getTemporaryDefinitionsAsString();
+    
+    REPLACE_WILDCARD_WITH_STRING("%EXTRA_DEFINES_LINUX%", exporter->dataObject.getSetting(HiseSettings::Project::ExtraDefinitionsLinux).toString() + s);
+	REPLACE_WILDCARD_WITH_STRING("%EXTRA_DEFINES_WIN%", exporter->dataObject.getSetting(HiseSettings::Project::ExtraDefinitionsWindows).toString() + s);
+	REPLACE_WILDCARD_WITH_STRING("%EXTRA_DEFINES_OSX%", exporter->dataObject.getSetting(HiseSettings::Project::ExtraDefinitionsOSX).toString() + s);
 	REPLACE_WILDCARD_WITH_STRING("%EXTRA_DEFINES_IOS%", exporter->dataObject.getSetting(HiseSettings::Project::ExtraDefinitionsIOS).toString());
 
+    
+    
 	auto allow32BitMacOS = exporter->dataObject.getSetting(HiseSettings::Compiler::Support32BitMacOS);
 
 	if (allow32BitMacOS)
@@ -1837,17 +1775,33 @@ void CompileExporter::ProjectTemplateHelpers::handleCompanyInfo(CompileExporter*
 
 void CompileExporter::ProjectTemplateHelpers::handleVisualStudioVersion(const HiseSettings::Data& dataObject, String& templateProject)
 {
-	const bool isUsingVisualStudio2015 = HelperClasses::isUsingVisualStudio2015(dataObject);
+	const bool isUsingVisualStudio2017 = HelperClasses::isUsingVisualStudio2017(dataObject);
 
-	if (isUsingVisualStudio2015)
+	auto shouldUseVS2017 = !(bool)HISE_USE_VS2022;
+
+	if (isUsingVisualStudio2017 != shouldUseVS2017)
 	{
-		REPLACE_WILDCARD_WITH_STRING("%VS_VERSION%", "VS2015");
-		REPLACE_WILDCARD_WITH_STRING("%TARGET_FOLDER%", "VisualStudio2015");
+		auto buildVersion = shouldUseVS2017 ? "VS2017" : "VS2022";
+		auto settingsVersion = isUsingVisualStudio2017 ? "VS2017" : "VS2022";
+
+		String message;
+
+		message << "The visual studio version you have build HISE with (" << buildVersion;
+		message << ") is not the one you've selected in the compiler settings (" << settingsVersion;
+		message << ")  \n> If you have installed both versions then the compilation should work, otherwise you need to change the VisualStudioVersion setting in the Development settings of HISE to the version that you have installed.  \nPress OK to resume the export process...";
+
+		PresetHandler::showMessageWindow("VS Version mismatch detected", message, PresetHandler::IconType::Warning);
 	}
-	else
+	
+	if (isUsingVisualStudio2017)
 	{
 		REPLACE_WILDCARD_WITH_STRING("%VS_VERSION%", "VS2017");
 		REPLACE_WILDCARD_WITH_STRING("%TARGET_FOLDER%", "VisualStudio2017");
+	}
+	else
+	{
+		REPLACE_WILDCARD_WITH_STRING("%VS_VERSION%", "VS2022");
+		REPLACE_WILDCARD_WITH_STRING("%TARGET_FOLDER%", "VisualStudio2022");
 	}
 }
 
@@ -2060,6 +2014,17 @@ juce::String CompileExporter::ProjectTemplateHelpers::getPluginChannelAmount(Mod
 {
     auto& dataObject = dynamic_cast<BackendProcessor*>(chain->getMainController())->getSettingsObject();
     
+    auto dobj = dataObject.getExtraDefinitionsAsObject();
+    
+    auto obj = dobj.getDynamicObject();
+    
+	// If we've defined this manually, we override the routing matrix value
+	// in order to allow exporting multichannel plugins with a stereo output configuration
+	if (obj->hasProperty("HISE_NUM_PLUGIN_CHANNELS"))
+	{
+		return "";
+	}
+
     int numChannels = chain->getMatrix().getNumSourceChannels();
     
     if(IS_SETTING_TRUE(HiseSettings::Project::ForceStereoOutput))
@@ -2279,14 +2244,15 @@ void CompileExporter::BatchFileCreator::createBatchFile(CompileExporter* exporte
 
 #if JUCE_WINDOWS
     
-	const String msbuildPath = HelperClasses::isUsingVisualStudio2015(exporter->dataObject) ? "\"C:\\Program Files (x86)\\MSBuild\\14.0\\Bin\\MsBuild.exe\"" :
-																	      "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Community\\MSBuild\\15.0\\Bin\\MsBuild.exe\"";
+	const String msbuildPath = HelperClasses::isUsingVisualStudio2017(exporter->dataObject) ? 
+		"\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Community\\MSBuild\\15.0\\Bin\\MsBuild.exe\"" :
+		"\"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin\\MsBuild.exe\"";
 
 	const String projucerPath = exporter->hisePath.getChildFile("tools/Projucer/Projucer.exe").getFullPathName();
 	
 	const String vsArgs = "/p:Configuration=\"" + exporter->configurationName + "\" /verbosity:minimal";
 
-	const String vsFolder = HelperClasses::isUsingVisualStudio2015(exporter->dataObject) ? "VisualStudio2015" : "VisualStudio2017";
+	const String vsFolder = HelperClasses::isUsingVisualStudio2017(exporter->dataObject) ? "VisualStudio2017" : "VisualStudio2022";
 
 	ADD_LINE("@echo off");
 
@@ -2298,17 +2264,15 @@ void CompileExporter::BatchFileCreator::createBatchFile(CompileExporter* exporte
 		
 		ADD_LINE("set msbuild=" << msbuildPath);
 		ADD_LINE("set vs_args=" << vsArgs);
-#if JUCE_64BIT
 		ADD_LINE("set PreferredToolArchitecture=x64");
-#endif
 
-		if (HelperClasses::isUsingVisualStudio2015(exporter->dataObject))
+		if (HelperClasses::isUsingVisualStudio2017(exporter->dataObject))
 		{
-			ADD_LINE("set VisualStudioVersion=14.0");
+			ADD_LINE("set VisualStudioVersion=15.0");
 		}
 		else
 		{
-			ADD_LINE("set VisualStudioVersion=15.0");
+			ADD_LINE("set VisualStudioVersion=17.0");
 		}
 	}
 	
@@ -2515,15 +2479,17 @@ juce::String CompileExporter::HelperClasses::getFileNameForCompiledPlugin(const 
 	return String();
 }
 
-bool CompileExporter::HelperClasses::isUsingVisualStudio2015(const HiseSettings::Data& dataObject)
+bool CompileExporter::HelperClasses::isUsingVisualStudio2017(const HiseSettings::Data& dataObject)
 {
-	// Always use VS2017 in CI mode
+	// Always use the version you build HISE with in CI mode
 	if (isUsingCIMode())
-		return false;
+	{
+		return !HISE_USE_VS2022;
+	}
 
 	const String v = GET_SETTING(HiseSettings::Compiler::VisualStudioVersion);
 
-	return v.isEmpty() || (v == "Visual Studio 2015");
+	return v.isEmpty() || (v == "Visual Studio 2017");
 }
 
 CompileExporter::ErrorCodes CompileExporter::HelperClasses::saveProjucerFile(String templateProject, CompileExporter* exporter)
@@ -2602,13 +2568,6 @@ void CompileExporter::HeaderHelpers::addStaticDspFactoryRegistration(String& plu
 	pluginDataHeaderFile << "REGISTER_STATIC_DSP_LIBRARIES()" << "\n";
 	pluginDataHeaderFile << "{" << "\n";
 	pluginDataHeaderFile << "\tREGISTER_STATIC_DSP_FACTORY(hise::HiseCoreDspFactory);" << "\n";
-
-	File tccConvertedFile = GET_PROJECT_HANDLER(chainToExport).getSubDirectory(ProjectHandler::SubDirectories::AdditionalSourceCode).getChildFile("ConvertedTccScriptFactory.cpp");
-
-	if (tccConvertedFile.existsAsFile())
-	{
-		pluginDataHeaderFile << "\tREGISTER_STATIC_DSP_FACTORY(ConvertedTccScriptFactory);" << "\n";
-	}
 
 	const String additionalDspClasses = exporter->GET_SETTING(HiseSettings::Project::AdditionalDspLibraries);
 

@@ -40,6 +40,11 @@ using namespace juce;
 using namespace hise;
 using namespace snex;
 
+void* SnexSource::SnexTestBaseHelper::getNodeWorkbench(NodeBase* node)
+{
+    return node->getScriptProcessor()->getMainController_()->getWorkbenchManager();
+
+}
 
 void SnexSource::recompiled(WorkbenchData::Ptr wb)
 {
@@ -49,6 +54,14 @@ void SnexSource::recompiled(WorkbenchData::Ptr wb)
 
 	lastResult = wb->getLastResult().compileResult;
 
+    if(lastResult.wasOk())
+    {
+        if(errorLevel != ErrorLevel::Warning)
+            errorLevel = ErrorLevel::OK;
+    }
+    else
+        errorLevel = ErrorLevel::CompileFail;
+    
 	throwScriptnodeErrorIfCompileFail();
 
 	if (auto objPtr = wb->getLastResult().mainClassPtr)
@@ -118,8 +131,14 @@ void SnexSource::throwScriptnodeErrorIfCompileFail()
 
 void SnexSource::logMessage(WorkbenchData::Ptr wb, int level, const String& s)
 {
+    if(level == 1)
+    {
+        errorLevel = ErrorLevel::Warning;
+    }
+    
 	if (wb->getGlobalScope().isDebugModeEnabled() && level > 4)
 	{
+        
 		if (auto p = dynamic_cast<Processor*>(parentNode->getScriptProcessor()))
 		{
 			parentNode->getScriptProcessor()->getMainController_()->writeToConsole(s.trim(), 0);
@@ -385,8 +404,6 @@ int SnexSource::ComplexDataHandler::getNumDataObjects(ExternalData::DataType t) 
 	case snex::ExternalData::DataType::FilterCoefficients:  return 0;
     default: return 0;
 	}
-
-	return 0;
 }
 
 hise::FilterDataObject* SnexSource::ComplexDataHandler::getFilterData(int index) 
@@ -730,7 +747,7 @@ void SnexComplexDataDisplay::rebuildEditors()
 
 SnexMenuBar::SnexMenuBar(SnexSource* s) :
 	popupButton("popup", this, f),
-	editButton("snex", this, f),
+	editButton("edit", this, f),
 	addButton("add", this, f),
 	asmButton("asm", this, f),
 	debugButton("debug", this, f),
@@ -738,6 +755,8 @@ SnexMenuBar::SnexMenuBar(SnexSource* s) :
 	cdp("popup", this, f),
 	source(s)
 {
+    editButton.setTooltip("Edit this SNEX node in the SNEX Editor floating tile");
+    snexIcon = f.createPath("snex");
 	s->addCompileListener(this);
 
 	addAndMakeVisible(classSelector);
@@ -973,12 +992,22 @@ void SnexMenuBar::buttonClicked(Button* b)
 			manager.setCurrentWorkbench(source->getWorkbench(), false);
 		else
 			manager.resetToRoot();
+
+		GET_BACKEND_ROOT_WINDOW(b)->addEditorTabsOfType<SnexEditorPanel>();
 	}
 }
 
 void SnexMenuBar::paint(Graphics& g)
 {
-	
+    Colour resultColours[4] = { Colour(0xFF555555),
+                                Colour(0xFFBB3434),
+                                Colour(0xFFFFBA00),
+                                Colour(0xFF4E8E35) };
+    
+    auto l = (int)source->getErrorLevel();
+    
+    g.setColour(resultColours[l]);
+    g.fillPath(snexIcon);
 }
 
 void SnexMenuBar::resized()
@@ -992,8 +1021,10 @@ void SnexMenuBar::resized()
 	
 	b.removeFromLeft(3);
 
-	editButton.setBounds(getLocalBounds().removeFromRight(80).reduced(2));
+	editButton.setBounds(b.removeFromRight(h).reduced(2));
 	
+    f.scalePath(snexIcon, b.removeFromRight(80).reduced(3).toFloat());
+    
 	cdp.setBounds(b.removeFromLeft(h));
 	
 

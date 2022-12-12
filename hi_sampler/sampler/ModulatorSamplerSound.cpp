@@ -238,6 +238,9 @@ juce::Range<int> ModulatorSamplerSound::getPropertyRange(const Identifier& id) c
 
 		int minValue, maxValue;
 
+		minValue = 0;
+		maxValue = 0;
+
 		if (id == SampleIds::SampleStart)
 		{
 			minValue = 0;
@@ -1914,7 +1917,7 @@ void ModulatorSamplerSound::EnvelopeTable::processBuffer(AudioSampleBuffer& b, i
 		ps.numChannels = b.getNumChannels();
 
 		filter.prepare(ps);
-		filter.setOrder(JUCE_LIVE_CONSTANT(1));
+		filter.setOrder(JUCE_LIVE_CONSTANT_OFF(1));
 		
 		int offset = 0;
 

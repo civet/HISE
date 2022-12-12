@@ -55,7 +55,8 @@ juce::String NodeComponent::Header::getPowerButtonId(bool getOff) const
 		}
 		else
 		{
-			if (path == "soft_bypass")
+			if (path == "soft_bypass" ||
+				path == "offline")
 				return "on";
 
 			return path;
@@ -616,6 +617,12 @@ void NodeComponent::handlePopupMenuResult(int result)
 	}
 	if (result == (int)MenuActions::WrapIntoDspNetwork)
 	{
+		if (node->getRootNetwork()->getRootNode() == node.get())
+		{
+			PresetHandler::showMessageWindow("Nope", "You don't need to wrap the root node.  \n> Just tick the `AllowCompilation` flag in the properties, save this network and export the DLL");
+			return;
+		}
+
 		auto wType = PopupHelpers::isWrappable(node.get());
 
 		if (wType == 2)
@@ -727,6 +734,8 @@ void NodeComponent::handlePopupMenuResult(int result)
 
 		if (wType == 1)
 		{
+			
+
 			PopupHelpers::wrapIntoNetwork(node.get(), PresetHandler::showYesNoWindow("Compile this network", "Do you want to include the new network into the compilation?", PresetHandler::IconType::Question));
 		}
 	}
@@ -1039,6 +1048,8 @@ void NodeComponent::PopupHelpers::wrapIntoNetwork(NodeBase* node, bool makeCompi
 	ValueTree nData(PropertyIds::Network);
 
 	auto rootTree = node->getRootNetwork()->getValueTree();
+
+	
 
 	// mirror all properties from the parent network;
 	for (int i = 0; i < rootTree.getNumProperties(); i++)

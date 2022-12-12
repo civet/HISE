@@ -2,6 +2,9 @@
 
 ![](http://hise.audio/images/github.png)
 
+**Build Status macOS / Windows (`develop` branch)**  
+
+[![CI build macOS](https://github.com/christophhart/HISE/actions/workflows/ci_mac.yml/badge.svg?branch=develop)](https://github.com/christophhart/HISE/actions/workflows/ci_mac.yml)
 
 **The open source framework for sample based instruments.**
 
@@ -53,6 +56,9 @@ It supports x86 and x64 on Windows, altough the 64bit version is highly recommen
 5. Click on "Save Project and open in IDE" to load the project in XCode / Visual Studio. 
 
 6. Hit compile and wait...
+
+### Install xcpretty on OSX 
+[xcpretty](https://github.com/xcpretty/xcpretty) is a formatter for xcode. You can install it from the terminal using the command `sudo gem install xcpretty`.
 
 ### Compiling without IPP on OSX
 

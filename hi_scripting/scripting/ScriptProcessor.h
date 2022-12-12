@@ -255,6 +255,10 @@ public:
 
 	Result getWatchedResult(int index);
 
+	CodeDocument::Position getLastPosition(CodeDocument& docToLookFor) const;
+
+	void setWatchedFilePosition(CodeDocument::Position& newPos);
+
 	void clearFileWatchers()
 	{
 		watchers.clear();
@@ -309,9 +313,11 @@ private:
 
 	ReferenceCountedArray<ExternalScriptFile> watchers;
 
+	Array<CodeDocument::Position> lastPositions;
+
 	Array<Component::SafePointer<DocumentWindow>> currentPopups;
 
-	static void addFileContentToValueTree(ValueTree externalScriptFiles, File scriptFile, ModulatorSynthChain* chainToExport);
+	static void addFileContentToValueTree(JavascriptProcessor* jp, ValueTree externalScriptFiles, File scriptFile, ModulatorSynthChain* chainToExport);
 };
 
 using namespace snex;
@@ -331,14 +337,39 @@ class JavascriptProcessor :	public FileChangeListener,
 							public Dispatchable,
 							public ProcessorWithDynamicExternalData,
 							public ApiProviderBase::Holder,
+							public WeakCallbackHolder::CallableObjectManager,
 							public scriptnode::DspNetwork::Holder
 {
 public:
 
 	// ================================================================================================================
 
+    struct ScopedPreprocessorMerger
+    {
+        ScopedPreprocessorMerger(MainController* mc)
+        {
+            Processor::Iterator<JavascriptProcessor> iter(mc->getMainSynthChain());
+            
+            while(auto jp = iter.getNextProcessor())
+            {
+                jp->usePreprocessorAtMerge = true;
+                list.add(jp);
+            }
+        }
+        
+        ~ScopedPreprocessorMerger()
+        {
+            for(auto jp: list)
+                jp->usePreprocessorAtMerge = false;
+        }
+        
+        Array<WeakReference<JavascriptProcessor>> list;
+    };
+    
 	using PreprocessorFunction = std::function<bool(const Identifier&, String& m)>;
 
+    bool usePreprocessorAtMerge = false;
+    
 	/** A named document that contains a callback function. */
 	class SnippetDocument : public CodeDocument
 	{
@@ -713,7 +744,16 @@ public:
 
 	Array<AutocompleteTemplate> autoCompleteTemplates;
 
+	MainController* mainController;
+
+	void setOptimisationReport(const String& report)
+	{
+		lastOptimisationReport = report;
+	}
+
 protected:
+
+	String lastOptimisationReport;
 
 	void clearExternalWindows();
 
@@ -754,7 +794,7 @@ protected:
 
 	ScopedPointer<HiseJavascriptEngine> scriptEngine;
 
-	MainController* mainController;
+	
 
 	bool lastCompileWasOK;
 	bool useStoredContentData = false;
@@ -840,6 +880,7 @@ public:
 		enum Type
 		{
 			Compilation,
+            ReplEvaluation,
 			HiPriorityCallbackExecution,
 			LowPriorityCallbackExecution,
 			DeferredPanelRepaintJob,
@@ -892,9 +933,12 @@ public:
 
 	void killVoicesAndExtendTimeOut(JavascriptProcessor* jp, int milliseconds=1000);
 
-	GlobalServer* getGlobalServer() { return globalServer.get(); }
+	SimpleReadWriteLock& getLookAndFeelRenderLock()
+	{
+		return lookAndFeelRenderLock;
+	}
 
-	CriticalSection& getLookAndFeelRenderLock();
+	GlobalServer* getGlobalServer() { return globalServer.get(); }
 
 	void resume()
 	{
@@ -945,6 +989,9 @@ public:
 
 			while (p.allowSleep && !p.shouldWakeUp && !shouldExit())
 			{
+                PendingCompilationList l;
+                auto r = p.executeQueue(Task::ReplEvaluation, l);
+                
 				Thread::sleep(200);
 			}
 
@@ -1022,7 +1069,7 @@ private:
 
 	CriticalSection scriptLock;
 
-	CriticalSection lookAndFeelRenderLock;
+	SimpleReadWriteLock lookAndFeelRenderLock;
 
 	using CompilationTask = SuspendHelpers::Suspended<Task, SuspendHelpers::ScopedTicket>;
 	using CallbackTask = SuspendHelpers::Suspended<Task, SuspendHelpers::FreeTicket>;
@@ -1033,6 +1080,10 @@ private:
 	MultithreadedLockfreeQueue<CompilationTask, queueConfig> compilationQueue;
 	MultithreadedLockfreeQueue<CallbackTask, queueConfig> lowPriorityQueue;
 	MultithreadedLockfreeQueue<CallbackTask, queueConfig> highPriorityQueue;
+    
+#if USE_BACKEND
+    MultithreadedLockfreeQueue<CallbackTask, queueConfig> replQueue;
+#endif
 
 	MultithreadedLockfreeQueue<WeakReference<ScriptingApi::Content::ScriptPanel>, queueConfig> deferredPanels;
 };

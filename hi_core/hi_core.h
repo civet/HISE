@@ -115,6 +115,22 @@ If true, then this will use some additional features for the standalone app (pop
 #define IS_STANDALONE_APP 0
 #endif
 
+/** Config: DONT_CREATE_USER_PRESET_FOLDER
+
+Set this to 1 to disable the creation of the User Presets folder at init (i.e. for non-audio related app)
+*/
+#ifndef DONT_CREATE_USER_PRESET_FOLDER
+#define DONT_CREATE_USER_PRESET_FOLDER 0
+#endif
+
+/** Config: DONT_CREATE_EXPANSIONS_FOLDER
+
+Set this to 1 to disable the creation of the Expansions folder at init (i.e. for non-audio related app)
+*/
+#ifndef DONT_CREATE_EXPANSIONS_FOLDER
+#define DONT_CREATE_EXPANSIONS_FOLDER 0
+#endif
+
 /** Config: USE_COPY_PROTECTION
 
 If true, then the copy protection will be used
@@ -150,7 +166,7 @@ Use the Intel Performance Primitives Library for the convolution reverb.
 * Use the vDsp FFT on Apple devices.
 */
 #ifndef USE_VDSP_FFT
-#define USE_VDSP_FFT !USE_IPP && JUCE_MAC
+#define USE_VDSP_FFT JUCE_MAC
 #endif
 
 /** Config: FRONTEND_IS_PLUGIN
@@ -177,6 +193,14 @@ This can be used to simulate an audio effect routing setup (when the appropriate
 */
 #ifndef FORCE_INPUT_CHANNELS
 #define FORCE_INPUT_CHANNELS 0
+#endif
+
+/** Config: HISE_DEACTIVATE_OVERLAY
+	If enabled, this will deactivate the dark overlay that shows error messages so you
+	can define your own thing.
+*/
+#ifndef HISE_DEACTIVATE_OVERLAY
+#define HISE_DEACTIVATE_OVERLAY 0
 #endif
 
 /** Config: HISE_MIDIFX_PLUGIN
@@ -280,6 +304,14 @@ If true, then the FX plugin will have a MIDI input and the MIDI processor chain 
 */
 #ifndef HISE_ENABLE_MIDI_INPUT_FOR_FX
 #define HISE_ENABLE_MIDI_INPUT_FOR_FX 0
+#endif
+
+/** Config: HISE_COMPLAIN_ABOUT_ILLEGAL_BUFFER_SIZE
+
+If true then the plugin will complain about the buffer size not being a multiple of HISE_EVENT_RASTER. 
+*/
+#ifndef HISE_COMPLAIN_ABOUT_ILLEGAL_BUFFER_SIZE
+#define HISE_COMPLAIN_ABOUT_ILLEGAL_BUFFER_SIZE 1
 #endif
 
 /** Config: ENABLE_ALL_PEAK_METERS

@@ -837,9 +837,6 @@ void PatchBrowser::ModuleDragTarget::buttonClicked(Button *b)
 	{
 		const bool isSolo = getProcessor()->getEditorState(Processor::EditorState::Solo);
 
-		if (!isSolo) mainEditor->addProcessorToPanel(getProcessor());
-		else		 mainEditor->removeProcessorFromPanel(getProcessor());
-
 		refreshButtonState(soloButton, !isSolo);
 	}
 
@@ -1110,7 +1107,7 @@ void PatchBrowser::PatchCollection::paint(Graphics &g)
 	auto c = synth->getIconColour();
 
 	if (c.isTransparent() && getProcessor()->getMainController()->getMainSynthChain() != getProcessor())
-		c = JUCE_LIVE_CONSTANT(Colour(0xff828282));
+		c = JUCE_LIVE_CONSTANT_OFF(Colour(0xff828282));
 
 	if (getProcessor()->isBypassed())
 		c = c.withMultipliedAlpha(0.4f);
@@ -1173,7 +1170,7 @@ void PatchBrowser::PatchCollection::applyLayout()
 
     auto rectSpace = b.reduced(0, 7);
 	rectSpace.removeFromLeft(7);
-	rectSpace.removeFromRight(JUCE_LIVE_CONSTANT(3));
+	rectSpace.removeFromRight(JUCE_LIVE_CONSTANT_OFF(3));
     auto iconSpace = rectSpace.removeFromLeft(rectSpace.getHeight());
     
     foldButton->setBorderSize(BorderSize<int>(JUCE_LIVE_CONSTANT_OFF(10)));
@@ -1205,7 +1202,7 @@ void PatchBrowser::PatchCollection::applyLayout()
         gotoWorkspace->setBounds(rectSpace.removeFromRight(b.getHeight()).expanded(0, b.getHeight() - rectSpace.getHeight()));
     }
 
-	rectSpace.removeFromLeft(JUCE_LIVE_CONSTANT(5));
+	rectSpace.removeFromLeft(JUCE_LIVE_CONSTANT_OFF(5));
 	idLabel.setBounds(rectSpace.toNearestInt());
 
 	repaint();
@@ -1342,10 +1339,7 @@ void PatchBrowser::PatchItem::fillPopupMenu(PopupMenu &m)
 
 	m.addSeparator();
 
-	const bool isRoot = GET_BACKEND_ROOT_WINDOW(this)->getMainSynthChain()->getRootProcessor() == getProcessor();
-	m.addItem((int)ModuleDragTarget::ViewSettings::Root, "Set Fullscreen", true, isRoot);
 	m.addItem((int)ModuleDragTarget::ViewSettings::Visible, "Show module", true, getProcessor()->getEditorState(Processor::Visible));
-	m.addItem((int)ModuleDragTarget::ViewSettings::Solo, "Add module to Root", true, getProcessor()->getEditorState(Processor::Solo));
 
 	m.addSeparator();
 	
@@ -1378,13 +1372,9 @@ void PatchBrowser::PatchItem::popupCallback(int menuIndex)
 	case PatchBrowser::ModuleDragTarget::ViewSettings::Solo:
 		getProcessor()->toggleEditorState(Processor::Solo, sendNotification);
 
-		if (getProcessor()->getEditorState(Processor::EditorState::Solo))
-			mainEditor->addProcessorToPanel(getProcessor());
-		else
-			mainEditor->removeProcessorFromPanel(getProcessor());
 		break;
 	case PatchBrowser::ModuleDragTarget::ViewSettings::Root:
-		mainEditor->setRootProcessorWithUndo(p);
+		mainEditor->setRootProcessor(p);
 		findParentComponentOfClass<SearchableListComponent>()->repaint();
 		break;
 	case PatchBrowser::ModuleDragTarget::ViewSettings::Bypassed:
@@ -1533,60 +1523,63 @@ void PatchBrowser::PatchItem::paint(Graphics& g)
 {
 	idLabel.setColour(Label::ColourIds::textColourId, Colours::white.withAlpha(bypassed ? 0.2f : 0.8f));
 
+	Colour pColour = Colours::grey;
+	
+
+
 	if (p.get() != nullptr)
+		pColour = p.get()->getColour();
+
+	auto b = getLocalBounds().toFloat();
+
+	b.removeFromLeft(hierarchy * 10.0f + 10.0f);
+	b.removeFromLeft(findParentComponentOfClass<PatchCollection>()->getIntendation());
+
+	auto pb = findParentComponentOfClass<PatchBrowser>();
+
+	if (pb->showChains)
 	{
-		auto b = getLocalBounds().toFloat();
-
-		b.removeFromLeft(hierarchy * 10.0f + 10.0f);
-		b.removeFromLeft(findParentComponentOfClass<PatchCollection>()->getIntendation());
-
-		auto pb = findParentComponentOfClass<PatchBrowser>();
-
-		if (pb->showChains)
-		{
-			b.removeFromRight(getHeight());
-		}
-
-		paintItemBackground(g, b);
-
-		if (isMouseOver(false))
-		{
-			g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.5f));
-			g.drawRoundedRectangle(b.reduced(1.0f), 2.0f, 1.0f);
-		}
-
-		if (inPopup)
-		{
-			g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.1f));
-			g.fillRoundedRectangle(b.reduced(1.0f), 2.0f);
-			g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.6f));
-			g.drawRoundedRectangle(b.reduced(1.0f), 2.0f, 1.0f);
-		}
-
-		g.setColour(p->getColour().withAlpha(!bypassed ? 1.0f : 0.5f));
-
-		auto iconSpace = b.removeFromLeft(b.getHeight()).reduced(2.0f);
-
-		bypassArea = iconSpace.toNearestInt();
-
-		auto canBeBypassed = dynamic_cast<Chain*>(getProcessor()) == nullptr;
-		canBeBypassed |= dynamic_cast<ModulatorSynth*>(getProcessor()) != nullptr;
-
-		if (!canBeBypassed)
-		{
-			g.drawRoundedRectangle(iconSpace.reduced(1.0f), 2.0f, 2.0f);
-			g.setColour(p->getColour().withAlpha(0.2f));
-		}
-
-		g.fillRoundedRectangle(iconSpace, 2.0f);
-
-		g.setColour(Colour(0xFF222222));
-
-		g.drawRoundedRectangle(iconSpace, 2.0f, 2.0f);
-
-		g.setColour(ProcessorHelpers::is<Chain>(p.get()) ? Colours::black.withAlpha(0.6f) : Colours::black);
-
+		b.removeFromRight(getHeight());
 	}
+
+	paintItemBackground(g, b);
+
+	if (isMouseOver(false))
+	{
+		g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.5f));
+		g.drawRoundedRectangle(b.reduced(1.0f), 2.0f, 1.0f);
+	}
+
+	if (inPopup)
+	{
+		g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.1f));
+		g.fillRoundedRectangle(b.reduced(1.0f), 2.0f);
+		g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.6f));
+		g.drawRoundedRectangle(b.reduced(1.0f), 2.0f, 1.0f);
+	}
+
+	g.setColour(pColour.withAlpha(!bypassed ? 1.0f : 0.5f));
+
+	auto iconSpace = b.removeFromLeft(b.getHeight()).reduced(2.0f);
+
+	bypassArea = iconSpace.toNearestInt();
+
+	auto canBeBypassed = dynamic_cast<Chain*>(getProcessor()) == nullptr;
+	canBeBypassed |= dynamic_cast<ModulatorSynth*>(getProcessor()) != nullptr;
+
+	if (!canBeBypassed)
+	{
+		g.drawRoundedRectangle(iconSpace.reduced(1.0f), 2.0f, 2.0f);
+		g.setColour(pColour.withAlpha(0.2f));
+	}
+
+	g.fillRoundedRectangle(iconSpace, 2.0f);
+
+	g.setColour(Colour(0xFF222222));
+
+	g.drawRoundedRectangle(iconSpace, 2.0f, 2.0f);
+
+	g.setColour(ProcessorHelpers::is<Chain>(p.get()) ? Colours::black.withAlpha(0.6f) : Colours::black);
 }
 
 void PatchBrowser::PatchItem::resized()
@@ -1662,6 +1655,9 @@ PatchBrowser::MiniPeak::MiniPeak(Processor* p_) :
 		{
 			numChannels = rp->getMatrix().getNumSourceChannels();
 			rp->getMatrix().addChangeListener(this);
+            
+            if(numChannels != 2)
+                rp->getMatrix().setEditorShown(true);
 		}
 			
 		else
@@ -1678,6 +1674,9 @@ PatchBrowser::MiniPeak::~MiniPeak()
 	if (auto rp = dynamic_cast<RoutableProcessor*>(p.get()))
 	{
 		rp->getMatrix().removeChangeListener(this);
+        
+        if(numChannels != 2)
+            rp->getMatrix().setEditorShown(false);
 	}
 }
 
@@ -1781,7 +1780,7 @@ void PatchBrowser::MiniPeak::paint(Graphics& g)
 		g.fillPath(mp);
 		g.setColour(p->getColour());
 
-		if (auto synth = dynamic_cast<ModulatorSynth*>(p->getParentProcessor(true)))
+		if (auto synth = dynamic_cast<ModulatorSynth*>(p->getParentProcessor(true, false)))
 		{
 			g.setColour(Colours::white.withAlpha(channelValues[0]));
 			g.fillPath(mp);
@@ -1839,13 +1838,18 @@ void PatchBrowser::MiniPeak::timerCallback()
 	}
 	case ProcessorType::Midi:
 	{
-		auto newValue = dynamic_cast<ModulatorSynth*>(p->getParentProcessor(true))->getMidiInputFlag();
-
-		if (channelValues[0] != newValue)
+		if (auto pp = p->getParentProcessor(true, false))
 		{
-			channelValues[0] = newValue;
-			repaint();
+			auto newValue = dynamic_cast<ModulatorSynth*>(pp)->getMidiInputFlag();
+
+			if (channelValues[0] != newValue)
+			{
+				channelValues[0] = newValue;
+				repaint();
+			}
 		}
+
+		
 		
 		break;
 	}
@@ -1860,7 +1864,7 @@ void PatchBrowser::MiniPeak::timerCallback()
 		{
 			auto& mat = rp->getMatrix();
 			thisNumChannels = mat.getNumSourceChannels();
-			mat.setEditorShown(thisNumChannels != 2);
+			
 
 			somethingChanged = numChannels != thisNumChannels;
 
@@ -1924,6 +1928,270 @@ juce::Path PatchBrowser::Factory::createPath(const String& url) const
 
 	if (url == "unfolded")
 		p.applyTransform(AffineTransform::rotation(float_Pi * 0.5f));
+
+	return p;
+}
+
+AutomationDataBrowser::AutomationCollection::ConnectionItem::ConnectionItem(AutomationData::Ptr d_, AutomationData::ConnectionBase::Ptr c_) :
+	Item(d_->id.toString()),
+	d(d_),
+	c(c_)
+{
+	if (auto pc = dynamic_cast<AutomationData::ProcessorConnection*>(c.get()))
+	{
+		if (pc->connectedProcessor != nullptr)
+			pc->connectedProcessor->addChangeListener(this);
+	}
+
+	setSize(380 - 16, ITEM_HEIGHT);
+}
+
+AutomationDataBrowser::AutomationCollection::ConnectionItem::~ConnectionItem()
+{
+	if (auto pc = dynamic_cast<AutomationData::ProcessorConnection*>(c.get()))
+	{
+		if (pc->connectedProcessor != nullptr)
+			pc->connectedProcessor->removeChangeListener(this);
+	}
+}
+
+void AutomationDataBrowser::AutomationCollection::ConnectionItem::paint(Graphics& g)
+{
+	String id = c->getDisplayString();
+	auto pValue = c->getLastValue();
+
+	if (d->lastValue != pValue)
+		id << " (*)";
+
+	Item::paintItemBackground(g, getLocalBounds().toFloat());
+
+	auto nv = d->range.convertTo0to1(pValue);
+
+	auto b = getLocalBounds().toFloat().reduced(4.0f);
+	b = b.removeFromLeft(b.getWidth() * nv);
+
+	g.setColour(Colours::white.withAlpha(0.1f));
+	g.fillRect(b);
+
+	g.setColour(Colours::white.withAlpha(d->lastValue != pValue ? 0.9f : 0.4f));
+	g.setFont(GLOBAL_BOLD_FONT());
+	g.drawText(id, getLocalBounds().toFloat().reduced(10, 0), Justification::left);
+}
+
+void AutomationDataBrowser::AutomationCollection::paint(Graphics& g)
+{
+	g.setColour(Colours::white);
+	g.setFont(GLOBAL_MONOSPACE_FONT());
+
+	auto v = data->range.convertTo0to1(data->lastValue);
+	auto top = getLocalBounds().toFloat().removeFromTop(COLLECTION_HEIGHT).reduced(2.0f, 10.0f);
+
+	String s;
+
+	s << "#" << String(index) << " " << data->id.toString() << ": " << String(data->lastValue);
+
+	g.drawText(s, top.reduced(10.0f, 0.0f), Justification::left);
+
+	g.setColour(Colours::white.withAlpha(0.2f));
+	g.drawRoundedRectangle(top, top.getHeight() / 2.0f, 1.0f);
+
+	
+
+	top = top.reduced(2.0f);
+
+	auto copy = top;
+	
+
+	top = top.removeFromLeft(v * top.getWidth());
+	
+	g.fillRoundedRectangle(top, top.getHeight() * 0.5f);
+
+	
+
+	g.setColour(Colours::white);
+
+	copy = copy.reduced(1.0f);
+
+	Factory f;
+
+	if (hasComponentConnection)
+	{
+		auto p = f.createPath("component");
+		f.scalePath(p, copy.removeFromRight(copy.getHeight()));
+		g.fillPath(p);
+		copy.removeFromRight(5.0f);
+	}
+
+	if (hasMidiConnection)
+	{
+		auto p = f.createPath("midi");
+		f.scalePath(p, copy.removeFromRight(copy.getHeight()));
+		g.fillPath(p);
+	}
+}
+
+AutomationDataBrowser::AutomationCollection::AutomationCollection(MainController* mc, AutomationData::Ptr data_, int index_) :
+	ControlledObject(mc),
+	SimpleTimer(mc->getGlobalUIUpdater()),
+	Collection(),
+	data(data_),
+	index(index_)
+{
+	for (auto c_ : data->connectionList)
+	{
+		auto c = new ConnectionItem(data, c_);
+		items.add(c);
+		addAndMakeVisible(items.getLast());
+	}
+
+	data->asyncListeners.addListener(*this, [](AutomationCollection& c, int index, float v)
+	{
+		c.repaint();
+	}, false);
+
+	checkIfChanged(false);
+}
+
+void AutomationDataBrowser::AutomationCollection::checkIfChanged(bool rebuildIfChanged)
+{
+	auto hasMidiConnectionNow = data->isConnectedToMidi();
+	auto hasComponentConnectionNow = data->isConnectedToComponent();
+
+	if (hasComponentConnection != hasComponentConnectionNow ||
+		hasMidiConnection != hasMidiConnectionNow)
+	{
+		if (rebuildIfChanged)
+		{
+			if (auto p = findParentComponentOfClass<AutomationDataBrowser>())
+			{
+				if (p->midiButton->getToggleState() ||
+					p->componentButton->getToggleState())
+				{
+					SafeAsyncCall::call<AutomationDataBrowser>(*p, [](AutomationDataBrowser& b)
+						{
+							b.rebuildModuleList(true);
+						});
+				}
+			}
+
+			return;
+		}
+		
+		hasComponentConnection = hasComponentConnectionNow;
+		hasMidiConnection = hasMidiConnectionNow;
+		repaint();
+	}
+}
+
+void AutomationDataBrowser::AutomationCollection::timerCallback()
+{
+	checkIfChanged(true);
+}
+
+AutomationDataBrowser::AutomationDataBrowser(BackendRootWindow* bw) :
+	ControlledObject(bw->getBackendProcessor()),
+	SearchableListComponent(bw)
+{
+	setFuzzyness(0.8);
+
+	addAndMakeVisible(midiButton = new HiseShapeButton("midi", this, factory));
+	midiButton->setToggleModeWithColourChange(true);
+	midiButton->setTooltip("Show only MIDI learned data");
+	midiButton->setToggleStateAndUpdateIcon(false);
+
+	addCustomButton(midiButton);
+
+	addAndMakeVisible(componentButton = new HiseShapeButton("component", this, factory));
+	componentButton->setToggleModeWithColourChange(true);
+	componentButton->setTooltip("Show only automation with connection to a script component");
+	componentButton->setToggleStateAndUpdateIcon(false);
+
+	addCustomButton(componentButton);
+
+	updateList(*this, true);
+}
+
+void AutomationDataBrowser::buttonClicked(Button* b)
+{
+	rebuildModuleList(true);
+}
+
+int AutomationDataBrowser::getNumCollectionsToCreate() const
+{
+	auto numTotal = getMainController()->getUserPresetHandler().getNumCustomAutomationData();
+
+	auto someFilterActive = midiButton->getToggleState() || componentButton->getToggleState();
+
+	
+
+	if (someFilterActive)
+	{
+		const auto numToSearch = numTotal;
+
+		for (int i = 0; i < numToSearch; i++)
+		{
+			if (auto ptr = getMainController()->getUserPresetHandler().getCustomAutomationData(i))
+			{
+				if ((!ptr->isConnectedToMidi() && midiButton->getToggleState()) ||
+					(!ptr->isConnectedToComponent() && componentButton->getToggleState()))
+				{
+					numTotal--;
+				}
+			}
+		}
+	}
+
+	return numTotal;
+}
+
+hise::SearchableListComponent::Collection* AutomationDataBrowser::createCollection(int index)
+{
+	auto someFilterActive = midiButton->getToggleState() || componentButton->getToggleState();
+
+	if (someFilterActive)
+	{
+		auto numTotal = getMainController()->getUserPresetHandler().getNumCustomAutomationData();
+
+		int realIndex = -1;
+
+		for (int i = 0; i < numTotal; i++)
+		{
+			if (auto ptr = getMainController()->getUserPresetHandler().getCustomAutomationData(i))
+			{
+				// check if it's included in the filter
+				if ((ptr->isConnectedToMidi() || !midiButton->getToggleState()) &&
+					(ptr->isConnectedToComponent() || !componentButton->getToggleState()))
+				{
+					realIndex++;
+				}
+
+				if(index == realIndex)
+					return new AutomationCollection(getMainController(), ptr, i);
+			}
+		}
+
+		// must not happen...
+		jassertfalse;
+		return nullptr;
+	}
+	else
+	{
+		if (auto ptr = getMainController()->getUserPresetHandler().getCustomAutomationData(index))
+		{
+			return new AutomationCollection(getMainController(), ptr, index);
+		}
+	}
+    
+    jassertfalse;
+    return nullptr;
+}
+
+juce::Path AutomationDataBrowser::Factory::createPath(const String& url) const
+{
+	Path p;
+
+	LOAD_PATH_IF_URL("component", HiBinaryData::SpecialSymbols::macros);
+	LOAD_PATH_IF_URL("midi", HiBinaryData::SpecialSymbols::midiData);
 
 	return p;
 }

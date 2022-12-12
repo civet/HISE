@@ -35,12 +35,11 @@ namespace hise { using namespace juce;
 BackendProcessor::BackendProcessor(AudioDeviceManager *deviceManager_/*=nullptr*/, AudioProcessorPlayer *callback_/*=nullptr*/) :
 MainController(),
 AudioProcessorDriver(deviceManager_, callback_),
-viewUndoManager(new UndoManager()),
 scriptUnlocker(this)
 {
 	ExtendedApiDocumentation::init();
 
-    synthChain = new ModulatorSynthChain(this, "Master Chain", NUM_POLYPHONIC_VOICES, viewUndoManager);
+    synthChain = new ModulatorSynthChain(this, "Master Chain", NUM_POLYPHONIC_VOICES);
     
 	synthChain->addProcessorsWhenEmpty();
 
@@ -65,7 +64,8 @@ scriptUnlocker(this)
 
 	dllManager = new BackendDllManager(this);
 
-	refreshExpansionType();
+	if(getCurrentFileHandler().getRootFolder().isDirectory())
+		refreshExpansionType();
 
 	//getExpansionHandler().createAvailableExpansions();
 
@@ -141,6 +141,7 @@ void BackendProcessor::projectChanged(const File& /*newRootDirectory*/)
 
 	refreshExpansionType();
 	
+    dllManager->loadDll(true);
 }
 
 void BackendProcessor::refreshExpansionType()
@@ -187,7 +188,48 @@ void BackendProcessor::refreshExpansionType()
 
 void BackendProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& midiMessages)
 {
-	getDelayedRenderer().processWrapped(buffer, midiMessages);
+	if (isUsingDynamicBufferSize())
+	{
+		int numTodo = buffer.getNumSamples();
+		int pos = 0;
+
+		while (numTodo > 0)
+		{
+			// I'm sure that's how it looks inside there...
+			int fruityLoopsBufferSize = Random::getSystemRandom().nextInt({ numTodo / 3, numTodo + 1 });
+			
+			if (fruityLoopsBufferSize == 0)
+				continue;
+
+			if (numTodo < 8)
+				fruityLoopsBufferSize = numTodo;
+
+			fruityLoopsBufferSize = jlimit(0, numTodo, fruityLoopsBufferSize);
+
+			
+
+			float* channels[HISE_NUM_PLUGIN_CHANNELS];
+
+			for (int i = 0; i < buffer.getNumChannels(); i++)
+				channels[i] = buffer.getWritePointer(i, pos);
+
+			MidiBuffer chunkMidiBuffer;
+			chunkMidiBuffer.addEvents(midiMessages, pos, fruityLoopsBufferSize, -pos);
+
+			AudioSampleBuffer chunk(channels, buffer.getNumChannels(), fruityLoopsBufferSize);
+
+			getDelayedRenderer().processWrapped(chunk, chunkMidiBuffer);
+
+			numTodo -= fruityLoopsBufferSize;
+			pos += fruityLoopsBufferSize;
+		}
+	}
+	else
+	{
+		getDelayedRenderer().processWrapped(buffer, midiMessages);
+	}
+
+	
 };
 
 void BackendProcessor::processBlockBypassed(AudioSampleBuffer& buffer, MidiBuffer& midiMessages)
@@ -323,19 +365,6 @@ juce::File BackendProcessor::getDatabaseRootDirectory() const
 hise::BackendProcessor* BackendProcessor::getDocProcessor()
 {
     return this;
-    
-	if (isFlakyThreadingAllowed())
-		return this;
-
-	if (docProcessor == nullptr)
-	{
-		docProcessor = new BackendProcessor(deviceManager, callback);
-		docProcessor->setAllowFlakyThreading(true);
-		docProcessor->prepareToPlay(44100.0, 512);
-		
-	}
-
-	return docProcessor;
 }
 
 hise::BackendRootWindow* BackendProcessor::getDocWindow()

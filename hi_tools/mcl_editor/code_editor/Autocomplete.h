@@ -29,8 +29,6 @@ SimpleDocumentTokenProvider class.
 class TokenCollection : public Thread,
 						public AsyncUpdater
 {
-	
-
 public:
 
 	/** A Token is the entry that is being used in the autocomplete popup (or any other IDE tools
@@ -53,10 +51,12 @@ public:
 
 		static bool matchesInput(const String& input, const String& code)
 		{
-			if (input.length() == 1)
+            auto inputLength = input.length();
+            
+			if (inputLength <= 2)
 				return code.toLowerCase().startsWith(input.toLowerCase());
 			else
-				return FuzzySearcher::fitsSearch(input.toLowerCase(), code.toLowerCase(), JUCE_LIVE_CONSTANT(0.6));
+                return code.toLowerCase().contains(input.toLowerCase());
 		}
 
 		virtual bool equals(const Token* other) const
@@ -255,7 +255,7 @@ public:
 	}
 
 	TokenCollection():
-		Thread("TokenRebuildThread")
+		Thread("TokenRebuildThread", HISE_DEFAULT_STACK_SIZE)
 	{
 
 	}
@@ -393,7 +393,13 @@ public:
             if(!startsWith1 && startsWith2)
                 return 1;
             
-            return 0;
+            if(first->priority > second->priority)
+                return -1;
+            
+            if(second->priority > first->priority)
+                return 1;
+            
+            return first->tokenContent.compareIgnoreCase(second->tokenContent);
         }
         
         String exactSearchTerm;
@@ -482,10 +488,12 @@ struct SimpleDocumentTokenProvider : public TokenCollection::Provider,
 };
 
 
-struct Autocomplete : public Component,
+class Autocomplete : public Component,
 	public KeyListener,
 	public ScrollBar::Listener
 {
+public:
+
 	using Token = TokenCollection::Token;
 
 	struct ParameterSelection: public ReferenceCountedObject
@@ -547,7 +555,7 @@ struct Autocomplete : public Component,
 		void componentMovedOrResized(Component& component, bool , bool )
 		{
 			setTopLeftPosition(component.getBounds().getBottomLeft());
-			setSize(jmax(300, component.getWidth()), jmin<int>((int)display.totalHeight + 20, 200));
+			setSize(jmax(300, component.getWidth()), jmin<int>((int)display.totalHeight + 20, 250));
 		}
 
 		void refreshText()

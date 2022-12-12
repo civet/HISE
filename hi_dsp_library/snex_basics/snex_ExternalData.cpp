@@ -119,8 +119,6 @@ hise::ComplexDataUIBase* ExternalDataHolder::getComplexBaseType(ExternalData::Da
 	case ExternalData::DataType::DisplayBuffer: return getDisplayBuffer(index);
     default: return nullptr;
 	}
-
-	return nullptr;
 }
 
 
@@ -295,6 +293,20 @@ juce::AudioSampleBuffer ExternalData::toAudioSampleBuffer() const
 		return AudioSampleBuffer((float**)&data, 1, numSamples);
 }
 
+snex::ExternalData::DataType ExternalData::getDataTypeForId(const Identifier& id, bool plural/*=false*/)
+{
+	for (int i = 0; i < (int)DataType::numDataTypes; i++)
+	{
+		Identifier a(getDataTypeName((DataType)i, plural));
+
+		if (a == id)
+			return (DataType)i;
+	}
+
+	jassertfalse;
+	return DataType::numDataTypes;
+}
+
 snex::ExternalData::DataType ExternalData::getDataTypeForClass(ComplexDataUIBase* d)
 {
 	if (auto s = dynamic_cast<SliderPackData*>(d))
@@ -325,7 +337,12 @@ hise::ComplexDataUIBase::EditorBase* ExternalData::createEditor(ComplexDataUIBas
 	}
 	else if (auto t = dynamic_cast<hise::MultiChannelAudioBuffer*>(dataObject))
 	{
-		c = new hise::MultiChannelAudioBufferDisplay();
+		auto availableProviders = t->getAvailableXYZProviders();
+
+		if (availableProviders.size() != 1)
+			c = new hise::XYZMultiChannelAudioBufferEditor();
+		else
+			c = new hise::MultiChannelAudioBufferDisplay();
 	}
 	else if (auto t = dynamic_cast<hise::FilterDataObject*>(dataObject))
 	{

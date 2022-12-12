@@ -92,6 +92,16 @@ Set to 0 to disable SNEX compilation (default on iOS).
 #endif
 #endif
 
+/** The SNEX compiler is only available on x64 builds so this preprocessor will allow compiling HISE on ARM withouth the JIT compiler. */
+#ifndef HISE_INCLUDE_SNEX_X64_CODEGEN
+#if JUCE_ARM
+#define HISE_INCLUDE_SNEX_X64_CODEGEN 0
+#else
+#define HISE_INCLUDE_SNEX_X64_CODEGEN HISE_INCLUDE_SNEX
+#endif
+#endif
+
+
 /** Config: SNEX_INCLUDE_MEMORY_ADDRESS_IN_DUMP
 
 Set to 1 if you want the memory address to be included in the data dump string. 
@@ -102,6 +112,22 @@ Set to 1 if you want the memory address to be included in the data dump string.
 
 #include "../hi_lac/hi_lac.h"
 #include "../hi_dsp_library/hi_dsp_library.h"
+
+
+#if !HISE_INCLUDE_SNEX_X64_CODEGEN
+
+namespace asmjit {
+namespace x86 {
+
+struct Compiler
+{
+    
+};
+
+} // namespace x86
+} // namespace asmjit
+
+#endif
 
 
 namespace snex
@@ -221,7 +247,10 @@ namespace snex
 #include "snex_core/snex_jit_JitCompiledFunctionClass.h"
 #include "snex_public/snex_jit_JitCompiler.h"
 #include "snex_cpp_builder/snex_jit_CppBuilder.h"
+#include <set>
 #include "snex_cpp_builder/snex_jit_ValueTreeBuilder.h"
+
+#include "snex_parser/snex_jit_PreProcessor.h"
 
 namespace snex {
 	namespace jit {
@@ -235,15 +264,8 @@ namespace snex {
 
 		using PointerType = uint64_t;
 
-#if JUCE_64BIT
+
 		typedef uint64_t AddressType;
-#else
-		typedef uint32_t AddressType;
-#endif
-
-
-
-
 	} // end namespace jit
 } // end namespace snex
 

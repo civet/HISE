@@ -150,6 +150,10 @@
  //#define HISE_INCLUDE_PITCH_DETECTION 1
 #endif
 
+#ifndef    HISE_USE_EXTENDED_TEMPO_VALUES
+ //#define HISE_USE_EXTENDED_TEMPO_VALUES 0
+#endif
+
 //==============================================================================
 // juce_audio_devices flags:
 

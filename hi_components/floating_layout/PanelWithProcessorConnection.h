@@ -106,6 +106,8 @@ public:
 
 	void comboBoxChanged(ComboBox* comboBoxThatHasChanged) override;
 
+    virtual void preSelectCallback(ComboBox* cb) {};
+    
 	void processorDeleted(Processor* /*deletedProcessor*/);
 
 	/** Overwrite this and return the id of the processor. This is used to prevent resetting with global connector panels. */
@@ -124,7 +126,9 @@ public:
 
 	void refreshSelector(StringArray &items, String currentId);
 
-	void refreshIndexList();
+    void refreshSelectorValue(Processor* p, String currentId);
+    
+    void refreshIndexList();
 
 	template <class ContentType> ContentType* getContent() { return dynamic_cast<ContentType*>(content.get()); };
 
@@ -147,12 +151,27 @@ public:
 
 	void setContentWithUndo(Processor* newProcessor, int newIndex);
 
+    void refreshTitle()
+    {
+        auto titleToUse = hasCustomTitle() ? getCustomTitle() : getTitle();
+
+        if (getProcessor() && !hasCustomTitle())
+        {
+            titleToUse << ": " << getConnectedProcessor()->getId();
+        }
+
+        setDynamicTitle(titleToUse);
+
+        resized();
+        repaint();
+    }
+    
 	void refreshContent()
 	{
 		if (getConnectedProcessor())
 			connectionSelector->setText(getConnectedProcessor()->getId(), dontSendNotification);
 		else
-			connectionSelector->setSelectedId(1);
+			connectionSelector->setSelectedId(1, dontSendNotification);
 
 		indexSelector->setSelectedId(currentIndex + 2, dontSendNotification);
 
@@ -171,17 +190,8 @@ public:
 				addAndMakeVisible(content);
 		}
 
-		auto titleToUse = hasCustomTitle() ? getCustomTitle() : getTitle();
-
-		if (getProcessor() && !hasCustomTitle())
-		{
-			titleToUse << ": " << getConnectedProcessor()->getId();
-		}
-
-		setDynamicTitle(titleToUse);
-
-		resized();
-		repaint();
+        refreshTitle();
+		
 
 		contentChanged();
 	}
@@ -309,7 +319,8 @@ public:
 	{
 		if (auto p = ProcessorHelpers::getFirstProcessorWithType<ProcessorType>(getMainController()->getMainSynthChain()))
 		{
-			setContentWithUndo(dynamic_cast<Processor*>(p), 0);
+			auto idx = getCurrentIndex();
+			setContentWithUndo(dynamic_cast<Processor*>(p), idx);
 		}
 	}
 

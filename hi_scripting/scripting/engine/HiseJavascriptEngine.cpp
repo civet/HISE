@@ -288,6 +288,8 @@ struct HiseJavascriptEngine::RootObject::CodeLocation
 	
 };
 
+
+
 #if JUCE_ENABLE_AUDIO_GUARD
 struct HiseJavascriptEngine::RootObject::ScriptAudioThreadGuard: public AudioThreadGuard::Handler
 {
@@ -345,6 +347,8 @@ struct HiseJavascriptEngine::RootObject::ScriptAudioThreadGuard
 };
 #endif
 
+
+
 HiseJavascriptEngine::RootObject::Error HiseJavascriptEngine::RootObject::Error::fromLocation(const CodeLocation& location, const String& errorMessage)
 {
 	Error e;
@@ -374,7 +378,7 @@ void HiseJavascriptEngine::RootObject::CodeLocation::throwError(const String& me
 
 
 
-void DebugableObject::Helpers::gotoLocation(ModulatorSynthChain* mainSynthChain, const String& line)
+bool DebugableObject::Helpers::gotoLocation(ModulatorSynthChain* mainSynthChain, const String& line)
 {
 	ignoreUnused(mainSynthChain, line);
 
@@ -404,8 +408,7 @@ void DebugableObject::Helpers::gotoLocation(ModulatorSynthChain* mainSynthChain,
 						DebugableObject::Location loc;
 						loc.charNumber = pos.getPosition();
 						loc.fileName = p->getWatchedFile(i).getFullPathName();
-						gotoLocation(nullptr, p, loc);
-						return;
+						return gotoLocation(nullptr, p, loc);
 					}
 				}
 			}
@@ -432,7 +435,7 @@ void DebugableObject::Helpers::gotoLocation(ModulatorSynthChain* mainSynthChain,
 
 			if (p != nullptr)
 			{
-				gotoLocation(nullptr, p, loc);
+				return gotoLocation(nullptr, p, loc);
 			}
 			else
 			{
@@ -441,6 +444,8 @@ void DebugableObject::Helpers::gotoLocation(ModulatorSynthChain* mainSynthChain,
 		}
 	}
 #endif
+    
+    return false;
 }
 
 struct HiseJavascriptEngine::RootObject::CallStackEntry
@@ -566,20 +571,62 @@ struct HiseJavascriptEngine::RootObject::Scope
 
 struct HiseJavascriptEngine::RootObject::Statement
 {
+	using Ptr = ScopedPointer<Statement>;
+
 	Statement(const CodeLocation& l) noexcept : location(l) {}
 	virtual ~Statement() {}
 
 	enum ResultCode  { ok = 0, returnWasHit, breakWasHit, continueWasHit, breakpointWasHit };
 	virtual ResultCode perform(const Scope&, var*) const  { return ok; }
 
+	virtual bool isConstant() const { return false; }
+
 	CodeLocation location;
+	
+	/** Return nullptr if there is no child, otherwise a reference to the child statement. 
+		This makes the syntax tree iteratable for optimisations.
+	*/
+	virtual Statement* getChildStatement(int index) { return nullptr; };
+	
+	/** Helper function to quickly replace expression children that are optimized away. 
+	
+		Use inside replaceChildStatement with each childStatement
+	*/
+	template <typename T> static bool swapIf(Ptr& newChild, Statement* childToReplace, ScopedPointer<T>& currentChild)
+	{
+		if (childToReplace == currentChild.get())
+		{
+			auto nc = newChild.release();
+			auto oc = currentChild.release();
+
+			newChild = dynamic_cast<Statement*>(oc);
+			currentChild = dynamic_cast<T*>(nc);
+
+			return true;
+		}
+
+		return false;
+	}
+
+	template <typename T> static bool swapIfArrayElement(Ptr& newChild, Statement* childToReplace, OwnedArray<T>& arrayToSwap)
+	{
+		auto idx = arrayToSwap.indexOf(dynamic_cast<T*>(childToReplace));
+
+		if (idx != -1)
+		{
+			arrayToSwap.set(idx, dynamic_cast<T*>(newChild.release()), true);
+			return true;
+		}
+
+		return false;
+	}
+
+	virtual bool replaceChildStatement(Ptr& newChild, Statement* oldChild) { return false; };
 
 	Breakpoint::Reference breakpointReference;
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Statement)
 };
-
-
 
 struct HiseJavascriptEngine::RootObject::Expression : public Statement
 {
@@ -588,8 +635,12 @@ struct HiseJavascriptEngine::RootObject::Expression : public Statement
 	virtual var getResult(const Scope&) const            { return var::undefined(); }
 	virtual void assign(const Scope&, const var&) const  { location.throwError("Cannot assign to this expression!"); }
 
+	virtual Identifier getVariableName() const { return {}; }
+
 	ResultCode perform(const Scope& s, var*) const override  { getResult(s); return ok; }
 };
+
+
 
 
 void HiseJavascriptEngine::RootObject::addToCallStack(const Identifier& id, const CodeLocation* location)
@@ -723,9 +774,28 @@ Result HiseJavascriptEngine::execute(const String& javascriptCode, bool allowCon
 	try
 	{
 		prepareTimeout();
-		root->execute(javascriptCode, allowConstDeclarations);
 
-		
+        
+#if USE_BACKEND
+        
+        auto copy = javascriptCode;
+
+        String pid = dynamic_cast<Processor*>(root->hiseSpecialData.processor)->getId();
+        pid << "." << callbackId.toString();
+        
+        auto ok = preprocessor->process(copy, pid);
+        
+        if (!ok.wasOk())
+        {
+            RootObject::CodeLocation loc(javascriptCode, callbackId.toString() + "()");
+            loc.location = loc.program.getCharPointer() + ok.getErrorMessage().getIntValue();
+            loc.throwError(ok.getErrorMessage().fromFirstOccurrenceOf(":", false, false));
+        }
+#else
+        auto& copy = javascriptCode;
+#endif
+
+		root->execute(copy, allowConstDeclarations);
 	}
 	catch (String &error)
 	{
@@ -1117,8 +1187,6 @@ juce::String HiseJavascriptEngine::getHoverString(const String& token)
 	}
 }
 
-
-
 HiseJavascriptEngine::RootObject::Callback::Callback(const Identifier &id, int numArgs_, double bufferTime_) :
 callbackName(id),
 bufferTime(bufferTime_),
@@ -1170,12 +1238,35 @@ hise::DebugInformation* HiseJavascriptEngine::RootObject::Callback::getChildElem
 
 }
 
+struct IncludeFileToken : public mcl::TokenCollection::Token
+{
+	IncludeFileToken(const File& root_, const File& f):
+		Token(""),
+		sf(f),
+		root(root_)
+	{
+		markdownDescription << "`" << sf.getFullPathName() << "`";
+		
+		tokenContent << "include(" << sf.getRelativePathFrom(root).replaceCharacter('\\', '/').quoted() << ");";
+
+		priority = 100;
+		c = Colours::magenta;
+	}
+
+	
+
+	File root;
+	File sf;
+};
+
 struct TokenWithDot : public mcl::TokenCollection::Token
 {
 	TokenWithDot(const String& token, const String& classId_) :
 		Token(token),
 		classId(classId_)
-	{};
+	{
+		
+	};
 
 	String getCodeToInsert(const String& input) const override
 	{
@@ -1198,12 +1289,96 @@ struct TokenWithDot : public mcl::TokenCollection::Token
 			return Token::matches(input, previousToken, lineNumber);
 		}
 
+#if 0
 		if (previousToken.isNotEmpty() && !previousToken.startsWith(classId))
 			return false;
+#endif
 
 		return matchesInput(previousToken + input, tokenContent);
 	}
 
+    static bool hasCallbackArgument(const ValueTree& method)
+    {
+        auto s = method["name"].toString();
+
+        auto isArrayFunction = [](const String& s)
+        {
+            return s == "find" ||
+                   s == "filter" ||
+                   s == "map" ||
+                   s == "some";
+        };
+        
+        return s.contains("Callback") || s.contains("setPaintRoutine") || s.contains("setErrorFunction") || s.contains("setOn") || isArrayFunction(s);
+    }
+    
+    static String getContent(const ValueTree& method, const Identifier objectId)
+    {
+        String s;
+        s << objectId << "." << method["name"].toString();
+        
+        if (hasCallbackArgument(method))
+        {
+            auto args = method["arguments"].toString();
+            static const String body = "\n{\n\t \n}";
+
+            auto replaceArgs = [&](const String& varName, const String& newArgs)
+            {
+                if (args.contains(varName))
+                {
+                    String newF;
+                    newF << "function(" << newArgs << ")" << body;
+
+                    args = args.replace("var " + varName, newF);
+                }
+            };
+
+            auto replaceFCallback = [&](const String& methodName, const String& newArgs)
+            {
+                if (s.contains(methodName))
+                {
+                    String func;
+                    func << "function(" << newArgs << ")" << body;
+                    args = args.replace("var f", func);
+                }
+            };
+
+            replaceArgs("timerCallback", "");
+            replaceArgs("paintFunction", "g");
+            replaceArgs("mouseCallbackFunction", "event");
+            replaceArgs("loadingCallback", "isPreloading");
+            replaceArgs("loadCallback", "obj");
+            replaceArgs("saveCallback", "");
+            replaceArgs("loadingFunction", ""); // this is peak code quality right here...
+            replaceArgs("displayFunction", "displayValue");
+            replaceArgs("contentFunction", "changedIndex");
+            replaceArgs("testFunction", "currentValue, index, arr");
+			replaceArgs("errorCallback", "state, message");
+
+            replaceArgs("playbackCallback", "timestamp, playState");
+            replaceArgs("updateCallback", "index, value");
+            replaceArgs("presetPreCallback", "presetData");
+            replaceArgs("presetPostCallback", "presetFile");
+            replaceArgs("newProcessFunction", "fftData, startIndex");
+            replaceArgs("backgroundTaskFunction", "thread");
+            replaceArgs("newFinishCallback", "isFinished, wasCancelled");
+
+            replaceFCallback("setOnBeatChange", "beatIndex, isNewBar");
+            replaceFCallback("setOnSignatureChange", "nom, denom");
+            replaceFCallback("setOnTempoChange", "newTempo");
+            replaceFCallback("setOnTransportChange", "isPlaying");
+            
+            s << args;
+            s << ";";
+        }
+        else
+        {
+            s << method["arguments"].toString().replace("var callback", "function()\n{\t \n}");
+        }
+
+        return s;
+    }
+    
 	String classId;
 };
 
@@ -1239,12 +1414,7 @@ struct HiseJavascriptEngine::TokenProvider::ObjectMethodToken : public TokenWith
 		link = { File(), s };
 	}
 
-	static bool hasCallbackArgument(const ValueTree& method)
-	{
-		auto s = method["name"].toString();
-
-		return s.contains("Callback") || s.contains("setPaintRoutine") || s.contains("setErrorFunction") || s.contains("setOn");
-	}
+	
 
 	Array<Range<int>> getSelectionRangeAfterInsert(const String& input) const override
 	{
@@ -1263,67 +1433,7 @@ struct HiseJavascriptEngine::TokenProvider::ObjectMethodToken : public TokenWith
 		return TokenWithDot::getSelectionRangeAfterInsert(input);
 	}
 
-	static String getContent(const ValueTree& method, const Identifier objectId)
-	{
-		String s;
-		s << objectId << "." << method["name"].toString();
-		
-		if (hasCallbackArgument(method))
-		{
-			auto args = method["arguments"].toString();
-			static const String body = "\n{\n\t \n}";
-
-			auto replaceArgs = [&](const String& varName, const String& newArgs)
-			{
-				if (args.contains(varName))
-				{
-					String newF;
-					newF << "function(" << newArgs << ")" << body;
-
-					args = args.replace("var " + varName, newF);
-				}
-			};
-
-			auto replaceFCallback = [&](const String& methodName, const String& newArgs)
-			{
-				if (s.contains(methodName))
-				{
-					String func;
-					func << "function(" << newArgs << ")" << body;
-					args = args.replace("var f", func);
-				}
-			};
-
-			replaceArgs("timerCallback", "");
-			replaceArgs("paintFunction", "g");
-			replaceArgs("mouseCallbackFunction", "event");
-			replaceArgs("loadingCallback", "isPreloading");
-            replaceArgs("loadingFunction", ""); // this is peak code quality right here...
-            replaceArgs("displayFunction", "displayValue");
-			replaceArgs("contentFunction", "changedIndex");
-            
-			
-			replaceArgs("presetPreCallback", "presetData");
-			replaceArgs("presetPostCallback", "presetFile");
-			replaceArgs("newProcessFunction", "fftData, startIndex");
-			replaceArgs("backgroundTaskFunction", "thread");
-			replaceArgs("newFinishCallback", "isFinished, wasCancelled");
-
-			replaceFCallback("setOnBeatChange", "beatIndex, isNewBar");
-			replaceFCallback("setOnSignatureChange", "nom, denom");
-			replaceFCallback("setOnTempoChange", "newTempo");
-			replaceFCallback("setOnTransportChange", "isPlaying");
-			
-			s << args;
-			s << ";";
-		}
-		else
-		{
-			s << method["arguments"].toString().replace("var callback", "function()\n{\t \n}");
-		}
-
-		return s;
-	}
+	
 
 
 	MarkdownLink getLink() const override
@@ -1340,8 +1450,9 @@ struct HiseJavascriptEngine::TokenProvider::ObjectMethodToken : public TokenWith
 struct TemplateToken : public TokenWithDot
 {
 	TemplateToken(const String& expression, const ValueTree& mTree) :
-		TokenWithDot(expression + "." + mTree["name"].toString() + mTree["arguments"].toString(), expression)
+		TokenWithDot(getContent(mTree, expression), expression)
 	{
+        // expression + "." + mTree["name"].toString() + mTree["arguments"].toString(), expression
 		priority = expression == "g" ? 100 : 110;
 		c = Colour(0xFFAAAA66);
 		markdownDescription = mTree["description"].toString();
@@ -1432,20 +1543,27 @@ struct HiseJavascriptEngine::TokenProvider::DebugInformationToken : public Token
 			link = MarkdownLink(File(), ml);
 		}
 		
-		priority = isGlobalClass ? 110 : 90;;
+        priority = 110;
 		c = c_;
 
+		
+
+		
 		if (isGlobalClass)
 		{
 			markdownDescription << "Global API class `" << s << "`  \n> Press F1 to open the documentation";
 		}
 		else
 		{
-			markdownDescription << "**Type:** `" << i->getTextForType() << "`  \n";
-			markdownDescription << "**Value:** " << i->getTextForValue();
-		}
+			auto comment = i->getDescription().getText();
 
-		
+			markdownDescription << "**Type:** `" << i->getTextForType() << "`  \n";
+
+			if (comment.isNotEmpty())
+				markdownDescription << comment;
+
+			//markdownDescription << "**Value:** " << i->getTextForValue();
+		}
 	};
 
 	MarkdownLink getLink() const override { return link; }
@@ -1510,45 +1628,163 @@ struct LookAndFeelToken : public TokenWithDot
 	}
 };
 
-static void addRecursive(JavascriptProcessor* jp, mcl::TokenCollection::List& tokens, DebugInformationBase::Ptr ptr, Colour c2, ValueTree v)
+struct TokenHelpers
 {
-	if (!ptr->isAutocompleteable())
-		return;
-
-	int numChildren = ptr->getNumChildElements();
-
-	for (int j = 0; j < numChildren; j++)
+	static bool addObjectAPIMethods(JavascriptProcessor* jp, mcl::TokenCollection::List& tokens, DebugInformationBase::Ptr ptr, const ValueTree& apiTree, bool addStringMethods)
 	{
-		if (Thread::currentThreadShouldExit() || jp->shouldReleaseDebugLock())
-			return;
+		auto os = ptr->getTextForType();
 
-		auto c = ptr->getChildElement(j);
-        
-        if(c == nullptr)
-            break;
-        
-		char s;
-
-		jp->getProviderBase()->getColourAndLetterForType(c->getType(), c2, s);
-
-		Colour childColour = c2;
-
-		if (ptr->getTextForName() == "Colours")
+		if (auto slaf = dynamic_cast<ScriptingObjects::ScriptedLookAndFeel*>(ptr->getObject()))
 		{
-			auto vs = c->getTextForValue();
-            childColour = ScriptingApi::Content::Helpers::getCleanedObjectColour(vs);
+			auto l = ScriptingObjects::ScriptedLookAndFeel::getAllFunctionNames();
+
+			for (auto id : l)
+				tokens.add(new LookAndFeelToken(ptr->getTextForName(), id));
+
+			return true;
 		}
 
-		tokens.add(new HiseJavascriptEngine::TokenProvider::DebugInformationToken(c, v, childColour, ptr));
 
-		addRecursive(jp, tokens, c, childColour, v);
+		if (os.isNotEmpty())
+		{
+			Identifier oid(os);
+
+			auto classTree = apiTree.getChildWithName(oid);
+
+			if (classTree.isValid() && (addStringMethods || os != String("String")))
+			{
+				for (auto method : classTree)
+				{
+					if (Thread::currentThreadShouldExit() || jp->shouldReleaseDebugLock())
+						return false;
+
+					tokens.add(new HiseJavascriptEngine::TokenProvider::ObjectMethodToken(method, ptr));
+				}
+
+				if (auto a = dynamic_cast<ApiClass*>(ptr->getObject()))
+				{
+					Array<Identifier> ids;
+					a->getAllConstants(ids);
+
+
+
+					int i = 0;
+					for (const auto& id : ids)
+					{
+						auto constantValue = a->getConstantValue(i++);
+
+						if (auto obj = constantValue.getDynamicObject())
+						{
+							auto thisIndex = i-1;
+
+							auto f = [a, thisIndex]()
+							{
+								return a->getConstantValue(thisIndex);
+							};
+
+							DebugInformationBase::Ptr optr = new LambdaValueInformation(f, id, ptr->getCodeToInsert(), DebugInformation::Type::Constant, ptr->getLocation());
+
+							tokens.add(new HiseJavascriptEngine::TokenProvider::DebugInformationToken(optr, apiTree, Colours::white, ptr));
+							addRecursive(jp, tokens, optr, Colours::white, apiTree, false);
+						}
+						else
+						{
+							tokens.add(new ObjectConstantToken(ptr, id, constantValue));
+						}
+
+
+
+					}
+				}
+
+				return true;
+			}
+		}
+
+		return false;
 	}
-}
+
+	static void addRecursive(JavascriptProcessor* jp, mcl::TokenCollection::List& tokens, DebugInformationBase::Ptr ptr, Colour c2, ValueTree v, bool addStringMethods)
+	{
+		if (!ptr->isAutocompleteable())
+			return;
+
+		int numChildren = ptr->getNumChildElements();
+
+		for (int j = 0; j < numChildren; j++)
+		{
+			if (Thread::currentThreadShouldExit() || jp->shouldReleaseDebugLock())
+				return;
+
+			auto c = ptr->getChildElement(j);
+
+			if (c == nullptr)
+				break;
+
+			char s;
+
+			jp->getProviderBase()->getColourAndLetterForType(c->getType(), c2, s);
+
+			Colour childColour = c2;
+
+			bool isColour = ptr->getTextForName() == "Colours";
+
+			if (isColour)
+			{
+				auto vs = c->getTextForValue();
+				childColour = ScriptingApi::Content::Helpers::getCleanedObjectColour(vs);
+			}
+
+			tokens.add(new HiseJavascriptEngine::TokenProvider::DebugInformationToken(c, v, childColour, ptr));
+
+			if (isColour)
+				tokens.getLast()->priority = 60;
+
+			if (!addObjectAPIMethods(jp, tokens, c, v, addStringMethods))
+				addRecursive(jp, tokens, c, childColour, v, addStringMethods);
+		}
+	}
+};
+
+
+
+
 
 void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& tokens)
 {
 	if (jp != nullptr)
 	{
+		File scriptFolder = dynamic_cast<Processor*>(jp.get())->getMainController()->getCurrentFileHandler().getSubDirectory(FileHandlerBase::Scripts);
+		auto scriptFiles = scriptFolder.findChildFiles(File::findFiles, true, "*.js");
+
+		for (auto sf: scriptFiles)
+		{
+			if (sf.isHidden())
+				continue;
+
+			auto alreadyIncluded = false;
+
+			for (int i = 0; i < jp->getNumWatchedFiles(); i++)
+			{
+				if (jp->getWatchedFile(i) == sf)
+				{
+					alreadyIncluded = true;
+					break;
+				}
+			}
+
+			if (alreadyIncluded)
+				continue;
+
+			auto pf = sf.getParentDirectory().getFullPathName();
+
+			if (pf.contains("ScriptProcessors") || pf.contains("ConnectedScripts"))
+				continue;
+
+			tokens.add(new IncludeFileToken(scriptFolder, sf));
+		}
+		
+
 		ScopedReadLock sl(jp->getDebugLock());
 
 		auto holder = dynamic_cast<ApiProviderBase::Holder*>(jp.get());
@@ -1565,6 +1801,9 @@ void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& 
 
 			for (auto m : cTree)
 			{
+				if (t.expression.isEmpty())
+					continue;
+
 				tokens.add(new TemplateToken(t.expression, m));
 			}
 		}
@@ -1629,52 +1868,25 @@ void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& 
 
 							tokens.add(new ApiToken(cid, methodTree));
 						}
-
 					}
 					else
 					{
-						Identifier oid(ptr->getTextForType());
-
-						auto classTree = v.getChildWithName(oid);
-
-
-
-						if (classTree.isValid())
-						{
-							for (auto method : classTree)
-							{
-								if (Thread::currentThreadShouldExit() || jp->shouldReleaseDebugLock())
-									return;
-
-								tokens.add(new ObjectMethodToken(method, ptr));
-							}
-
-							if (auto a = dynamic_cast<ApiClass*>(ptr->getObject()))
-							{
-								Array<Identifier> ids;
-								a->getAllConstants(ids);
-
-								int i = 0;
-								for (const auto& id : ids)
-								{
-									tokens.add(new ObjectConstantToken(ptr, id, a->getConstantValue(i++)));
-								}
-							}
-						}
-
-						if (auto slaf = dynamic_cast<ScriptingObjects::ScriptedLookAndFeel*>(ptr->getObject()))
-						{
-							auto l = ScriptingObjects::ScriptedLookAndFeel::getAllFunctionNames();
-
-							for (auto id : l)
-								tokens.add(new LookAndFeelToken(ptr->getTextForName(), id));
-						}
+						TokenHelpers::addObjectAPIMethods(jp, tokens, ptr.get(), v, true);
 					}
 
-					addRecursive(jp, tokens, ptr, c2, v);
+					TokenHelpers::addRecursive(jp, tokens, ptr, c2, v, true);
 				}
 			}
 		}
+		
+#if USE_BACKEND
+		for (const auto& def : jp->getScriptEngine()->preprocessor->definitions)
+		{
+			tokens.add(new snex::debug::PreprocessorMacroProvider::PreprocessorToken(def));
+		}
+#endif
+
+		
 
 #define X(unused, name) tokens.add(new KeywordToken(name));
 
@@ -1687,7 +1899,72 @@ void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& 
 		X(isDefined_, "isDefined");
 
 #undef X
+
+		for (int i = 0; i < tokens.size(); i++)
+		{
+			if(tokens[i]->tokenContent.contains("[") ||
+			   tokens[i]->tokenContent.contains("%PARENT%") ||
+			   tokens[i]->tokenContent.endsWith(".args") ||
+			   tokens[i]->tokenContent.endsWith(".locals"))
+			{
+				tokens.remove(i--);
+			}
+		}
+
+
 	}
 }
+
+hise::HiseJavascriptEngine::RootObject::OptimizationPass::OptimizationResult HiseJavascriptEngine::RootObject::OptimizationPass::executePass(Statement* rootStatementToOptimize)
+{
+	OptimizationResult r;
+	r.passName = getPassName();
+
+	callForEach(rootStatementToOptimize, [this, &r](Statement* st)
+	{
+		if (st == nullptr)
+			return false;
+
+		int index = 0;
+
+		while (auto child = st->getChildStatement(index++))
+		{
+			auto optimizedStatement = getOptimizedStatement(st, child);
+
+			if (optimizedStatement != child)
+			{
+				ScopedPointer<Statement> newExpr(optimizedStatement);
+				auto ok = st->replaceChildStatement(newExpr, child);
+                ignoreUnused(ok);
+				jassert(ok);
+				r.numOptimizedStatements++;
+			}
+		}
+
+		return false;
+	});
+
+	return r;
+}
+
+bool HiseJavascriptEngine::RootObject::OptimizationPass::callForEach(Statement* root, const std::function<bool(Statement* child)>& f)
+{
+	if (f(root))
+		return true;
+
+	int index = 0;
+
+	while (auto child = root->getChildStatement(index++))
+	{
+		if (callForEach(child, f))
+			return true;
+	}
+
+	return false;
+}
+
+
+
+
 
 } // namespace hise

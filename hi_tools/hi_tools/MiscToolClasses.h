@@ -84,14 +84,27 @@ public:
 		MessageManager::callAsync(SafeAsyncCaller<T>(&object, f));
 	}
 
+	template <typename T> static void callAsyncIfNotOnMessageThread(T& object, std::function<void(T&)> f)
+	{
+		if (MessageManager::getInstance()->isThisTheMessageThread())
+			f(object);
+		else
+			MessageManager::callAsync(SafeAsyncCaller<T>(&object, f));
+	}
+
+	template <typename T> static void callWithDelay(T& object, std::function<void(T&)> f, int milliseconds)
+	{
+		Timer::callAfterDelay(milliseconds, SafeAsyncCaller<T>(&object, f));
+	}
+
 	static void resized(Component* c)
 	{
-		call<Component>(*c, [](Component& c) { c.resized(); });
+		callAsyncIfNotOnMessageThread<Component>(*c, [](Component& c) { c.resized(); });
 	}
 
 	static void repaint(Component* c)
 	{
-		call<Component>(*c, [](Component& c) { c.repaint(); });
+		callAsyncIfNotOnMessageThread<Component>(*c, [](Component& c) { c.repaint(); });
 	}
 };
 
@@ -236,6 +249,18 @@ struct audio_spin_mutex_shared
 	audio_spin_mutex w;
     std::atomic<int> sharedCounter {0};
 };
+
+
+struct WeakErrorHandler
+{
+	using Ptr = WeakReference<WeakErrorHandler>;
+
+	virtual ~WeakErrorHandler() {};
+	virtual void handleErrorMessage(const String& error) = 0;
+
+	JUCE_DECLARE_WEAK_REFERENCEABLE(WeakErrorHandler);
+};
+
 
 
 /** Same as MessageManager::callAsync, but uses a Safe pointer for a component and cancels the async execution if the object is deleted. */
@@ -502,6 +527,143 @@ private:
 
 	//==============================================================================
 	juce::Colour backgroundColour{ juce::Colours::black };
+};
+
+
+struct TopLevelWindowWithKeyMappings
+{
+	static KeyPress getKeyPressFromString(Component* c, const String& s)
+	{
+		if (s.isEmpty())
+			return {};
+
+		if (s.startsWith("$"))
+		{
+			auto id = Identifier(s.removeCharacters("$"));
+			return getFirstKeyPress(c, id);
+		}
+		else
+			return KeyPress::createFromDescription(s);
+	}
+
+	static void addShortcut(Component* c, const String& category, const Identifier& id, const String& description, const KeyPress& k)
+	{
+		if (auto t = getFromComponent(c))
+		{
+			if (t->shortcutIds.contains(id))
+				return;
+
+			auto info = ApplicationCommandInfo(t->shortcutIds.size() + 1);
+			t->shortcutIds.add(id);
+
+			info.categoryName = category;
+			info.shortName << description << " ($" << id.toString() << ")";
+			info.defaultKeypresses.add(k);
+			t->m.registerCommand(info);
+			t->keyMap.resetToDefaultMapping(info.commandID);
+		}
+	}
+
+	static KeyPress getFirstKeyPress(Component* c, const Identifier& id)
+	{
+		if (auto t = getFromComponent(c))
+		{
+			if (auto idx = t->shortcutIds.indexOf(id) + 1)
+				return t->keyMap.getKeyPressesAssignedToCommand(idx).getFirst();
+		}
+
+		return KeyPress();
+	}
+
+	static bool matches(Component* c, const KeyPress& k, const Identifier& id)
+	{
+		if (auto t = getFromComponent(c))
+		{
+			if (auto idx = t->shortcutIds.indexOf(id) + 1)
+			{
+				return t->keyMap.getKeyPressesAssignedToCommand(idx).contains(k);
+			}
+		}
+
+		return false;
+	}
+
+	/*
+	static KeyPress getKeyPress(Component* c, const Identifier& id)
+	{
+		if (auto t = getFromComponent(c))
+		{
+			if (auto idx = t->shortcutIds.indexOf(id) + 1)
+				return t->keyMap.getKeyPressesAssignedToCommand(idx).getFirst();
+		}
+
+		return {};
+	}
+	*/
+
+	KeyPressMappingSet& getKeyPressMappingSet() { return keyMap; };
+
+protected:
+
+	TopLevelWindowWithKeyMappings() :
+		keyMap(m)
+	{};
+
+	virtual ~TopLevelWindowWithKeyMappings()
+	{
+		jassert(loaded);
+		// If you hit this assertion, you need to store the data in your
+		// sub class constructor
+		jassert(saved);
+	};
+
+	/** Call this function and initialise all key presses that you want to define. */
+	virtual void initialiseAllKeyPresses()
+	{
+		initialised = true;
+	}
+
+	void saveKeyPressMap()
+	{
+		auto f = getKeyPressSettingFile();
+		auto xml = keyMap.createXml(true);
+		f.replaceWithText(xml->createDocument(""));
+		saved = true;
+	}
+
+	void loadKeyPressMap()
+	{
+		initialiseAllKeyPresses();
+
+		auto f = getKeyPressSettingFile();
+
+		if (auto xml = XmlDocument::parse(f))
+			keyMap.restoreFromXml(*xml);
+
+		loaded = true;
+	}
+
+	virtual File getKeyPressSettingFile() const = 0;
+
+    bool saved = false;
+
+private:
+
+	bool initialised = false;
+	
+	bool loaded = false;
+
+	static TopLevelWindowWithKeyMappings* getFromComponent(Component* c)
+	{
+		if (auto same = dynamic_cast<TopLevelWindowWithKeyMappings*>(c))
+			return same;
+
+		return c->findParentComponentOfClass<TopLevelWindowWithKeyMappings>();
+	}
+
+	Array<Identifier> shortcutIds;
+	juce::ApplicationCommandManager m;
+	juce::KeyPressMappingSet keyMap;
 };
 
 /** A small helper interface class that allows you to find the topmost component
@@ -1632,6 +1794,8 @@ template <typename ReturnType, typename... Ps> struct SafeLambdaBase
 	virtual bool isValid() const = 0;
 
 	virtual bool matches(void* other) const = 0;
+
+	
 };
 
 template <class T, typename ReturnType, typename...Ps> struct SafeLambda : public SafeLambdaBase<ReturnType, Ps...>
@@ -1714,6 +1878,22 @@ template <typename...Ps> struct LambdaBroadcaster final
 			std::apply(*listeners.getLast(), lastValue);
 	}
 
+	/** Returns the number of listeners with the given class T (!= not a base class) that are registered to this object. */
+	template <typename T> int getNumListenersWithClass() const
+	{
+		using TypeToLookFor = SafeLambda<T, void, Ps...>;
+
+		int numListeners = 0;
+
+		for (auto l : listeners)
+		{
+			if (l->isValid() && dynamic_cast<TypeToLookFor*>(l) != nullptr)
+				numListeners++;
+		}
+
+		return numListeners;
+	}
+
 	/** Removes all callbacks for the given object. 
 	
 		You don't need to call this method unless you explicitely want to stop listening 
@@ -1770,7 +1950,9 @@ template <typename...Ps> struct LambdaBroadcaster final
 	void sendMessage(NotificationType n, Ps... parameters)
 	{
 		lastValue = std::make_tuple(parameters...);
-		sendMessageInternal(n, lastValue);
+        
+        if(!listeners.isEmpty())
+            sendMessageInternal(n, lastValue);
 	}
 
 	/** By default, the lambda broadcaster will be called only with the last element whic
@@ -2311,7 +2493,16 @@ public:
 	/** The note values. */
 	enum Tempo
 	{
+#if HISE_USE_EXTENDED_TEMPO_VALUES
+		EightBar = 0,
+		SixBar,
+		FourBar,
+		ThreeBar,
+		TwoBars,
+		Whole,
+#else
 		Whole = 0, ///< a whole note (1/1)
+#endif
 		HalfDuet, ///< a half note duole (1/2D)
 		Half, ///< a half note (1/2)
 		HalfTriplet, ///< a half triplet note (1/2T)
@@ -2394,6 +2585,11 @@ struct MasterClock
 		numSyncModes
 	};
 
+	void setNextGridIsFirst()
+	{
+		waitForFirstGrid = true;
+	}
+
 	void setSyncMode(SyncModes newSyncMode)
 	{
 		currentSyncMode = newSyncMode;
@@ -2403,6 +2599,9 @@ struct MasterClock
 	{
 		if (currentSyncMode == SyncModes::Inactive)
 			return;
+
+		if (internalClock)
+			internalClockIsRunning = startPlayback;
 
 		// Already stopped / not running, just return
 		if (!startPlayback && currentState == State::Idle)
@@ -2434,6 +2633,15 @@ struct MasterClock
 			nextState = internalClock ? State::InternalClockPlay : State::ExternalClockPlay;
 		else
 			nextState = State::Idle;
+
+		// Restart the internal clock when the external is stopped
+		if (!internalClock && !startPlayback && internalClockIsRunning)
+		{
+            if(stopInternalOnExternalStop)
+                nextState = State::Idle;
+            else
+                nextState = State::InternalClockPlay;
+		}
 	}
 
 	struct GridInfo
@@ -2495,7 +2703,8 @@ struct MasterClock
 					currentGridIndex++;
 
 					gi.change = true;
-					gi.firstGridInPlayback = false;
+					gi.firstGridInPlayback = waitForFirstGrid;
+					waitForFirstGrid = false;
 					gi.gridIndex = currentGridIndex;
 					gi.timestamp = numSamples + samplesToNextGrid;
 
@@ -2505,6 +2714,11 @@ struct MasterClock
 		}
 
 		return gi;
+	}
+
+	bool isPlaying() const
+	{
+		return currentState == State::ExternalClockPlay || currentState == State::InternalClockPlay;
 	}
 
 	GridInfo updateFromExternalPlayHead(const AudioPlayHead::CurrentPositionInfo& info, int numSamples)
@@ -2521,6 +2735,15 @@ struct MasterClock
  		if (isPlayingExternally != shouldPlayExternally)
 		{
 			changeState(0, false, shouldPlayExternally);
+
+			if (currentSyncMode == SyncModes::PreferExternal &&
+				currentState == State::InternalClockPlay &&
+				nextState == State::ExternalClockPlay)
+			{
+				gi.change = true;
+				gi.gridIndex = 0;
+				gi.firstGridInPlayback = true;
+			}
 
 			currentState = nextState;
 
@@ -2613,6 +2836,11 @@ struct MasterClock
 		return currentSyncMode != SyncModes::InternalOnly;
 	}
 
+    void setStopInternalClockOnExternalStop(bool shouldStop)
+    {
+        stopInternalOnExternalStop = shouldStop;
+    }
+    
 	bool shouldCreateInternalInfo(const AudioPlayHead::CurrentPositionInfo& externalInfo) const
 	{
 		if (currentSyncMode == SyncModes::Inactive)
@@ -2652,6 +2880,32 @@ struct MasterClock
 		return uptimeToUse / quarterSamples;
 	}
 
+    void reset()
+    {
+        gridEnabled = false;
+        clockGrid = TempoSyncer::numTempos;
+        currentSyncMode = SyncModes::Inactive;
+        
+        uptime = 0;
+        samplesToNextGrid = 0;
+        
+        currentGridIndex = 0;
+
+        internalClockIsRunning = false;
+
+        // they don't need to be resetted...
+        //sampleRate = 44100.0;
+        //bpm = 120.0;
+
+        nextTimestamp = 0;
+        currentState = State::Idle;
+        nextState = State::Idle;
+
+        waitForFirstGrid = false;
+        
+        updateGridDelta();
+    }
+    
 private:
 
 	void updateGridDelta()
@@ -2677,6 +2931,10 @@ private:
 	int gridDelta = 1;
 	int currentGridIndex = 0;
 
+	bool internalClockIsRunning = false;
+
+    bool stopInternalOnExternalStop = false;
+    
 	double sampleRate = 44100.0;
 	double bpm = 120.0;
 
@@ -2717,7 +2975,7 @@ public:
 	virtual void tempoChanged(double newTempo) {};
 
 	/** The callback function that will be called when the transport state changes (=the user presses play on the DAW). */
-	virtual void onTransportChange(bool isPlaying) {};
+	virtual void onTransportChange(bool isPlaying, double ppqPosition) {};
 
 	/** The callback function that will be called for each musical pulse.
 
@@ -2822,6 +3080,8 @@ struct FFTHelpers
     }
 
     static void applyWindow(WindowType t, AudioSampleBuffer& b, bool normalise=true);
+    
+    static void applyWindow(WindowType t, float* d, int size, bool normalise=true);
     
 	static float getFreqForLogX(float xPos, float width);
 
@@ -3043,6 +3303,34 @@ struct Spectrum2D
     Image createSpectrumImage(AudioSampleBuffer& lastBuffer);
     
     AudioSampleBuffer createSpectrumBuffer();
+};
+
+/** A interface class that can attach mouse events to the JSON object provided in the mouse event callback of a broadcaster. */
+struct ComponentWithAdditionalMouseProperties
+{
+    virtual ~ComponentWithAdditionalMouseProperties() {};
+    
+    /** Override this method and add more properties to the event callback object. This is used when a Broadcaster is attached to the mouse events of this component. */
+    virtual void attachAdditionalMouseProperties(const MouseEvent& e, var& obj) = 0;
+    
+    /** Call this method with a mouse event and it will go up the parent hierarchy and call attachAdditionalMouseProperties() if possible. */
+    static void attachMousePropertyFromParent(const MouseEvent& e, var& obj)
+    {
+        auto c = e.eventComponent;
+        
+        using LongName = ComponentWithAdditionalMouseProperties;
+        
+        if(auto typed = dynamic_cast<LongName*>(c))
+        {
+            typed->attachAdditionalMouseProperties(e, obj);
+            return;
+        }
+        
+        if(auto typedChild = c->findParentComponentOfClass<LongName>())
+        {
+            typedChild->attachAdditionalMouseProperties(e, obj);
+        }
+    }
 };
 
 }

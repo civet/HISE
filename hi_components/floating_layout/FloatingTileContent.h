@@ -540,6 +540,8 @@ public:
 		return parent; 
 	}
 
+	Rectangle<int> getParentContentBounds();
+
 	virtual String getTitle() const { return getIdentifierForBaseClass().toString(); };
 	virtual Identifier getIdentifierForBaseClass() const = 0;
 
@@ -552,10 +554,7 @@ public:
 	static FloatingTileContent* createNewPanel(const Identifier& id, FloatingTile* parent);
 
 	/** Set a custom title to the panel that will be displayed in tabs, etc. */
-	void setCustomTitle(String newCustomTitle)
-	{
-		customTitle = newCustomTitle;
-	}
+	void setCustomTitle(String newCustomTitle);
 
 	/** If you set a custom title, this will return it. */
 	String getCustomTitle() const
@@ -619,6 +618,7 @@ public:
 			ScriptConnectorPanel,
 			ScriptEditor,
 			ScriptContent,
+			OSCLogger,
 			ScriptComponentList,
 			InterfaceContent,
 			TablePanel,
@@ -633,9 +633,12 @@ public:
 			DspNetworkGraph,
 			DspNodeList,
 			DspNodeParameterEditor,
+            DspFaustEditorPanel,
+			ScriptBroadcasterMap,
 			ExpansionEditBar,
 			ModuleBrowser,
 			PatchBrowser,
+			AutomationDataBrowser,
 			FileBrowser,
 			ImageTable,
 			AudioFileTable,
@@ -645,6 +648,7 @@ public:
 			PopoutButton,
 			PerformanceStatistics,
 			ActivityLed,
+            MatrixPeakMeterPanel,
 			ActivationPanel,
 			TuningWindow,
 			PluginSettings,
@@ -966,8 +970,26 @@ private:
 
 };
 
+#define DECLARE_ID(x) static const Identifier x(#x);
 
+namespace FloatingTileKeyPressIds
+{
+	DECLARE_ID(fold_editor);
+	DECLARE_ID(fold_interface);
+	DECLARE_ID(fold_browser)
+	DECLARE_ID(focus_editor);
+	DECLARE_ID(fold_watch);
+    DECLARE_ID(fold_map);
+	DECLARE_ID(fold_list);
+	DECLARE_ID(fold_console);
+	DECLARE_ID(fold_properties);
+	DECLARE_ID(focus_interface);
+	DECLARE_ID(focus_browser)
+	DECLARE_ID(cycle_editor);
+	DECLARE_ID(cycle_browser)
+}
 
+#undef DECLARE_ID
 
 struct FloatingPanelTemplates
 {

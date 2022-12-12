@@ -38,32 +38,8 @@ using namespace hise;
 using namespace snex;
 using namespace snex::Types;
 
-
-#if 0
-namespace container
-{
-
-template <class P, typename... Ts> using frame1_block = wrap::frame<1, container::chain<P, Ts...>>;
-template <class P, typename... Ts> using frame2_block = wrap::frame<2, container::chain<P, Ts...>>;
-template <class P, typename... Ts> using frame4_block = wrap::frame<4, container::chain<P, Ts...>>;
-template <class P, typename... Ts> using framex_block = wrap::frame_x< container::chain<P, Ts...>>;
-template <class P, typename... Ts> using oversample2x = wrap::oversample<2,   container::chain<P, Ts...>, init::oversample>;
-template <class P, typename... Ts> using oversample4x = wrap::oversample<4,   container::chain<P, Ts...>, init::oversample>;
-template <class P, typename... Ts> using oversample8x = wrap::oversample<8,   container::chain<P, Ts...>, init::oversample>;
-template <class P, typename... Ts> using oversample16x = wrap::oversample<16, container::chain<P, Ts...>, init::oversample>;
-template <class P, typename... Ts> using modchain = wrap::control_rate<chain<P, Ts...>>;
-
-template <class P, typename... Ts> using oversample = wrap::oversample<-1,   container::chain<P, Ts...>, init::oversample>;
-
-}
-#endif
-
-
-
 namespace core
 {
-
-
 
 struct table: public scriptnode::data::base
 {
@@ -181,8 +157,6 @@ public:
 
 	template <typename ProcessDataType> void process(ProcessDataType& data)
 	{
-		snex::hmath Math;
-
 		max = 0.0f;
 
 		for (auto& ch : data)
@@ -196,8 +170,6 @@ public:
 
 	template <typename FrameDataType> void processFrame(FrameDataType& data)
 	{
-		snex::hmath Math;
-
 		max = 0.0;
 
 		for (auto& s : data)
@@ -757,6 +729,313 @@ private:
 	PolyData<State, NumVoices> state;
 };
 
+template <int NV, bool UseRingBuffer> class clock_ramp : public polyphonic_base,
+														 public data::display_buffer_base<UseRingBuffer>,
+														 public hise::TempoListener
+{
+public:
+
+	enum class InactiveMode
+	{
+		LastValue,
+		Zero,
+		One,
+		numInactiveModes
+	};
+
+	enum class Parameters
+	{
+		Tempo,
+		Multiplier,
+		AddToSignal,
+		UpdateMode,
+		Inactive,
+		numParameters
+	};
+
+	static constexpr int NumVoices = NV;
+
+	SN_POLY_NODE_ID("clock_ramp");
+	SN_GET_SELF_AS_OBJECT(clock_ramp);
+	SN_DESCRIPTION("Creates a (monophonic) ramp signal that is synced to the HISE clock");
+
+	static constexpr bool isNormalisedModulation() { return true; };
+
+	clock_ramp():
+		polyphonic_base(getStaticId())
+	{
+		cppgen::CustomNodeProperties::setPropertyForObject(*this, PropertyIds::IsPolyphonic);
+		cppgen::CustomNodeProperties::setPropertyForObject(*this, PropertyIds::UseRingBuffer);
+        
+        valueToUse[(int)InactiveMode::Zero] = 0.0;
+        valueToUse[(int)InactiveMode::One] = 1.0;
+        valueToUse[(int)InactiveMode::LastValue] = 0.0;
+	}
+
+	~clock_ramp()
+	{
+		if (syncer != nullptr)
+			syncer->deregisterItem(this);
+	}
+
+	void prepare(PrepareSpecs ps)
+	{
+        sr = ps.sampleRate;
+        
+        // only register it once to get the correct ppqPosition value
+        if(syncer == nullptr)
+        {
+            syncer = ps.voiceIndex->getTempoSyncer();
+            syncer->registerItem(this);
+        }
+	}
+
+	SN_EMPTY_INITIALISE;
+
+	SN_EMPTY_HANDLE_EVENT;
+	
+    void reset()
+    {
+        valueToUse[(int)InactiveMode::LastValue] = 0.0;
+    }
+    
+	void onTransportChange(bool isPlaying_, double ppqPosition) override
+	{
+		isPlaying = isPlaying_;
+
+		if (isPlaying)
+		{
+			if (isContinuous)
+			{
+				startOffset = ppqPosition / (startMultiplier * startFactor);
+			}
+			else
+				startOffset = ppqPosition;
+
+			for (auto& s : state)
+				s.ppqPos = 0.0;
+		}
+	}
+
+	void tempoChanged(double newTempo) override
+	{
+		bpm = newTempo;
+	}
+
+	bool handleModulation(double& v)
+	{
+		return state.get().modValue.getChangedValue(v);
+	}
+
+	double getPPQDelta(int numSamples) const
+	{
+		if (auto tempoSamples = TempoSyncer::getTempoInSamples(bpm, sr, 1.0f))
+			return (double)numSamples / tempoSamples;
+		else
+			return 0.0;
+	}
+
+	template <typename ProcessDataType> void process(ProcessDataType& d)
+	{
+		auto& s = state.get();
+
+		if (isPlaying)
+		{
+			auto ppqDelta = getPPQDelta(d.getNumSamples());
+			auto tf = s.tempoFactor * s.multiplier;
+
+			double tfDelta;
+			double start;
+
+			if (isContinuous)
+			{
+				tfDelta = ppqDelta / tf;
+				start = std::fmod(s.ppqPos + startOffset, 1.0);
+				s.ppqPos += tfDelta;
+			}
+				
+			else
+			{
+				tfDelta = ppqDelta * tf;
+				start = std::fmod(s.ppqPos + startOffset, tf) / tf;
+				s.ppqPos += ppqDelta;
+			}
+
+			double lastValue = 0.0;
+
+			if (addToSignal)
+			{
+				auto data = d.getRawChannelPointers()[0];
+				auto inc = tfDelta / (double)d.getNumSamples();
+
+				for (int i = 0; i < d.getNumSamples(); i++)
+				{
+					lastValue = hmath::fmod(start + (double)inc, 1.0);
+					data[i] = (float)lastValue;
+				}
+			}
+			else
+			{
+				// use the mid point to reduce rounding errors
+				lastValue = hmath::fmod(start + tfDelta / 2.0, 1.0);
+			}
+
+            valueToUse[(int)InactiveMode::LastValue] = lastValue;
+			s.modValue.setModValue(lastValue);	
+		}
+		else
+		{
+            auto mv = valueToUse[(int)inactiveMode];
+            
+            s.modValue.setModValue(mv);
+            
+			if(addToSignal)
+                FloatVectorOperations::fill(d.getRawChannelPointers()[0], (float)mv, d.getNumSamples());
+		}
+
+		this->updateBuffer((float)s.modValue.getModValue(), d.getNumSamples());
+	}
+
+	template <typename FrameType> void processFrame(FrameType& d)
+	{
+		auto& s = state.get();
+
+		if (isPlaying)
+		{
+			auto ppqDelta = getPPQDelta(1);
+			auto tf = s.tempoFactor * s.multiplier;
+			auto start = hmath::fmod(s.ppqPos + startOffset, tf) / tf;
+			auto modValue = hmath::fmod(start + ppqDelta * tf, 1.0);
+
+			if (addToSignal)
+				d[0] = (float)modValue;
+
+			s.ppqPos += ppqDelta;
+			s.modValue.setModValue(modValue);
+            valueToUse[(int)InactiveMode::LastValue] = modValue;
+		}
+		else
+		{
+            auto mv = valueToUse[(int)inactiveMode];
+            
+            s.modValue.setModValue(mv);
+            
+            if(addToSignal)
+               d[0] = (float)mv;
+		}
+
+		this->updateBuffer(s.modValue.getModValue(), 1);
+	}
+
+	void setTempo(double newTempo)
+	{
+		auto newFactor = TempoSyncer::getTempoFactor((TempoSyncer::Tempo)(int)newTempo);
+
+		startFactor = newFactor;
+
+		for (auto& s : state)
+			s.tempoFactor = newFactor;
+	}
+
+	void setMultiplier(double newMultiplier)
+	{
+		startMultiplier = newMultiplier;
+
+		for (auto& s : state)
+			s.multiplier = newMultiplier;
+	}
+
+	void setAddToSignal(double newValue)
+	{
+		addToSignal = newValue > 0.5;
+	}
+
+	void setUpdateMode(double newBehaviour)
+	{
+		isContinuous = newBehaviour < 0.5;
+	}
+
+	void setInactive(double newInactiveMode)
+	{
+		inactiveMode = (InactiveMode)jlimit<int>(0, 2, (int)newInactiveMode);
+	}
+
+	DEFINE_PARAMETERS
+	{
+		DEF_PARAMETER(Tempo, clock_ramp);
+		DEF_PARAMETER(Multiplier, clock_ramp);
+		DEF_PARAMETER(AddToSignal, clock_ramp);
+		DEF_PARAMETER(UpdateMode, clock_ramp);
+		DEF_PARAMETER(Inactive, clock_ramp);
+	};
+
+	SN_PARAMETER_MEMBER_FUNCTION;
+
+	void createParameters(ParameterDataList& data)
+	{
+		{
+			parameter::data p("Tempo");
+			p.setRange({ 0.0, 1.0 });
+			p.setParameterValueNames(TempoSyncer::getTempoNames());
+			p.setDefaultValue((double)TempoSyncer::getTempoIndex("1/4"));
+			registerCallback<(int)Parameters::Tempo>(p);
+			data.add(std::move(p));
+		}
+		{
+			parameter::data p("Multiplier");
+			p.setRange({ 1.0, 16.0, 1.0 });
+			p.setDefaultValue(1.0);
+			registerCallback<(int)Parameters::Multiplier>(p);
+			data.add(std::move(p));
+		}
+		{
+			parameter::data p("AddToSignal");
+			p.setParameterValueNames({ "No", "Yes" });
+			p.setDefaultValue(0.0);
+			registerCallback<(int)Parameters::AddToSignal>(p);
+			data.add(std::move(p));
+		}
+		{
+			parameter::data p("UpdateMode");
+			p.setParameterValueNames({ "Continuous", "Synced" });
+			p.setDefaultValue(1.0);
+			registerCallback<(int)Parameters::UpdateMode>(p);
+			data.add(std::move(p));
+		}
+		{
+			parameter::data p("Inactive");
+			p.setParameterValueNames({ "Current", "Zero", "One" });
+			p.setDefaultValue(0.0);
+			registerCallback<(int)Parameters::Inactive>(p);
+			data.add(std::move(p));
+		}
+	}
+
+	double startOffset = 0.0;
+	double bpm = 120.0;
+	double sr = 44100.0;
+	bool addToSignal = false;
+	bool isPlaying = false;
+	double startFactor = 1.0f;
+	double startMultiplier = 1.0f;
+	bool isContinuous = false;
+	InactiveMode inactiveMode = InactiveMode::LastValue;
+
+	struct State
+	{
+		double tempoFactor = 1.0;
+		double multiplier = 1.0;
+		double ppqPos = 0.0;
+		ModValue modValue;
+	};
+
+	PolyData<State, NV> state;
+	
+    double valueToUse[(int)InactiveMode::numInactiveModes];
+
+	DllBoundaryTempoSyncer* syncer = nullptr;
+};
+
 
 template <int NV> class oscillator: public OscillatorDisplayProvider,
 								    public polyphonic_base
@@ -798,6 +1077,8 @@ public:
 	{
 		currentVoiceData = &voiceData.get();
 
+		currentNyquistGain = currentVoiceData->getNyquistAttenuationGain();
+
 		if (currentVoiceData->enabled == 0)
 			return;
 
@@ -805,29 +1086,25 @@ public:
 		{
 			auto fd = data.template as<ProcessData<2>>().toFrameData();
 			while (fd.next())
-				processFrame(fd.toSpan());
+				processFrameInternal(fd.toSpan());
 		}
 		else
 		{
 			for (auto& s : data[0])
 			{
 				auto asSpan = reinterpret_cast<span<float, 1>*>(&s);
-				processFrame(*asSpan);
+				processFrameInternal(*asSpan);
 			}
 		}
 	}
 
-	template <typename FrameDataType> void processFrame(FrameDataType& data)
+	template <typename FrameDataType> void processFrameInternal(FrameDataType& data)
 	{
-		if (currentVoiceData == nullptr)
-			currentVoiceData = &voiceData.get();
+		jassert(currentVoiceData != nullptr);
 
-		if (currentVoiceData->enabled == 0)
-			return;
+		float v = 0.0f;
 
-        float v = 0.0f;
-
-		auto g = currentVoiceData->gain;
+		auto g = currentVoiceData->gain * currentNyquistGain;
 
 		switch (currentMode)
 		{
@@ -836,11 +1113,25 @@ public:
 		case Mode::Saw:		 v = g * tickSaw(*currentVoiceData); break;
 		case Mode::Square:	 v = g * tickSquare(*currentVoiceData); break;
 		case Mode::Noise:	 v = g * (Random::getSystemRandom().nextFloat() * 2.0f - 1.0f);
-        default: break;
+		default: break;
 		}
-        
+
 		for (auto& s : data)
 			s += v;
+	}
+
+	template <typename FrameDataType> void processFrame(FrameDataType& data)
+	{
+		if (currentVoiceData == nullptr)
+		{
+			currentVoiceData = &voiceData.get();
+			currentNyquistGain = currentVoiceData->getNyquistAttenuationGain();
+		}
+
+		if (currentVoiceData->enabled == 0)
+			return;
+
+		processFrameInternal(data);
 	}
 
 	void handleHiseEvent(HiseEvent& e)
@@ -867,7 +1158,7 @@ public:
 			parameter::data p("Freq Ratio");
 			p.setRange({ 1.0, 16.0, 1.0 });
 			p.setDefaultValue(1.0);
-			p.callback = parameter::inner<oscillator, (int)Parameters::PitchMultiplier>(*this);
+			registerCallback<(int)Parameters::PitchMultiplier>(p);
 			data.add(std::move(p));
 		}
 		{
@@ -986,6 +1277,7 @@ public:
 
 	double freqValue = 220.0;
 	
+	float currentNyquistGain = 1.0f;
 };
 
 template class oscillator<1>;
@@ -1789,9 +2081,456 @@ template <int NV, typename T> struct snex_osc : public snex_osc_base<T>,
 	PolyData<OscData, NumVoices> oscData;
 };
 
+
+struct granulator: public data::base
+{
+    static const int NumGrains = 128;
+    static const int NumAudioFiles = 1;
+
+    SNEX_NODE(granulator);
+    SN_DESCRIPTION("A granular synthesiser");
+
+    granulator() = default;
+    
+    using AudioDataType = span<block, 2>;
+
+    using IndexType = index::lerp<index::unscaled<double, index::clamped<0>>>;
+
+    struct Grain
+    {
+        hmath Math;
+
+        enum State
+        {
+            ATTACK,
+            SUSTAIN,
+            RELEASE,
+            IDLE,
+            numStates
+        };
+
+        void reset()
+        {
+            fadeState = IDLE;
+        }
+
+        void setFadeTime(int newFadeTimeSamples)
+        {
+            if (newFadeTimeSamples != fadeTimeSamples)
+            {
+                fadeTimeSamples = newFadeTimeSamples;
+                fadeDelta = fadeTimeSamples == 0 ? 1.0f : 1.0f / (float)fadeTimeSamples;
+            }
+        }
+
+        void setSpread(float alpha, float gain, double detune)
+        {
+            gainValue = gain;//gain * ((1.0f - alpha) + alpha *Math.random());
+            auto balance = 2.0f * (Math.random() - 0.5f);
+            lGain = 1.0f + alpha * balance;
+            rGain = 1.0f - alpha * balance;
+
+            float att = (1.0f - Math.min(0.8f, alpha)) * 0.5f;
+            att *= 2.0f;
+
+            const double pf = (2.0 * Math.randomDouble() - 1.0) * detune;
+            uptimeDelta *= Math.pow(2.0, pf);
+        }
+
+        bool operator==(const Grain& other) const { return false; };
+
+        bool startIfIdle(const span<block, 2>& data, int index, int grainSize)
+        {
+            if (fadeState == 3)
+            {
+                fadeState = 0;
+
+                fadeValue = 0.0f;
+                idx = 0.0;
+
+                grainData[0].referTo(data[0], grainSize, index);
+                grainData[1].referTo(data[1], grainSize, index);
+
+                setFadeTime(grainSize / 4);
+
+                return true;
+            }
+
+            return false;
+        }
+
+        void updateFadeState()
+        {
+            auto grainLimit = grainData[0].size();
+            auto atkLimit = fadeTimeSamples;
+            auto susLimit = grainLimit - fadeTimeSamples;
+            auto idx_ = (int)idx;
+
+            fadeState = 0;
+            fadeState += idx_ >= atkLimit;
+            fadeState += idx_ >= susLimit;
+            fadeState += idx_ >= grainLimit;
+
+            if (fadeState == 0)
+            {
+                fadeValue += fadeDelta * uptimeDelta;
+            }
+            if (fadeState == 2)
+            {
+                fadeValue -= fadeDelta * uptimeDelta;
+            }
+            if (fadeState == 1)
+            {
+                fadeValue = 1.0;
+            }
+        }
+
+        void tick(span<float, 2>& output)
+        {
+            if (fadeState < 3)
+            {
+                IndexType i(idx);
+
+                auto thisGain = gainValue * (fadeValue * fadeValue);
+
+                output[0] += lGain * thisGain * grainData[0][i];
+                output[1] += rGain * thisGain * grainData[1][i];
+
+                idx += uptimeDelta;
+
+                updateFadeState();
+            }
+        }
+
+        void setPitchRatio(double delta)
+        {
+            uptimeDelta = delta;
+            gainValue *= Math.pow(delta, 0.3);
+        }
+
+
+        double idx = 0.0;
+
+        double uptimeDelta = 1.0;
+
+        int fadeTimeSamples = 0;
+        float fadeDelta = 1.0f;
+        float fadeValue = 0.0f;
+        int fadeState = 3;
+
+        float gainValue = 1.0f;
+        float lGain = 1.0f;
+        float rGain = 1.0f;
+
+        AudioDataType grainData;
+    };
+
+    // Reset the processing pipeline here
+    void reset()
+    {
+        voiceCounter = 0;
+        voices.clear();
+        activeEvents.clear();
+    }
+
+    bool isXYZ() const
+    {
+        return this->externalData.isXYZ();
+    }
+
+    void startNextGrain(int numSamples)
+    {
+        uptime += numSamples;
+
+        auto delta = uptime - timeOfLastGrainStart;
+
+        if (delta > timeBetweenGrains)
+        {
+            
+            auto delta = ((Math.randomDouble() - 0.5) * (double)timeBetweenGrains * 0.3);
+            timeOfLastGrainStart = uptime + delta;
+
+            double thisPitch = pitchRatio * sourceSampleRate / sampleRate;
+            auto thisGain = 1.0f;
+
+            StereoSample nextSample;
+
+            if (activeEvents.size() > 0)
+            {
+                index::wrapped<0> eIdx(eventIndex);
+
+                auto e = activeEvents[eIdx];
+
+                ed.getStereoSample(nextSample, e);
+
+                if (!ed.isXYZ())
+                    nextSample.rootNote = 64;
+
+                thisPitch *= nextSample.getPitchFactor();
+
+                eventIndex = (int)(Math.random() * 190.0f);
+            }
+
+            if (!nextSample.isEmpty())
+            {
+                auto idx = (int)(currentPosition * (double)(nextSample.data[0].size() - 2.0 * grainLengthSamples));
+
+                idx += (double)spread * Math.randomDouble() * grainLengthSamples;
+
+                auto offset = idx % 4;
+                idx -= offset;
+
+                for (auto& grain : grains)
+                {
+                    if (grain.startIfIdle(nextSample.data, idx, (int)grainLengthSamples))
+                    {
+                        grain.setPitchRatio(thisPitch);
+                        grain.setSpread(spread, thisGain, detune);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    template <typename FrameDataType> void processFrame(FrameDataType& data)
+    {
+        if (data.size() == 2)
+        {
+            if (voiceCounter != 0)
+                startNextGrain(1);
+
+            span<float, 2> sum;
+
+            for(auto& g: grains)
+                g.tick(sum);
+
+            data[0] += totalGrainGain * sum[0];
+            data[1] += totalGrainGain * sum[1];
+        }
+    }
+
+    template <typename ProcessDataType> void process(ProcessDataType& d)
+    {
+        if (!ed.isEmpty() && d.getNumChannels() == 2)
+        {
+            if (auto s = DataTryReadLock(ed))
+                processFix(d.template as<ProcessData<2>>());
+        }
+    }
+
+    void processFix(ProcessData<2>& d)
+    {
+        auto fd = d.toFrameData();
+
+        while (fd.next())
+            processFrame(fd.toSpan());
+    }
+
+    void handleHiseEvent(HiseEvent& e)
+    {
+        if (e.isController())
+        {
+            if (e.getControllerNumber() == 64)
+            {
+                pedal = e.getControllerValue() > 64;
+
+                if (!pedal)
+                {
+                    for (auto& dl : delayedNoteOffs)
+                        handleHiseEvent(dl);
+
+                    delayedNoteOffs.clear();
+                }
+            }
+        }
+
+        if (e.isAllNotesOff())
+        {
+            for (auto v : voices)
+                v.clear();
+
+            voiceCounter = 0;
+            delayedNoteOffs.clear();
+        }
+
+        if (e.isNoteOn())
+        {
+            voices[voiceCounter] = e;
+            voiceCounter = Math.min(voices.size()-1, voiceCounter + 1);
+        }
+        else if (e.isNoteOff())
+        {
+            for (auto& v : voices)
+            {
+                if (v.getEventId() == e.getEventId())
+                {
+                    if (pedal)
+                    {
+                        delayedNoteOffs.insert(e);
+                    }
+                    else
+                    {
+                        voiceCounter = Math.max(0, voiceCounter - 1);
+                        v = voices[voiceCounter];
+                        voices[voiceCounter].clear();
+                    }
+                }
+            }
+        }
+
+        if (voiceCounter == 0)
+            activeEvents.referToNothing();
+        else
+            activeEvents.referTo(voices, voiceCounter, 0);
+    }
+
+    void updateGrainLength()
+    {
+        grainLengthSamples = grainLength * 0.001 * sampleRate;
+        timeBetweenGrains = (int)(grainLengthSamples * (1.0 / pitchRatio) * (1.0 - density)) / 2;
+        timeBetweenGrains = jmax(400, timeBetweenGrains);
+        auto gainDelta = (float)timeBetweenGrains / (float)grainLengthSamples;
+        totalGrainGain = Math.pow(gainDelta, 0.3f);
+    }
+
+    void setExternalData(const ExternalData& d, int index)
+    {
+        base::setExternalData(d, index);
+
+        ed = d;
+
+        if (d.sampleRate != 0.0)
+            sourceSampleRate = d.sampleRate;
+
+        for (auto& g : grains)
+            g.reset();
+
+        voices.clear();
+        voiceCounter = 0;
+        activeEvents.referToNothing();
+        
+        updateGrainLength();
+    }
+
+    void prepare(PrepareSpecs ps)
+    {
+        sampleRate = ps.sampleRate;
+        updateGrainLength();
+    }
+
+    template <int P> void setParameter(double v)
+    {
+        if (P == 0) // Position
+        {
+            currentPosition = Math.range(v, 0.0, 1.0);
+
+            if (!ed.isXYZ())
+            {
+                auto dv = currentPosition * ed.numSamples - grainLengthSamples;
+                ed.setDisplayedValue(dv);
+            }
+        }
+        if (P == 1) // PitchRatio
+        {
+            pitchRatio = v;
+
+            for (auto& g : grains)
+                g.setPitchRatio(v);
+            
+            updateGrainLength();
+        }
+        if (P == 2) // GrainSize
+        {
+            grainLength = (int)Math.range(v, 20.0, 800.0);
+            updateGrainLength();
+        }
+        if (P == 3) // Density
+        {
+            density = Math.range(v, 0.0, 0.99);
+            updateGrainLength();
+        }
+        if (P == 4) // Spread
+            spread = (float)v;
+        if (P == 5) // Detune
+            detune = Math.range(v, 0.0, 1.0);
+    }
+
+    void createParameters(ParameterDataList& l)
+    {
+        {
+            parameter::data d("Position", { 0.0, 1.0 });
+            registerCallback<0>(d);
+            l.add(d);
+        }
+        {
+            parameter::data d("Pitch", { 0.5, 2.0 });
+            registerCallback<1>(d);
+            d.setSkewForCentre(1.0);
+            d.setDefaultValue(1.0);
+            l.add(d);
+        }
+        {
+            parameter::data d("GrainSize", { 20.0, 800.0 });
+            registerCallback<2>(d);
+            d.setDefaultValue(80.0);
+            l.add(d);
+        }
+        {
+            parameter::data d("Density", { 0.0, 1.0 });
+            registerCallback<3>(d);
+            l.add(d);
+        }
+        {
+            parameter::data d("Spread", { 0.0, 1.0 });
+            registerCallback<4>(d);
+            l.add(d);
+        }
+        {
+            parameter::data d("Detune", { 0.0, 1.0 });
+            registerCallback<5>(d);
+            l.add(d);
+        }
+    }
+
+    ExternalData ed;
+    span<Grain, NumGrains> grains;
+
+    float totalGrainGain = 1.0f;
+
+    int simpleLock = false;
+    int timeSinceLastStart = 0;
+    int uptime = 0;
+    int timeOfLastGrainStart = 0;
+
+    int timeBetweenGrains = 20.0;
+    int grainLength = 9000;
+    double grainLengthSamples = 2000.0;
+
+    double sampleFrequency = 440.0;
+    double pitchRatio = 1.0;
+    double sampleRate = 44100.0;
+    double sourceSampleRate = 44100.0;
+
+    double density = 1.0;
+    double detune = 0.0;
+    float spread = 0.0f;
+
+    bool pedal = false;
+
+    span<HiseEvent, 8> voices;
+    int voiceCounter = 0;
+    dyn<HiseEvent> activeEvents;
+
+    UnorderedStack<HiseEvent, 8> delayedNoteOffs;
+
+    int eventIndex = 0;
+
+    float maxGainInGrain = 1.0f;
+
+    double currentPosition = 0.0;
+};
+
 } // namespace core
-
-
-
 
 }

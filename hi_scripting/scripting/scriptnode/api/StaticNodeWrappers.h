@@ -118,7 +118,13 @@ public:
 
 	using WrapperType = WType;
 
-	virtual ~InterpretedNodeBase() {};
+	virtual ~InterpretedNodeBase() 
+	{
+		if (nodeFactory != nullptr)
+		{
+			nodeFactory->deinitOpaqueNode(&obj.getWrappedObject());
+		}
+	};
 
 	InterpretedNodeBase() = default;
 
@@ -175,6 +181,8 @@ public:
 
 	void initFromDll(dll::FactoryBase* f, int index, bool addDragger)
 	{
+		nodeFactory = f;
+
 		f->initOpaqueNode(&obj.getWrappedObject(), index, asWrapperNode()->getRootNetwork()->isPolyphonic());
 		this->obj.initialise(asWrapperNode());
 
@@ -215,6 +223,8 @@ protected:
 	}
 
 private:
+
+	dll::FactoryBase* nodeFactory = nullptr;
 
 	ScopedPointer<OpaqueNodeDataHolder> opaqueDataHolder;
 
@@ -369,6 +379,8 @@ struct InterpretedCableNode : public ModulationSourceNode,
 
 		constexpr bool isBaseOfDynamicDupliHolder = std::is_base_of<control::pimpl::parameter_node_base<parameter::clone_holder>, typename T::WrappedObjectType>();
 
+        constexpr bool isBaseOfNoParameterHolder = std::is_base_of<control::pimpl::no_parameter, typename T::WrappedObjectType>();
+        
 		static_assert(std::is_base_of<control::pimpl::no_processing, typename T::WrappedObjectType>(), "not a base of no_processing");
 
 		auto mn = new InterpretedCableNode(n, d);
@@ -379,10 +391,8 @@ struct InterpretedCableNode : public ModulationSourceNode,
 			mn->getParameterFunction = parameter::clone_holder::getParameterFunctionStatic;
 		else if constexpr (isBaseOfDynamicParameterHolder)
 			mn->getParameterFunction = InterpretedCableNode::getParameterFunctionStatic<T>;
-        else if constexpr (std::is_same<T, wrap::data<control::pack_resizer, data::dynamic::sliderpack>>())
-        {
+        else if constexpr (isBaseOfNoParameterHolder)
             mn->getParameterFunction = nullptr;
-        }
 		else
 		{
 			constexpr bool isBaseOfDynamicList = std::is_base_of<control::pimpl::parameter_node_base<parameter::dynamic_list>, typename T::WrappedObjectType>();
@@ -624,5 +634,71 @@ protected:
     WeakReference<DspNetwork> network;
 	JUCE_DECLARE_WEAK_REFERENCEABLE(NodeFactory);
 };
+
+struct TemplateNodeFactory : public NodeFactory
+{
+	struct Builder
+	{
+		static constexpr int BypassIndex = -1;
+
+		Builder(DspNetwork* n, ValueTree v):
+			network(n)
+		{
+			jassert(!v.getParent().isValid());
+			nodes.add(v);
+			existingIds.addArray(n->getListOfUnusedNodeIds());
+			existingIds.addArray(n->getListOfUsedNodeIds());
+		}
+
+		WeakReference<DspNetwork> network;
+
+		StringArray existingIds;
+
+		Array<ValueTree> nodes;
+
+		int addNode(int parent, const String& path, const String& id, int index=-1);
+		void addParameter(int nodeIndex, const String& name, InvertableParameterRange r);
+
+		bool connectSendReceive(int sendIndex, Array<int> receiveIndexes);
+
+		bool connect(int nodeIndex, const Identifier sourceType, int sourceIndex, int targetNodeIndex, int targetParameterIndex);
+
+		void setNodeColour(Array<int> nodeIndexes, Colour c);
+
+		void setProperty(Array<int> nodeIndexes, const Identifier& id, const var& value);
+
+		void setNodeProperty(Array<int> nodeIndexes, const NamedValueSet& properties);
+
+		void setParameterValues(Array<int> nodeIndexes, StringArray parameterNames, Array<double> values);
+
+		void setComplexDataIndex(Array<int> nodeIndexes, ExternalData::DataType type, int index);
+
+		void addComment(Array<int> nodeIndexes, const String& comment);
+
+		Colour getRandomColour() const
+		{
+			return Colour(Random::getSystemRandom().nextFloat(), 0.33f, 0.6f, 1.0f);
+		}
+
+		void setFolded(Array<int> nodeIndexes);
+
+		void fillValueTree(int nodeIndex);
+
+		void setRootType(const String& rootPath)
+		{
+			nodes[0].setProperty(PropertyIds::FactoryPath, rootPath, nullptr);
+		}
+
+		NodeBase* flush()
+		{
+			return network->createFromValueTree(network->isPolyphonic(), nodes[0], true);
+		}
+	};
+
+	TemplateNodeFactory(DspNetwork* n);;
+
+	virtual Identifier getId() const override { RETURN_STATIC_IDENTIFIER("template"); }
+};
+
     
 }

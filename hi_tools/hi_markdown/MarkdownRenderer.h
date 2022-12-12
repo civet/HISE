@@ -259,6 +259,16 @@ public:
 		return undoManager.perform(new NavigationAction(this, url));
 	}
 
+    bool gotoLinkFromMouseEvent(const MouseEvent& e, Rectangle<float> markdownBounds, const File& root)
+    {
+        auto l = getLinkForMouseEvent(e, markdownBounds);
+
+        if (l.isValid())
+            return gotoLink(l.withRoot(root, true));
+        
+        return false;
+    }
+    
 	void addListener(Listener* l) { listeners.addIfNotAlreadyThere(l); }
 	void removeListener(Listener* l) { listeners.removeAllInstancesOf(l); }
 
@@ -445,6 +455,22 @@ public:
 			parent.r.draw(g, b);
 		}
 
+		void mouseMove(const MouseEvent& e) override
+		{
+			auto l = parent.r.getLinkForMouseEvent(e, getLocalBounds().toFloat());
+
+			setMouseCursor(l.isValid() ? MouseCursor::PointingHandCursor : MouseCursor::NormalCursor);
+		}
+
+        void mouseDown(const MouseEvent& e) override
+        {
+            if(e.mods.isLeftButtonDown())
+            {
+                auto markdownBounds = getLocalBounds().toFloat();
+                parent.r.gotoLinkFromMouseEvent(e, markdownBounds, File());
+            }
+        }
+        
 		SimpleMarkdownDisplay& parent;
 	};
 
@@ -455,6 +481,9 @@ public:
 		vp.setViewedComponent(&canvas, false);
 		addAndMakeVisible(vp);
 		vp.setScrollOnDragEnabled(true);
+        
+        sf.addScrollBarToAnimate(vp.getVerticalScrollBar());
+        vp.setScrollBarThickness(14);
 	}
 
 	void setText(const String& text)
@@ -484,6 +513,8 @@ public:
 	float totalHeight = 0.0;
 	Viewport vp;
 	InternalComp canvas;
+    
+    ScrollbarFader sf;
 };
 
 class MarkdownPreview : public Component,
@@ -611,7 +642,7 @@ public:
 		navigationShown = shouldBeShown;
 	}
 
-	virtual void showDoc() { jassertfalse; };
+	virtual void showDoc() { ; };
 
 	virtual void enableEditing(bool shouldBeEnabled) {};
 

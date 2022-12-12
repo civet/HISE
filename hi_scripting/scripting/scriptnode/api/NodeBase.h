@@ -205,7 +205,7 @@ class NodeBase : public ConstScriptingObject
 {
 public:
 
-	using Parameter = Parameter;
+	using Parameter = scriptnode::Parameter;
 
 	using FrameType = snex::Types::dyn<float>;
 	using MonoFrameType = snex::Types::span<float, 1>;
@@ -498,6 +498,7 @@ public:
 
 	void addParameter(Parameter* p);
 	void removeParameter(int index);
+	void removeParameter(const String& id);
 
 	void setParentNode(Ptr newParentNode);
 
@@ -517,6 +518,9 @@ public:
 		return {};
 	}
 
+    static bool sendResizeMessage(Component* c, bool async);
+    
+    
 	double& getCpuFlag() { return cpuUsage; }
 
 	String getCpuUsageInPercent() const;
@@ -531,6 +535,8 @@ public:
 	bool& getPreserveAutomationFlag() { return preserveAutomation; }
 
     int getCurrentChannelAmount() const { return lastSpecs.numChannels; };
+    
+    virtual int getNumChannelsToDisplay() const { return getCurrentChannelAmount(); };
     
 	String getDynamicBypassSource(bool forceUpdate) const;
 

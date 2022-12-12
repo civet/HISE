@@ -50,6 +50,9 @@ bool MacroControlledObject::checkLearnMode()
 {
 #if USE_BACKEND
 
+	if (getProcessor() == nullptr)
+		return false;
+
 	auto b = getProcessor()->getMainController()->getScriptComponentEditBroadcaster();
 
 	if (auto l = b->getCurrentlyLearnedComponent())
@@ -133,18 +136,22 @@ void MacroControlledObject::enableMidiLearnWithPopup()
 
 	m.setLookAndFeel(&plaf);
 
+	auto ccName = handler->getCCName();
 
 	if (!isOnHiseModuleUI)
 	{
-		m.addItem(Learn, "Learn MIDI CC", true, learningActive);
+		m.addItem(Learn, "Learn " + ccName, true, learningActive);
 		
-		auto value = getProcessor()->getMainController()->getMacroManager().getMidiControlAutomationHandler()->getMidiControllerNumber(processor, parameterToUse);
+		auto value = handler->getMidiControllerNumber(processor, parameterToUse);
 
 		PopupMenu s;
 		for (int i = 1; i < 127; i++)
-			s.addItem(i + MidiOffset, "CC #" + String(i), true, i == value);
+		{
+			if(handler->shouldAddControllerToPopup(i))
+				s.addItem(i + MidiOffset, handler->getControllerName(i), handler->isMappable(i), i == value);
+		}
 
-		m.addSubMenu("Assign MIDI CC", s, true);
+		m.addSubMenu("Assign " + ccName, s, true);
 	}
 		
 
@@ -168,7 +175,7 @@ void MacroControlledObject::enableMidiLearnWithPopup()
 
 	if (midiController != -1)
 	{
-		m.addItem(Remove, "Remove CC " + String(midiController));
+		m.addItem(Remove, "Remove " + handler->getControllerName(midiController));
 	}
 
 	if (macroIndex != -1)
@@ -344,10 +351,17 @@ void MacroControlledObject::setup(Processor *p, int parameter_, const String &na
 
 	initMacroControl(dontSendNotification);
 
-	slaf = new ScriptingObjects::ScriptedLookAndFeel::Laf(p->getMainController());
-	numberTag->setLookAndFeel(slaf.get());
-	
-	
+	auto newLaf = new ScriptingObjects::ScriptedLookAndFeel::Laf(p->getMainController());
+
+	slaf = newLaf;
+
+	WeakReference<ScriptingObjects::ScriptedLookAndFeel::Laf> safeLaf = newLaf;
+
+	SafeAsyncCall::callAsyncIfNotOnMessageThread<Component>(*numberTag, [safeLaf](Component& c)
+	{
+		if (safeLaf != nullptr)
+			c.setLookAndFeel(safeLaf.get());
+	});
 
 	p->getMainController()->getMainSynthChain()->addMacroConnectionListener(this);
 
@@ -465,9 +479,6 @@ void HiSlider::updateValue(NotificationType /*sendAttributeChange*/)
 	const bool enabled = !isLocked();
 
 	setEnabled(enabled);
-
-	numberTag->setNumber(enabled ? 0 : getMacroIndex()+1);
-	
 
 	const double value = (double)getProcessor()->getAttribute(parameter);
 
@@ -663,14 +674,7 @@ void HiToggleButton::mouseDown(const MouseEvent &e)
         
         startTouch(e.getMouseDownPosition());
         
-		if (isMomentary)
-		{
-			setToggleState(true, sendNotification);
-		}
-		else
-		{
-			ToggleButton::mouseDown(e);
-		}
+        MomentaryToggleButton::mouseDown(e);
 
 		if (popupData.isObject())
 		{
@@ -710,15 +714,7 @@ void HiToggleButton::mouseDown(const MouseEvent &e)
 void HiToggleButton::mouseUp(const MouseEvent& e)
 {
     abortTouch();
-    
-	if (isMomentary)
-	{
-		setToggleState(false, sendNotification);
-	}
-	else
-	{
-		ToggleButton::mouseUp(e);
-	}
+    MomentaryToggleButton::mouseUp(e);
 }
 
 void HiComboBox::setup(Processor *p, int parameterIndex, const String &parameterName)
@@ -755,8 +751,6 @@ void HiComboBox::touchAndHold(Point<int> /*downPosition*/)
 void HiComboBox::updateValue(NotificationType /*sendAttributeChange*/)
 {
 	const bool enabled = !isLocked();
-
-	if(enabled) numberTag->setNumber(0);
 
 	setEnabled(enabled);
 
@@ -812,6 +806,9 @@ void HiToggleButton::buttonClicked(Button *b)
 {
 	jassert(b == this);
     
+	if (getProcessor() == nullptr)
+		return;
+
 	const int index = GET_MACROCHAIN()->getMacroControlIndexForProcessorParameter(getProcessor(), parameter);
 
 

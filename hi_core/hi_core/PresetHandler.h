@@ -169,6 +169,8 @@ public:
 
 	static File getLinkFile(const File &subDirectory);
 
+    static File getFolderOrRedirect(const File& folder);
+    
 	/** Creates a platform dependant file in the subdirectory that redirects to another location.
 	*
 	*	This is mainly used for storing audio samples at another location to keep the project folder size small.
@@ -293,9 +295,12 @@ public:
 
 	void checkActiveProject();
 
-	void addListener(Listener* newProjectListener)
+	void addListener(Listener* newProjectListener, bool sendWithInitialValue=false)
 	{
 		listeners.addIfNotAlreadyThere(newProjectListener);
+        
+        if(sendWithInitialValue && currentWorkDirectory.isDirectory())
+            newProjectListener->projectChanged(currentWorkDirectory);
 	}
 
 	void removeListener(Listener* listenerToRemove)
@@ -368,7 +373,7 @@ public:
 	static File getSampleLinkFile();
 
 	/** Returns the location for the user presets. */
-	static File getUserPresetDirectory();
+	static File getUserPresetDirectory(bool redirect=true);
 
 	/** There is a folder in the app data directory of your plugin that can be used
 	*	to store audio files loaded into your plugin with a relative path to be 
@@ -498,8 +503,6 @@ public:
 	static bool checkVersionNumber(ModulatorSynthChain* chain, XmlElement& element);
 
 	static String getCurrentVersionNumber(ModulatorSynthChain* chain);
-
-    static File getUserPresetFile(ModulatorSynthChain *chain, const String &fileNameWithoutExtension);
 
 	static ValueTree collectAllUserPresets(ModulatorSynthChain* chain, FileHandlerBase* expansion=nullptr);
 

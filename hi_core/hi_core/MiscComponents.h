@@ -42,6 +42,8 @@ class MouseCallbackComponent : public Component,
 {
 	// ================================================================================================================
 
+public:
+
 	enum EnterState
 	{
 		Nothing = 0,
@@ -64,8 +66,6 @@ class MouseCallbackComponent : public Component,
 		FileDrop,
 		Nothing
 	};
-
-public:
 
 	enum class CallbackLevel
 	{
@@ -147,6 +147,8 @@ public:
 
 	void setPopupMenuItems(const StringArray &newItemList);
 
+	static PopupMenu parseFromStringArray(const StringArray& itemList, Array<int> activeIndexes, LookAndFeel* laf);
+
 	void setActivePopupItem(int menuId)
 	{
 		activePopupId = menuId;
@@ -161,6 +163,8 @@ public:
 	void addMouseCallbackListener(Listener *l);
 	void removeCallbackListener(Listener *l);
 	void removeAllCallbackListeners();
+
+	static var getMouseCallbackObject(Component* c, const MouseEvent& e, CallbackLevel level, Action action, EnterState state);
 
 	void mouseDown(const MouseEvent& event) override;
 
@@ -295,7 +299,24 @@ struct DrawActions
 		JUCE_DECLARE_WEAK_REFERENCEABLE(ActionBase);
 	};
 
-	
+	struct MarkdownAction: public ActionBase
+	{
+		MarkdownAction() :
+			renderer("")
+		{};
+
+		using Ptr = ReferenceCountedObjectPtr<MarkdownAction>;
+
+		void perform(Graphics& g) override
+		{
+			ScopedLock sl(lock);
+			renderer.draw(g, area);
+		}
+
+		CriticalSection lock;
+		MarkdownRenderer renderer;
+		Rectangle<float> area;
+	};
 
 	class ActionLayer : public ActionBase
 	{
@@ -400,7 +421,7 @@ struct DrawActions
 		void perform(Graphics& g) override;
 
 		float alpha;
-		ReferenceCountedArray<ActionBase> actions;
+		
 		Image blendSource;
 		gin::BlendMode blendMode;
 	};
@@ -658,13 +679,13 @@ public:
 
 	void registerToTopLevelComponent()
 	{
-		return;
-
+#if 0
 		if (srs == nullptr)
 		{
 			if (auto tc = findParentComponentOfClass<TopLevelWindowWithOptionalOpenGL>())
 				srs = new TopLevelWindowWithOptionalOpenGL::ScopedRegisterState(*tc, this);
 		}
+#endif
 	}
 
 	void resized() override
@@ -772,6 +793,7 @@ private:
 	bool multiline;
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MultilineLabel);
+    JUCE_DECLARE_WEAK_REFERENCEABLE(MultilineLabel);
 
 	// ================================================================================================================
 };

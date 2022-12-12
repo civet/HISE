@@ -14,8 +14,10 @@
 namespace hise { using namespace juce;
 using namespace scriptnode;
 
-struct HotswappableProcessor
+class HotswappableProcessor
 {
+public:
+
 	virtual ~HotswappableProcessor() {};
 
 	virtual bool setEffect(const String& name, bool synchronously) = 0;
@@ -23,8 +25,14 @@ struct HotswappableProcessor
 
 	virtual void clearEffect() { setEffect("", false); }
 
+	virtual StringArray getModuleList() const = 0;
+
 	virtual Processor* getCurrentEffect() = 0;
 	virtual const Processor* getCurrentEffect() const = 0;
+    
+    virtual String getCurrentEffectId() const = 0;
+    
+    virtual var getParameterProperties() const = 0;
 };
 
 class HardcodedSwappableEffect : public HotswappableProcessor,
@@ -50,11 +58,13 @@ public:
 	Processor* getCurrentEffect() { return dynamic_cast<Processor*>(this); }
 	const Processor* getCurrentEffect() const override { return dynamic_cast<const Processor*>(this); }
 
-	StringArray getListOfAvailableNetworks() const;
+	StringArray getModuleList() const override;
 	bool setEffect(const String& factoryId, bool /*unused*/) override;
 	bool swap(HotswappableProcessor* other) override;
 	bool isPolyphonic() const { return polyHandler.isEnabled(); }
 
+    String getCurrentEffectId() const override { return currentEffect; }
+    
 	Processor& asProcessor() { return *dynamic_cast<Processor*>(this); }
 	const Processor& asProcessor() const { return *dynamic_cast<const Processor*>(this); }
 
@@ -73,25 +83,15 @@ public:
 
 	bool hasHardcodedTail() const;
 
+    var getParameterProperties() const override;
+    
 protected:
 	
 	HardcodedSwappableEffect(MainController* mc, bool isPolyphonic);
 
 	struct DataWithListener : public ComplexDataUIUpdaterBase::EventListener
 	{
-		DataWithListener(HardcodedSwappableEffect& parent, ComplexDataUIBase* p, int index_, OpaqueNode* nodeToInitialise) :
-			node(nodeToInitialise),
-			data(p),
-			index(index_)
-		{
-			if (data != nullptr)
-			{
-				auto mc = dynamic_cast<ControlledObject*>(&parent)->getMainController();
-				data->getUpdater().setUpdater(mc->getGlobalUIUpdater());
-				data->getUpdater().addEventListener(this);
-				updateData();
-			}
-		};
+		DataWithListener(HardcodedSwappableEffect& parent, ComplexDataUIBase* p, int index_, OpaqueNode* nodeToInitialise);;
 
 		~DataWithListener()
 		{
@@ -104,7 +104,11 @@ protected:
 			if (node != nullptr)
 			{
 				SimpleReadWriteLock::ScopedWriteLock sl(data->getDataLock());
+
 				ExternalData ed(data.get(), index);
+
+				SimpleRingBuffer::ScopedPropertyCreator sps(data.get());
+
 				node->setExternalData(ed, index);
 			}
 
@@ -220,7 +224,7 @@ public:
 	void prepareToPlay(double sampleRate, int samplesPerBlock);
 
 	Path getSpecialSymbol() const override;
-	void handleHiseEvent(const HiseEvent &m) override {}
+	void handleHiseEvent(const HiseEvent &m) override;
 	void applyEffect(AudioSampleBuffer &b, int startSample, int numSamples) final override;
 
 	void renderWholeBuffer(AudioSampleBuffer &buffer) override;
@@ -281,6 +285,10 @@ public:
 	
 	void handleHiseEvent(const HiseEvent &m) override
 	{
+        // Already handled...
+        if(m.isNoteOn())
+            return;
+        
 		if (opaqueNode != nullptr)
 			voiceStack.handleHiseEvent(*opaqueNode, polyHandler, m);
 	}
@@ -425,6 +433,10 @@ public:
 		wrappedEffect->setKillBuffer(*killBuffer);
 	}
 	
+    var getParameterProperties() const override { return var(); };
+    
+    String getCurrentEffectId() const override { return isPositiveAndBelow(currentIndex, effectList.size()) ? effectList[currentIndex] : "No Effect"; }
+    
 	void handleHiseEvent(const HiseEvent &m) override;
 
 	void startMonophonicVoice() override;
@@ -479,7 +491,7 @@ public:
 
 	const Processor* getCurrentEffect() const override { return const_cast<SlotFX*>(this)->getCurrentEffect(); }
 
-	const StringArray& getEffectList() const { return effectList; }
+	StringArray getModuleList() const override { return effectList; }
 
 	/** This creates a new processor and sets it as processed FX.
 	*

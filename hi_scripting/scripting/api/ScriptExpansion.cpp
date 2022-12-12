@@ -41,21 +41,30 @@ struct ScriptUserPresetHandler::Wrapper
 	API_VOID_METHOD_WRAPPER_1(ScriptUserPresetHandler, setCustomAutomation);
 	API_VOID_METHOD_WRAPPER_3(ScriptUserPresetHandler, setUseCustomUserPresetModel);
 	API_METHOD_WRAPPER_1(ScriptUserPresetHandler, isOldVersion);
+    API_METHOD_WRAPPER_0(ScriptUserPresetHandler, isInternalPresetLoad);
 	API_VOID_METHOD_WRAPPER_0(ScriptUserPresetHandler, clearAttachedCallbacks);
 	API_VOID_METHOD_WRAPPER_3(ScriptUserPresetHandler, attachAutomationCallback);
+	API_VOID_METHOD_WRAPPER_3(ScriptUserPresetHandler, updateAutomationValues);
+	API_VOID_METHOD_WRAPPER_1(ScriptUserPresetHandler, updateSaveInPresetComponents);
+	API_VOID_METHOD_WRAPPER_0(ScriptUserPresetHandler, updateConnectedComponentsFromModuleState);
+	API_VOID_METHOD_WRAPPER_1(ScriptUserPresetHandler, setUseUndoForPresetLoading);
+	API_METHOD_WRAPPER_0(ScriptUserPresetHandler, createObjectForSaveInPresetComponents);
+	API_METHOD_WRAPPER_0(ScriptUserPresetHandler, createObjectForAutomationValues);
+	API_VOID_METHOD_WRAPPER_0(ScriptUserPresetHandler, runTest);
 };
 
 ScriptUserPresetHandler::ScriptUserPresetHandler(ProcessorWithScriptingContent* pwsc) :
 	ConstScriptingObject(pwsc, 0),
 	ControlledObject(pwsc->getMainController_()),
-	preCallback(pwsc, var(), 1),
-	postCallback(pwsc, var(), 1),
-	customLoadCallback(pwsc, var(), 1),
-	customSaveCallback(pwsc, var(), 1)
+	preCallback(pwsc, nullptr, var(), 1),
+	postCallback(pwsc, nullptr, var(), 1),
+	customLoadCallback(pwsc, nullptr, var(), 1),
+	customSaveCallback(pwsc, nullptr, var(), 1)
 {
 	getMainController()->getUserPresetHandler().addListener(this);
 
 	ADD_API_METHOD_1(isOldVersion);
+    ADD_API_METHOD_0(isInternalPresetLoad);
 	ADD_API_METHOD_1(setPostCallback);
 	ADD_API_METHOD_1(setPreCallback);
 	ADD_API_METHOD_2(setEnableUserPresetPreprocessing);
@@ -63,6 +72,14 @@ ScriptUserPresetHandler::ScriptUserPresetHandler(ProcessorWithScriptingContent* 
 	ADD_API_METHOD_3(setUseCustomUserPresetModel);
 	ADD_API_METHOD_3(attachAutomationCallback);
 	ADD_API_METHOD_0(clearAttachedCallbacks);
+	ADD_API_METHOD_3(updateAutomationValues);
+	ADD_API_METHOD_1(updateSaveInPresetComponents);
+	ADD_API_METHOD_0(updateConnectedComponentsFromModuleState);
+	ADD_API_METHOD_1(setUseUndoForPresetLoading);
+	ADD_API_METHOD_0(createObjectForSaveInPresetComponents);
+	ADD_API_METHOD_0(createObjectForAutomationValues);
+	ADD_API_METHOD_0(runTest);
+	
 }
 
 ScriptUserPresetHandler::~ScriptUserPresetHandler()
@@ -73,24 +90,39 @@ ScriptUserPresetHandler::~ScriptUserPresetHandler()
 	getMainController()->getUserPresetHandler().removeListener(this);
 }
 
+void ScriptUserPresetHandler::setUseUndoForPresetLoading(bool shouldUseUndoManager)
+{
+	getMainController()->getUserPresetHandler().setAllowUndoAtUserPresetLoad(shouldUseUndoManager);
+}
+
 void ScriptUserPresetHandler::setPreCallback(var presetCallback)
 {
-	preCallback = WeakCallbackHolder(getScriptProcessor(), presetCallback, 1);
-	preCallback.setThisObject(this);
+	preCallback = WeakCallbackHolder(getScriptProcessor(), this, presetCallback, 1);
 	preCallback.incRefCount();
+	preCallback.addAsSource(this, "preCallback");
+	preCallback.setThisObject(this);
 }
 
 void ScriptUserPresetHandler::setPostCallback(var presetPostCallback)
 {
-	postCallback = WeakCallbackHolder(getScriptProcessor(), presetPostCallback, 1);
-	postCallback.setThisObject(this);
+	postCallback = WeakCallbackHolder(getScriptProcessor(), this, presetPostCallback, 1);
 	postCallback.incRefCount();
+	postCallback.addAsSource(this, "postCallback");
+	postCallback.setThisObject(this);
+
 }
 
 void ScriptUserPresetHandler::setEnableUserPresetPreprocessing(bool processBeforeLoading, bool shouldUnpackComplexData)
 {
 	enablePreprocessing = processBeforeLoading;
 	unpackComplexData = shouldUnpackComplexData;
+}
+
+bool ScriptUserPresetHandler::isInternalPresetLoad() const
+{
+    auto& uph = getScriptProcessor()->getMainController_()->getUserPresetHandler();
+    
+    return uph.isInternalPresetLoad();
 }
 
 bool ScriptUserPresetHandler::isOldVersion(const String& version)
@@ -112,11 +144,13 @@ void ScriptUserPresetHandler::setUseCustomUserPresetModel(var loadCallback, var 
 {
 	if (HiseJavascriptEngine::isJavascriptFunction(loadCallback) && HiseJavascriptEngine::isJavascriptFunction(saveCallback))
 	{
-		customLoadCallback = WeakCallbackHolder(getScriptProcessor(), loadCallback, 1);
+		customLoadCallback = WeakCallbackHolder(getScriptProcessor(), this, loadCallback, 1);
 		customLoadCallback.incRefCount();
+		customLoadCallback.addAsSource(this, "customLoadCallback");
 		
-		customSaveCallback = WeakCallbackHolder(getScriptProcessor(), saveCallback, 1);
+		customSaveCallback = WeakCallbackHolder(getScriptProcessor(), this, saveCallback, 1);
 		customSaveCallback.incRefCount();
+		customSaveCallback.addAsSource(this, "customSaveCallback");
 
 		getMainController()->getUserPresetHandler().setUseCustomDataModel(true, usePersistentObject);
 	}
@@ -138,7 +172,10 @@ void ScriptUserPresetHandler::setCustomAutomation(var automationData)
 		{
 			for (const auto& ad : *ar)
 			{
-				auto nd = new CustomData(getScriptProcessor()->getMainController_(), index++, ad);
+				auto nd = new CustomData(newList, getScriptProcessor()->getMainController_(), index++, ad);
+
+				if (!nd->r.wasOk())
+					reportScriptError(nd->id.toString() + " - " + nd->r.getErrorMessage());
 
 				newList.add(nd);
 			}
@@ -151,19 +188,19 @@ void ScriptUserPresetHandler::setCustomAutomation(var automationData)
 	}
 }
 
-ScriptUserPresetHandler::AttachedCallback::AttachedCallback(ProcessorWithScriptingContent* pwsc, MainController::UserPresetHandler::CustomAutomationData::Ptr cData_, var f, bool isSynchronous) :
+ScriptUserPresetHandler::AttachedCallback::AttachedCallback(ScriptUserPresetHandler* parent, MainController::UserPresetHandler::CustomAutomationData::Ptr cData_, var f, bool isSynchronous) :
   cData(cData_),
-  customUpdateCallback(pwsc, var(), 2),
-  customAsyncUpdateCallback(pwsc, var(), 2)
+  customUpdateCallback(parent->getScriptProcessor(), nullptr, var(), 2),
+  customAsyncUpdateCallback(parent->getScriptProcessor(), nullptr, var(), 2)
 {
 	if (isSynchronous)
 	{
-		customUpdateCallback = WeakCallbackHolder(pwsc, f, 2);
+		customUpdateCallback = WeakCallbackHolder(parent->getScriptProcessor(), parent, f, 2);
 		cData->syncListeners.addListener(*this, AttachedCallback::onCallbackSync, false);
 	}
 	else
 	{
-		customAsyncUpdateCallback = WeakCallbackHolder(pwsc, f, 2);
+		customAsyncUpdateCallback = WeakCallbackHolder(parent->getScriptProcessor(), parent, f, 2);
 		cData->asyncListeners.addListener(*this, AttachedCallback::onCallbackAsync, false);
 	}
 }
@@ -212,7 +249,7 @@ void ScriptUserPresetHandler::attachAutomationCallback(String automationId, var 
 				}
 			}
 
-			attachedCallbacks.add(new AttachedCallback(getScriptProcessor(), cData, updateCallback, isSynchronous));
+			attachedCallbacks.add(new AttachedCallback(this, cData, updateCallback, isSynchronous));
 
 
 			return;
@@ -227,6 +264,317 @@ void ScriptUserPresetHandler::attachAutomationCallback(String automationId, var 
 void ScriptUserPresetHandler::clearAttachedCallbacks()
 {
 	attachedCallbacks.clear();
+}
+
+struct AutomationValueUndoAction: public UndoableAction
+{
+    AutomationValueUndoAction(ScriptUserPresetHandler* s, var newData_, bool sendMessage_):
+      newData(newData_),
+      sendMessage(sendMessage_),
+      suph(s)
+    {
+        auto& h = suph->getMainController()->getUserPresetHandler();
+        
+        if(auto obj = newData.getDynamicObject())
+        {
+            auto od = new DynamicObject();
+            
+            for(auto& nv: obj->getProperties())
+            {
+                if(auto a = h.getCustomAutomationData(Identifier(nv.name)))
+                {
+                    od->setProperty(nv.name, a->lastValue);
+                }
+            }
+            
+            oldData = var(od);
+        }
+    }
+    
+    bool undo() override
+    {
+        if(suph != nullptr)
+        {
+            suph->updateAutomationValues(oldData, sendMessage, false);
+            return true;
+        }
+        
+        return false;
+    }
+    
+    bool perform() override
+    {
+        if(suph != nullptr)
+        {
+            suph->updateAutomationValues(newData, sendMessage, false);
+            return true;
+        }
+        
+        return false;
+    }
+    
+    var oldData;
+    var newData;
+    bool sendMessage;
+    WeakReference<ScriptUserPresetHandler> suph;
+};
+
+void ScriptUserPresetHandler::updateAutomationValues(var data, bool sendMessage, bool useUndoManager)
+{
+	auto& uph = getMainController()->getUserPresetHandler();
+
+	if (data.isInt() || data.isInt64())
+	{
+		auto preferredProcessorIndex = (int)data;
+
+		// just refresh the values from the current processor states
+		for (int i = 0; i < uph.getNumCustomAutomationData(); i++)
+		{
+			uph.getCustomAutomationData(i)->updateFromConnectionValue(preferredProcessorIndex);
+		}
+
+		return;
+	}
+
+    if(!useUndoManager)
+    {
+		if (data.getDynamicObject() != nullptr)
+		{
+			reportScriptError("data must be a list of JSON objects with the structure {\"id\": \"My ID\", \"value\": 0.5}");
+		}
+
+		if (data.isArray())
+		{
+			struct IndexSorter
+			{
+				IndexSorter(MainController::UserPresetHandler& p) :
+					uph(p)
+				{};
+
+				int compareElements(const var& first, const var& second) const
+				{
+					Identifier i1(first["id"].toString());
+					Identifier i2(first["id"].toString());
+
+					auto firstIndex = uph.getCustomAutomationData(i1)->index;
+					auto secondIndex = uph.getCustomAutomationData(i2)->index;
+
+					if (firstIndex < secondIndex)
+						return -1;
+					if (firstIndex > secondIndex)
+						return 1;
+
+					return 0;
+				};
+
+				MainController::UserPresetHandler& uph;
+			};
+
+			IndexSorter sorter(uph);
+
+			data.getArray()->sort(sorter);
+
+			for (auto& v : *data.getArray())
+			{
+				Identifier id(v["id"].toString());
+				auto value = v["value"];
+
+				if (auto cData = uph.getCustomAutomationData(id))
+				{
+					float fv = (float)value;
+					FloatSanitizers::sanitizeFloatNumber(fv);
+					cData->call(fv, sendMessage);
+				}
+			}
+		}
+    }
+    else
+    {
+        getMainController()->getControlUndoManager()->perform(new AutomationValueUndoAction(this, data, sendMessage));
+    }
+}
+
+juce::var ScriptUserPresetHandler::createObjectForAutomationValues()
+{
+	auto& uph = getMainController()->getUserPresetHandler();
+
+	Array<var> list;
+
+	// just refresh the values from the current processor states
+	for (int i = 0; i < uph.getNumCustomAutomationData(); i++)
+	{
+		auto ad = uph.getCustomAutomationData(i);
+
+		DynamicObject* obj = new DynamicObject();
+		obj->setProperty("id", ad->id.toString());
+		obj->setProperty("value", ad->lastValue);
+		list.add(var(obj));
+	}
+
+	return var(list);
+}
+
+juce::var ScriptUserPresetHandler::createObjectForSaveInPresetComponents()
+{
+	auto content = getScriptProcessor()->getScriptingContent();
+
+	auto v = content->exportAsValueTree();
+
+	for (auto c : v)
+		c.removeProperty("type", nullptr);
+
+	return ValueTreeConverters::convertValueTreeToDynamicObject(v);
+}
+
+void ScriptUserPresetHandler::updateSaveInPresetComponents(var obj)
+{
+	auto content = getScriptProcessor()->getScriptingContent();
+
+	auto v = ValueTreeConverters::convertDynamicObjectToValueTree(obj, "Content");
+
+	for (auto c : v)
+	{
+		auto type = content->getComponentWithName(Identifier(c["id"]))->getScriptObjectProperty("type");
+		c.setProperty("type", type, nullptr);
+	}
+
+	content->restoreAllControlsFromPreset(v);
+}
+
+void ScriptUserPresetHandler::updateConnectedComponentsFromModuleState()
+{
+	auto content = getScriptProcessor()->getScriptingContent();
+
+	for (int i = 0; i < content->getNumComponents(); i++)
+	{
+		auto sc = content->getComponent(i);
+
+        sc->updateValueFromProcessorConnection();
+	}
+}
+
+void ScriptUserPresetHandler::runTest()
+{
+	auto content = getScriptProcessor()->getScriptingContent();
+	auto& uph = getMainController()->getUserPresetHandler();
+
+	String report = "\n";
+
+	auto addLine = [&](const String& s)
+	{
+		report << s << "\n";
+	};
+
+	auto addLineFromTokens = [&](const StringArray& s)
+	{
+		for (auto& t : s)
+			report << t;
+
+		report << "\n";
+	};
+
+	auto addWarning = [&](const String& s)
+	{
+		report << "WARNING: " << s << "\n";
+	};
+
+	auto boolString = [](bool v)
+	{
+		return String(v ? "true" : "false");
+	};
+
+	auto getNumElements = [&](const String& type)
+	{
+		if (type == "allComponents")
+		{
+			return String(content->getNumComponents());
+		}
+		if (type == "saveInPreset")
+		{
+			int counter = 0;
+
+			for (int i = 0; i < content->getNumComponents(); i++)
+			{
+				if (content->getComponent(i)->getScriptObjectProperty("saveInPreset"))
+					counter++;
+			}
+
+			return String(counter);
+		}
+		if (type == "automationID")
+		{
+			return String(uph.getNumCustomAutomationData());
+		}
+		if (type == "moduleStates")
+		{
+			return String(uph.getStoredModuleData().size());
+		}
+        
+        return String("unknown");
+	};
+
+				addLine("| ====================== USER PRESET TEST ================== |");
+	addLineFromTokens({ "| Stats: ", "isCustomModel: ", boolString(uph.isUsingCustomDataModel()) });
+	addLineFromTokens({ "|        ", "isCustomAutomation: ", boolString(uph.isUsingCustomDataModel()) });
+	addLineFromTokens({ "|        ", "numSaveInPreset: ", getNumElements("saveInPreset") });
+	addLineFromTokens({ "|        ", "totalComponents: ", getNumElements("allComponents")});
+	addLineFromTokens({ "|        ", "automationSlots: ", getNumElements("automationID")});
+	addLineFromTokens({ "|        ", "moduleStates: ", getNumElements("moduleStates") });
+				addLine("| ========================================================== |");
+
+	addLine("Testing persistency of connected components...");
+	for (int i = 0; i < content->getNumComponents(); i++)
+	{
+		auto cp = content->getComponent(i)->getConnectedProcessor();
+		auto sip = content->getComponent(i)->getScriptObjectProperty("saveInPreset");
+		auto id = content->getComponent(i)->getName().toString();
+
+		if (cp != nullptr)
+		{
+			if (!sip)
+			{
+				addWarning(id + " is connected to a processor but does not have saveInPreset enabled");
+			}
+
+			for (auto l : uph.getStoredModuleData())
+			{
+				if (l->p == cp)
+				{
+					addWarning(id + " is connected to a processor that is restored with a module state.");
+				}	
+			}
+		}
+	}
+	addLine("...OK");
+	
+	if (uph.isUsingCustomDataModel())
+	{
+		addLine("Test custom data consistency...");
+		auto data1 = saveCustomUserPreset("test_save");
+		loadCustomUserPreset(data1);
+		auto data2 = saveCustomUserPreset("test_save");
+		auto ok = JSON::toString(data1).compare(JSON::toString(data2)) == 0;
+
+		if (!ok)
+			addWarning("Data inconsistency detected");
+		addLine("...OK");
+	}
+
+	if (!uph.getStoredModuleData().isEmpty())
+	{
+		addLine("| ============== Module State Information ================== |");
+		for (auto l : uph.getStoredModuleData())
+		{
+			addLineFromTokens({ "Module State for ", l->p->getId() });
+			auto v = l->p->exportAsValueTree();
+			l->stripValueTree(v);
+			
+			addLine(v.createXml()->createDocument(""));
+		}
+		addLine("| ========================================================== |");
+	}
+
+	debugToConsole(dynamic_cast<Processor*>(getScriptProcessor()), report);
 }
 
 var ScriptUserPresetHandler::convertToJson(const ValueTree& d)
@@ -265,7 +613,6 @@ var ScriptUserPresetHandler::convertToJson(const ValueTree& d)
 			for (int i = 0; i < c.getNumProperties(); i++)
 			{
 				auto id = c.getPropertyName(i);
-
 				auto value = c[id];
 
 				if (id == Identifier("value"))
@@ -369,6 +716,8 @@ juce::ValueTree ScriptUserPresetHandler::prePresetLoad(const ValueTree& dataToLo
 
 		if (enablePreprocessing)
 			args = convertToJson(dataToLoad);
+		else
+			args = var(new ScriptingObjects::ScriptFile(getScriptProcessor(), fileToLoad));
 
 		auto r = preCallback.callSync(&args, 1, nullptr);
 
@@ -416,9 +765,9 @@ ScriptExpansionHandler::ScriptExpansionHandler(JavascriptProcessor* jp_) :
 	ConstScriptingObject(dynamic_cast<ProcessorWithScriptingContent*>(jp_), 3),
 	ControlledObject(dynamic_cast<ControlledObject*>(jp_)->getMainController()),
 	jp(jp_),
-	expansionCallback(dynamic_cast<ProcessorWithScriptingContent*>(jp_), var(), 1),
-	errorFunction(dynamic_cast<ProcessorWithScriptingContent*>(jp_), var(), 2),
-	installCallback(dynamic_cast<ProcessorWithScriptingContent*>(jp_), var(), 1)
+	expansionCallback(dynamic_cast<ProcessorWithScriptingContent*>(jp_), nullptr, var(), 1),
+	errorFunction(dynamic_cast<ProcessorWithScriptingContent*>(jp_), nullptr, var(), 2),
+	installCallback(dynamic_cast<ProcessorWithScriptingContent*>(jp_), nullptr, var(), 1)
 {
 	getMainController()->getExpansionHandler().addListener(this);
 
@@ -476,7 +825,7 @@ void ScriptExpansionHandler::setInstallFullDynamics(bool shouldInstallFullDynami
 void ScriptExpansionHandler::setErrorFunction(var newErrorFunction)
 {
 	if (HiseJavascriptEngine::isJavascriptFunction(newErrorFunction))
-		errorFunction = WeakCallbackHolder(getScriptProcessor(), newErrorFunction, 1);
+		errorFunction = WeakCallbackHolder(getScriptProcessor(), this, newErrorFunction, 1);
 
 	errorFunction.setHighPriority();
 }
@@ -523,9 +872,11 @@ void ScriptExpansionHandler::setExpansionCallback(var expansionLoadedCallback)
 {
 	if (HiseJavascriptEngine::isJavascriptFunction(expansionLoadedCallback))
 	{
-		expansionCallback = WeakCallbackHolder(getScriptProcessor(), expansionLoadedCallback, 1);
-		expansionCallback.setThisObject(this);
+		expansionCallback = WeakCallbackHolder(getScriptProcessor(), this, expansionLoadedCallback, 1);
 		expansionCallback.incRefCount();
+		expansionCallback.addAsSource(this, "onExpansionLoad");
+		expansionCallback.setThisObject(this);
+		
 	}
 
 	expansionCallback.setHighPriority();
@@ -535,9 +886,10 @@ void ScriptExpansionHandler::setInstallCallback(var installationCallback)
 {
 	if (HiseJavascriptEngine::isJavascriptFunction(installationCallback))
 	{
-		installCallback = WeakCallbackHolder(getScriptProcessor(), installationCallback, 1);
-		installCallback.setThisObject(this);
+		installCallback = WeakCallbackHolder(getScriptProcessor(), this, installationCallback, 1);
 		installCallback.incRefCount();
+		installCallback.addAsSource(this, "onExpansionInstall");
+		installCallback.setThisObject(this);
 	}
 }
 
@@ -2287,12 +2639,15 @@ juce::File ScriptUnlocker::getLicenseKeyFile()
 struct ScriptUnlocker::RefObject::Wrapper
 {
 	API_METHOD_WRAPPER_0(RefObject, isUnlocked);
+	API_METHOD_WRAPPER_0(RefObject, canExpire);
+	API_METHOD_WRAPPER_1(RefObject, checkExpirationData);
 	API_METHOD_WRAPPER_0(RefObject, loadKeyFile);
 	API_VOID_METHOD_WRAPPER_1(RefObject, setProductCheckFunction);
 	API_METHOD_WRAPPER_1(RefObject, writeKeyFile);
 	API_METHOD_WRAPPER_0(RefObject, getUserEmail);
 	API_METHOD_WRAPPER_0(RefObject, getRegisteredMachineId);
 	API_METHOD_WRAPPER_1(RefObject, isValidKeyFile);
+    API_METHOD_WRAPPER_0(RefObject, keyFileExists);
 };
 
 ScriptUnlocker::RefObject::RefObject(ProcessorWithScriptingContent* p) :
@@ -2300,7 +2655,7 @@ ScriptUnlocker::RefObject::RefObject(ProcessorWithScriptingContent* p) :
 #if USE_BACKEND || USE_COPY_PROTECTION
 	unlocker(dynamic_cast<ScriptUnlocker*>(p->getMainController_()->getLicenseUnlocker())),
 #endif
-	pcheck(p, var(), 1)
+	pcheck(p, nullptr, var(), 1)
 {
 	if (unlocker->getLicenseKeyFile().existsAsFile())
 	{
@@ -2316,6 +2671,9 @@ ScriptUnlocker::RefObject::RefObject(ProcessorWithScriptingContent* p) :
 	ADD_API_METHOD_0(getUserEmail);
 	ADD_API_METHOD_0(getRegisteredMachineId);
 	ADD_API_METHOD_1(isValidKeyFile);
+	ADD_API_METHOD_0(canExpire);
+	ADD_API_METHOD_1(checkExpirationData);
+    ADD_API_METHOD_0(keyFileExists);
 }
 
 ScriptUnlocker::RefObject::~RefObject()
@@ -2329,9 +2687,46 @@ juce::var ScriptUnlocker::RefObject::isUnlocked() const
 	return unlocker != nullptr ? unlocker->isUnlocked() : var(0);
 }
 
+juce::var ScriptUnlocker::RefObject::canExpire() const
+{
+	return unlocker != nullptr ? var(unlocker->getExpiryTime() != juce::Time(0)) : var(false);
+}
+
+juce::var ScriptUnlocker::RefObject::checkExpirationData(const String& encodedTimeString)
+{
+	if (unlocker != nullptr)
+	{
+		if (encodedTimeString.startsWith("0x"))
+		{
+			BigInteger bi;
+
+			bi.parseString(encodedTimeString.substring(2), 16);
+			unlocker->getPublicKey().applyToValue(bi);
+
+			auto timeString = bi.toMemoryBlock().toString();
+
+			auto time = Time::fromISO8601(timeString);
+
+			auto ok = unlocker->unlockWithTime(time);
+
+			if (ok)
+				return var("");
+			else
+				return var("Activation failed");
+
+		}
+
+        return var("encodedTimeString data is corrupt");
+	}
+	else
+	{
+		return var("No unlocker");
+	}
+}
+
 void ScriptUnlocker::RefObject::setProductCheckFunction(var f)
 {
-	pcheck = WeakCallbackHolder(getScriptProcessor(), f, 1);
+	pcheck = WeakCallbackHolder(getScriptProcessor(), this, f, 1);
 	pcheck.incRefCount();
 	pcheck.setThisObject(this);
 }
@@ -2339,6 +2734,11 @@ void ScriptUnlocker::RefObject::setProductCheckFunction(var f)
 juce::var ScriptUnlocker::RefObject::loadKeyFile()
 {
 	return unlocker->loadKeyFile();
+}
+
+bool ScriptUnlocker::RefObject::keyFileExists() const
+{
+    return unlocker->getLicenseKeyFile().existsAsFile();
 }
 
 juce::var ScriptUnlocker::RefObject::writeKeyFile(const String& keyData)

@@ -254,8 +254,10 @@ void SlotFX::createList()
 }
 
 #if USE_BACKEND
-struct HardcodedMasterEditor : public ProcessorEditorBody
+class HardcodedMasterEditor : public ProcessorEditorBody
 {
+public:
+
 	static constexpr int Margin = 10;
 
 	HardcodedMasterEditor(ProcessorEditor* pe) :
@@ -263,7 +265,7 @@ struct HardcodedMasterEditor : public ProcessorEditorBody
 	{
 		getEffect()->effectUpdater.addListener(*this, update, true);
 
-		auto networkList = getEffect()->getListOfAvailableNetworks();
+		auto networkList = getEffect()->getModuleList();
 
 		selector.addItem("No network", 1);
 		selector.addItemList(networkList, 2);
@@ -292,23 +294,43 @@ struct HardcodedMasterEditor : public ProcessorEditorBody
 		repaint();
 	}
 
-	void paint(Graphics& g) override 
+	String getErrorMessage()
 	{
 		if (getEffect()->opaqueNode != nullptr && !getEffect()->channelCountMatches)
+		{
+			String e; 
+			e << "Channel mismatch";
+			e << "Expected: " << String(getEffect()->opaqueNode->numChannels) << ", Actual: " << String(getEffect()->numChannelsToRender);
+			return e;
+		}
+		auto bp = dynamic_cast<BackendProcessor*>(dynamic_cast<ControlledObject*>(getEffect())->getMainController());
+
+		if (bp->dllManager->projectDll == nullptr)
+			return "No DLL loaded";
+
+		return bp->dllManager->projectDll->getInitError();
+	}
+
+	void paint(Graphics& g) override 
+	{
+		auto errorMessage = getErrorMessage();
+		if (errorMessage.isNotEmpty())
 		{
 			g.setColour(Colours::white.withAlpha(0.5f));
 			g.setFont(GLOBAL_BOLD_FONT());
 
-			auto ta = selector.getBounds().translated(0, 40).toFloat();
+			Rectangle<float> ta;
 
-			g.drawText("Channel mismatch!", ta, Justification::centredTop);
+			if (currentParameters.isEmpty())
+			{
+				ta = getLocalBounds().toFloat();
+				ta.removeFromLeft(selector.getWidth());
+			}
+			else
+				ta = selector.getBounds().translated(0, 40).toFloat();
 
-			String e;
-			
-			e << "Expected: " << String(getEffect()->opaqueNode->numChannels) << ", Actual: " << String(getEffect()->numChannelsToRender);
-
-			g.drawText("Channel mismatch!", ta, Justification::centredTop);
-			g.drawText(e, ta, Justification::centredBottom);
+			g.drawText("Error!", ta, Justification::centredTop);
+			g.drawText(errorMessage, ta, Justification::centredBottom);
 		}
 
 	}
@@ -335,12 +357,12 @@ struct HardcodedMasterEditor : public ProcessorEditorBody
 					}
 				});
 
-			for (int i = 0; i < on->numParameters; i++)
+			for(const auto& p: OpaqueNode::ParameterIterator(*on))
 			{
-				auto pData = on->parameters[i];
+				auto pData = p.info;
 				auto s = new HiSlider(pData.getId());
 				addAndMakeVisible(s);
-				s->setup(getProcessor(), i, pData.getId());
+				s->setup(getProcessor(), pData.index, pData.getId());
 				auto nr = pData.toRange().rng;
 
 				s->setRange(pData.min, pData.max, jmax<double>(0.001, pData.interval));
@@ -462,7 +484,7 @@ bool HardcodedSwappableEffect::setEffect(const String& factoryId, bool /*unused*
 	if (factoryId == currentEffect)
 		return true;
 
-	auto idx = getListOfAvailableNetworks().indexOf(factoryId);
+	auto idx = getModuleList().indexOf(factoryId);
 
 	ScopedPointer<OpaqueNode> newNode;
 	listeners.clear();
@@ -494,32 +516,41 @@ bool HardcodedSwappableEffect::setEffect(const String& factoryId, bool /*unused*
 
 		{
 			SimpleReadWriteLock::ScopedWriteLock sl(lock);
+            
+			for (auto& p : OpaqueNode::ParameterIterator(*newNode))
+			{
+				auto defaultValue = p.info.defaultValue;
+				p.callback.call(defaultValue);
+			}
+
 			std::swap(newNode, opaqueNode);
 
-			for (int i = 0; i < opaqueNode->numParameters; i++)
-				lastParameters[i] = opaqueNode->parameters[i].defaultValue;
+			for (auto& p : OpaqueNode::ParameterIterator(*opaqueNode))
+			{
+				lastParameters[p.info.index] = p.info.defaultValue;
+			}
 
 			checkHardcodedChannelCount();
 		}		
 
 		asProcessor().parameterNames.clear();
 
-		for (int i = 0; i < opaqueNode->numParameters; i++)
-        {
-            parameterRanges.set(i, opaqueNode->parameters[i].toRange());
-			asProcessor().parameterNames.add(opaqueNode->parameters[i].getId());
-            
-            if(auto cp = asProcessor().getChildProcessor(i))
-            {
-                if(auto modChain = dynamic_cast<ModulatorChain*>(cp))
-                {
-                    auto rng = parameterRanges[i].rng;
-                    
-                    auto bipolar = rng.start < 0.0 && rng.end > 0.0;
-                    modChain->setMode(bipolar ? Modulation::PanMode : Modulation::GainMode, sendNotificationAsync);
-                }
-            }
-        }
+		for (const auto& p : OpaqueNode::ParameterIterator(*opaqueNode))
+		{
+			parameterRanges.set(p.info.index, p.info.toRange());
+			asProcessor().parameterNames.add(p.info.getId());
+
+			if (auto cp = asProcessor().getChildProcessor(p.info.index))
+			{
+				if (auto modChain = dynamic_cast<ModulatorChain*>(cp))
+				{
+					auto rng = parameterRanges[p.info.index].rng;
+
+					auto bipolar = rng.start < 0.0 && rng.end > 0.0;
+					modChain->setMode(bipolar ? Modulation::PanMode : Modulation::GainMode, sendNotificationAsync);
+				}
+			}
+		}
 
 		effectUpdater.sendMessage(sendNotificationAsync, currentEffect, somethingChanged, opaqueNode->numParameters);
 
@@ -613,8 +644,11 @@ void HardcodedSwappableEffect::setHardcodedAttribute(int index, float newValue)
 
 	SimpleReadWriteLock::ScopedReadLock sl(lock);
 
-	if (opaqueNode != nullptr && isPositiveAndBelow(index, opaqueNode->numParameters))
-		opaqueNode->parameterFunctions[index](opaqueNode->parameterObjects[index], (double)newValue);
+	if (opaqueNode == nullptr)
+		return;
+	
+	if (auto p = opaqueNode->getParameter(index))
+		p->callback.call((double)newValue);
 }
 
 float HardcodedSwappableEffect::getHardcodedAttribute(int index) const
@@ -693,19 +727,18 @@ void HardcodedSwappableEffect::restoreHardcodedData(const ValueTree& v)
 			}
 		});
 
-		for (int i = 0; i < opaqueNode->numParameters; i++)
+		for (const auto& p : OpaqueNode::ParameterIterator(*opaqueNode))
 		{
-			auto value = v.getProperty(opaqueNode->parameters[i].getId(), opaqueNode->parameters[i].defaultValue);
-			setHardcodedAttribute(i, value);
+			auto value = v.getProperty(p.info.getId(), p.info.defaultValue);
+			setHardcodedAttribute(p.info.index, value);
 		}
 	}
 }
 
 ValueTree HardcodedSwappableEffect::writeHardcodedData(ValueTree& v) const
 {
-	if (factory->getNumNodes() == 0)
+	if (factory->getNumNodes() == 0 && treeWhenNotLoaded.isValid())
 	{
-		jassert(treeWhenNotLoaded.isValid());
 		return treeWhenNotLoaded;
 	}
 
@@ -715,13 +748,13 @@ ValueTree HardcodedSwappableEffect::writeHardcodedData(ValueTree& v) const
 
 	if (opaqueNode != nullptr)
 	{
-		for (int i = 0; i < opaqueNode->numParameters; i++)
+		for (const auto& p : OpaqueNode::ParameterIterator(*opaqueNode))
 		{
-			auto id = opaqueNode->parameters[i].getId();
-			auto value = lastParameters[i];
+			auto id = p.info.getId();
+			auto value = lastParameters[p.info.index];
 			v.setProperty(id, value, nullptr);
 		}
-
+		
 		ExternalData::forEachType([&](ExternalData::DataType dt)
 		{
 			if (dt == ExternalData::DataType::DisplayBuffer ||
@@ -833,12 +866,17 @@ void HardcodedSwappableEffect::prepareOpaqueNode(OpaqueNode* n)
 		n->prepare(ps);
 		n->reset();
 
+		
+			
+
+#if USE_BACKEND
 		auto e = factory->getError();
 
 		if (e.error != Error::OK)
 		{
 			jassertfalse;
 		}
+#endif
 	}
 }
 
@@ -861,8 +899,11 @@ int HardcodedSwappableEffect::getNumDataObjects(ExternalData::DataType t) const
 	}
 }
 
-juce::StringArray HardcodedSwappableEffect::getListOfAvailableNetworks() const
+juce::StringArray HardcodedSwappableEffect::getModuleList() const
 {
+	if (factory == nullptr)
+		return {};
+
 	jassert(factory != nullptr);
 
 	StringArray sa;
@@ -873,10 +914,39 @@ juce::StringArray HardcodedSwappableEffect::getListOfAvailableNetworks() const
 		sa.add(factory->getId(i));
 
 	return sa;
-
 }
 
+var HardcodedSwappableEffect::getParameterProperties() const
+{
+    Array<var> list;
+    
+    if(opaqueNode != nullptr)
+    {
+		SimpleReadWriteLock::ScopedReadLock sl(lock);
 
+		for (const auto& p : OpaqueNode::ParameterIterator(*opaqueNode))
+		{
+			auto key = p.info.getId();
+			auto range = p.info.toRange().rng;
+			auto defaultValue = p.info.defaultValue;
+
+			Identifier id(key);
+
+			auto prop = new DynamicObject();
+
+			prop->setProperty("text", key);
+			prop->setProperty("min", range.start);
+			prop->setProperty("max", range.end);
+			prop->setProperty("stepSize", range.interval);
+			prop->setProperty("middlePosition", range.convertFrom0to1(0.5));
+			prop->setProperty("defaultValue", defaultValue);
+
+			list.add(var(prop));
+		}
+    }
+    
+    return var(list);
+}
 
 
 
@@ -971,6 +1041,13 @@ juce::Path HardcodedMasterFX::getSpecialSymbol() const
 	return getHardcodedSymbol();
 }
 
+void HardcodedMasterFX::handleHiseEvent(const HiseEvent &m)
+{
+	HiseEvent copy(m);
+	if (opaqueNode != nullptr)
+		opaqueNode->handleHiseEvent(copy);
+}
+
 void HardcodedMasterFX::applyEffect(AudioSampleBuffer &b, int startSample, int numSamples)
 {
 	SimpleReadWriteLock::ScopedReadLock sl(lock);
@@ -986,8 +1063,26 @@ void HardcodedMasterFX::applyEffect(AudioSampleBuffer &b, int startSample, int n
 		{
 			auto mv = modChains[i].getOneModulationValue(startSample);
 
-			auto value = lastParameters[i] * mv;
-			opaqueNode->parameterFunctions[i](opaqueNode->parameterObjects[i], (double)value);
+			auto p = opaqueNode->getParameter(i);
+
+			if (modChains[i].getChain()->getMode() == Modulation::PanMode)
+			{
+				if (!modChains[i].getChain()->shouldBeProcessedAtAll())
+					mv = 1.0f;
+
+				auto value = lastParameters[i] * mv;
+				p->callback.call((double)value);
+			}
+			else
+			{
+				auto r = p->toRange();
+
+				auto normMaxValue = r.convertTo0to1(lastParameters[i], false);
+				normMaxValue *= mv;
+				auto value = r.convertFrom0to1(normMaxValue, false);
+
+				p->callback.call((double)value);
+			}
 		}
 	}
 
@@ -1000,6 +1095,10 @@ void HardcodedMasterFX::renderWholeBuffer(AudioSampleBuffer &buffer)
 {
 	if (numChannelsToRender == 2)
 	{
+		// Rewrite the channel indexes, the buffer already points to the
+		// correct channels...
+		channelIndexes[0] = 0;
+		channelIndexes[1] = 1;
 		MasterEffectProcessor::renderWholeBuffer(buffer);
 	}
 	else
@@ -1096,6 +1195,33 @@ void HardcodedPolyphonicFX::applyEffect(int voiceIndex, AudioSampleBuffer &b, in
 	auto ok = processHardcoded(b, nullptr, startSample, numSamples);
 
 	isTailing = ok && voiceStack.containsVoiceIndex(voiceIndex);
+}
+
+HardcodedSwappableEffect::DataWithListener::DataWithListener(HardcodedSwappableEffect& parent, ComplexDataUIBase* p, int index_, OpaqueNode* nodeToInitialise) :
+	node(nodeToInitialise),
+	data(p),
+	index(index_)
+{
+	auto mc = dynamic_cast<ControlledObject*>(&parent)->getMainController();
+
+	if (data != nullptr)
+	{
+
+		data->getUpdater().setUpdater(mc->getGlobalUIUpdater());
+		data->getUpdater().addEventListener(this);
+		updateData();
+	}
+
+	if (auto af = dynamic_cast<MultiChannelAudioBuffer*>(p))
+	{
+		af->setProvider(new PooledAudioFileDataProvider(mc));
+
+		af->registerXYZProvider("SampleMap",
+			[mc]() { return static_cast<MultiChannelAudioBuffer::XYZProviderBase*>(new hise::XYZSampleMapProvider(mc)); });
+
+		af->registerXYZProvider("SFZ",
+			[mc]() { return static_cast<MultiChannelAudioBuffer::XYZProviderBase*>(new hise::XYZSFZProvider(mc)); });
+	}
 }
 
 } // namespace hise

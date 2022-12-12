@@ -35,6 +35,19 @@
 namespace hise { 
 using namespace juce;
 
+#define DECLARE_ID(x) static const juce::Identifier x(#x);
+
+namespace InterfaceDesignerShortcuts
+{
+	DECLARE_ID(id_toggle_edit);
+	DECLARE_ID(id_deselect_all);
+	DECLARE_ID(id_rebuild);
+	DECLARE_ID(id_lock_selection);
+	DECLARE_ID(id_show_json);
+	DECLARE_ID(id_duplicate);
+}
+#undef DECLARE_ID
+
 class CodeEditorPanel : public PanelWithProcessorConnection,
 						public GlobalScriptCompileListener
 
@@ -51,15 +64,23 @@ public:
 
 	void fillModuleList(StringArray& moduleList) override;
 
-	void contentChanged() override
-	{
-		refreshIndexList();
-	}
+	void contentChanged() override;
 
+    void setScriptFile(const String& sp)
+    {
+        scriptPath = sp;
+    }
+    
+    void preSelectCallback(ComboBox* cb) override
+    {
+        scriptPath = {};
+    }
+    
 	void fromDynamicObject(const var& object) override;
 
 	var toDynamicObject() const override;
 
+	static CodeEditorPanel* showOrCreateTab(FloatingTabComponent* parentTab, JavascriptProcessor* jp, int index);
 
 	void scriptWasCompiled(JavascriptProcessor *processor) override;
 
@@ -82,6 +103,8 @@ public:
 private:
 
 	ScopedPointer<JavascriptTokeniser> tokeniser;
+    
+    String scriptPath;
 };
 
 
@@ -111,6 +134,8 @@ public:
 	};
 
 	struct Canvas;
+
+	static void initKeyPresses(Component* root);
 
 	class Editor : public WrapperWithMenuBarBase,
 				   public Button::Listener,
@@ -354,6 +379,30 @@ public:
 
 	Component* createContentComponent(int /*index*/) override;
 
+	void fromDynamicObject(const var& object) override
+	{
+		columnData = object.getProperty("VisibleColumns", {});
+		PanelWithProcessorConnection::fromDynamicObject(object);
+	}
+
+	var toDynamicObject() const override
+	{
+		var cToUse = columnData;
+
+		if (auto sw = getContent<ScriptWatchTable>())
+		{
+			cToUse = sw->getColumnVisiblilityData();
+		}
+
+		if (!cToUse.isArray())
+			cToUse = var(Array<var>());
+
+		auto obj = PanelWithProcessorConnection::toDynamicObject();
+		obj.getDynamicObject()->setProperty("VisibleColumns", cToUse);
+
+		return obj;
+	}
+
 	void fillModuleList(StringArray& moduleList) override
 	{
 		fillModuleListWithType<JavascriptProcessor>(moduleList);
@@ -361,11 +410,122 @@ public:
 
 private:
 
+	var columnData;
 	const Identifier showConnectionBar;
 };
 
 
+class OSCLogger : public FloatingTileContent,
+				  public Component,
+				  private ListBoxModel,
+				  public AsyncUpdater,
+				  public PathFactory,
+				  private OSCReceiver::Listener<OSCReceiver::MessageLoopCallback>
+{
+public:
 
+	HiseShapeButton filterButton, clearButton, pauseButton;
+	
+	Path createPath(const String& url) const override;
+
+	scriptnode::OSCConnectionData::Ptr lastData;
+
+	ScopedPointer<OSCAddressPattern> searchPattern;
+
+	struct MessageItem
+	{
+		MessageItem() :
+			address("/")
+		{};
+
+		String message;
+		Colour c;
+		bool matchesDomain;
+		bool isError;
+		bool scaled = false;
+		bool hasScriptCallback = false;
+		bool hasCableConnection = false;
+
+		OSCAddress address;
+	};
+
+	OSCLogger(FloatingTile* parent);
+
+	~OSCLogger();
+
+	SET_PANEL_NAME("OSCLogger");
+
+	//==============================================================================
+	int getNumRows() override
+	{
+		return displayedItems.size();
+	}
+
+	//==============================================================================
+	void paintListBoxItem(int row, Graphics& g, int width, int height, bool rowIsSelected) override;
+
+	//==============================================================================
+	void addOSCMessage(const OSCMessage& message, int level = 0);
+
+	void oscMessageReceived(const OSCMessage& message) override
+	{
+		addOSCMessage(message);
+	}
+
+	void oscBundleReceived(const OSCBundle& bundle) override
+	{
+		addOSCBundle(bundle);
+	}
+
+	//==============================================================================
+	void addOSCBundle(const OSCBundle& bundle, int level = 0);
+
+	//==============================================================================
+	void addOSCMessageArgument(const MessageItem& m, const OSCArgument& arg, int level, const String& cableId);
+
+	//==============================================================================
+	void addInvalidOSCPacket(const char* /* data */, int dataSize);
+
+	//==============================================================================
+	void clear();
+
+	void paint(Graphics& g);
+
+	void resized() override;
+
+	static void updateConnection(OSCLogger& logger, scriptnode::OSCConnectionData::Ptr data);
+
+	//==============================================================================
+	void handleAsyncUpdate() override;
+
+	
+
+private:
+
+	ScrollbarFader fader;
+
+	TextEditor searchBox;
+	
+
+	static String getIndentationString(int level)
+	{
+		return String().paddedRight(' ', 2 * level);
+	}
+
+	//==============================================================================
+	Array<MessageItem> oscLogList;
+
+	Array<MessageItem> displayedItems;
+
+	scriptnode::routing::GlobalRoutingManager::Ptr rm;
+
+	Rectangle<int> topRow;
+
+	ListBox list;
+
+	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OSCLogger);
+	JUCE_DECLARE_WEAK_REFERENCEABLE(OSCLogger);
+};
 
 class ConsolePanel : public FloatingTileContent,
 	public Component

@@ -112,6 +112,11 @@ struct MappingData
 
 #define DECLARE_ID(x) const juce::Identifier x(#x);
 
+namespace SamplerKeyPresses
+{
+	DECLARE_ID(toggle_sample_preview);
+}
+
 namespace SampleIds
 {
 DECLARE_ID(Unused);
@@ -156,8 +161,6 @@ struct Helpers
 		case Modulation::Mode::PanMode:   return SampleIds::LowPassTable;
         default:                          return {};
 		}
-			
-		return {};
 	}
 	static Modulation::Mode getEnvelopeType(const Identifier& id)
 	{

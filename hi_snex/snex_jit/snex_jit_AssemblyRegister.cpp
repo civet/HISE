@@ -37,13 +37,14 @@ namespace jit {
 using namespace juce;
 using namespace asmjit;
 
-static int counter = 0;
+// Just for debugging purposes...
+static int reg_counter = 0;
 
 AssemblyRegister::AssemblyRegister(BaseCompiler* compiler_, TypeInfo type_) :
 	type(type_),
 	compiler(compiler_)
 {
-	debugId = counter++;
+	debugId = reg_counter++;
 }
 
 bool AssemblyRegister::matchesMemoryLocation(Ptr other) const
@@ -410,14 +411,14 @@ void AssemblyRegister::createMemoryLocation(asmjit::X86Compiler& cc)
 			auto v = *reinterpret_cast<float*>(memoryLocation);
 			isZeroValue = v == 0.0f;
 			
-			memory = cc.newFloatConst(ConstPool::kScopeLocal, v);
+			memory = cc.newFloatConst(ConstPoolScope::kLocal, v);
 		}
 		if (getType() == Types::ID::Double)
 		{
 			auto v = *reinterpret_cast<double*>(memoryLocation);
 			isZeroValue = v == 0.0;
 
-			memory = cc.newDoubleConst(ConstPool::kScopeLocal, v);
+			memory = cc.newDoubleConst(ConstPoolScope::kLocal, v);
 		}
 		if (getType() == Types::ID::Integer)
 		{

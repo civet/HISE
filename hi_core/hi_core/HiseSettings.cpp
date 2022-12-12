@@ -88,6 +88,7 @@ Array<juce::Identifier> HiseSettings::Project::getAllIds()
 	ids.add(AAXCategoryFX);
 	ids.add(SupportMonoFX);
 	ids.add(EnableMidiInputFX);
+    ids.add(EnableMidiOut);
 	ids.add(EnableSoundGeneratorsFX);
 	ids.add(VST3Support);
 	ids.add(UseRawFrontend);
@@ -96,6 +97,9 @@ Array<juce::Identifier> HiseSettings::Project::getAllIds()
 	ids.add(LinkExpansionsToProject);
 	ids.add(ReadOnlyFactoryPresets);
     ids.add(ForceStereoOutput);
+	ids.add(AdminPermissions);
+	ids.add(EmbedUserPresets);
+	ids.add(EnableGlobalPreprocessor);
 
 	return ids;
 }
@@ -111,6 +115,8 @@ Array<juce::Identifier> HiseSettings::Compiler::getAllIds()
 	ids.add(RebuildPoolFiles);
 	ids.add(Support32BitMacOS);
 	ids.add(CustomNodePath);
+	ids.add(FaustPath);
+    ids.add(FaustExternalEditor);
 
 	return ids;
 }
@@ -133,10 +139,12 @@ Array<juce::Identifier> HiseSettings::Scripting::getAllIds()
 	Array<Identifier> ids;
 
 	ids.add(EnableCallstack);
+	ids.add(EnableOptimizations);
 	ids.add(GlobalScriptPath);
 	ids.add(CompileTimeout);
 	ids.add(CodeFontSize);
 	ids.add(EnableDebugMode);
+	ids.add(SaveConnectedFilesOnCompile);
 
 	return ids;
 }
@@ -308,6 +316,11 @@ Array<juce::Identifier> HiseSettings::SnexWorkbench::getAllIds()
 		D("```\n");
 		P_();
 
+		P(HiseSettings::Project::EmbedUserPresets);
+		D("If disabled, the user presets will not be part of the binary and are not extracted automatically on first plugin launch");
+		D("> This is useful if you're running your own preset management or the user preset collection gets too big to be embedded in the plugin");
+		P_();
+
 		P(HiseSettings::Project::AppGroupID);
 		D("If you're compiling an iOS app, you need to add an App Group to your Apple ID for this project and supply the name here.");
 		D("App Group IDs must have reverse-domain format and start with group, like:");
@@ -343,6 +356,12 @@ Array<juce::Identifier> HiseSettings::SnexWorkbench::getAllIds()
 		D("> HISE will create a file called `LinkWindows` / `LinkOSX` in the samples folder that contains the link to the real folder.");
 		P_();
 
+		P(HiseSettings::Project::EnableGlobalPreprocessor);
+		D("If this flag is enabled, it will use the C-Preprocessor to process all HiseScript files on compilation");
+		D("If you disable this method, you can still enable preprocessing for individual files if they start with the directive `#on`");
+		D("> This setting will not have an effect on compiled plugins as the preprocessor will already be evaluated on export");
+		P_();
+
 		P(HiseSettings::Project::AAXCategoryFX);
 		D("If you export an effect plugin, you can specify the category it will show up in ProTools here");
 		
@@ -370,7 +389,11 @@ Array<juce::Identifier> HiseSettings::SnexWorkbench::getAllIds()
 		P(HiseSettings::Project::EnableMidiInputFX);
 		D("If enabled, the effect plugin will process incoming MIDI messages (if the host supports FX plugins with MIDI input");
 		P_();
-
+        
+        P(HiseSettings::Project::EnableMidiOut);
+        D("If enabled, the instrument plugin can send out MIDI messages that you forward using `Message.sendToMidiOut()`");
+        P_();
+        
 		P(HiseSettings::Project::EnableSoundGeneratorsFX);
 		D("If enabled, the effect plugin will also process child sound generators (eg. Global modulation containers and Macro modulation sources");
 		D("> Be aware that the sound output of the child sound generators will not be used, so this is only useful with \"quiet\" sound generators");
@@ -386,7 +409,7 @@ Array<juce::Identifier> HiseSettings::SnexWorkbench::getAllIds()
 		D("If enabled, the exported plugins will use the VST3 SDK standard instead of the VST 2.x SDK. Until further notice, this is a experimental feature so proceed with caution.");
 		D("> Be aware that Steinberg stopped support for the VST 2.4 SDK in October 2018 so if you don't have a valid VST2 license agreement in place, you must use the VST3 SDK.");
 		P_();
-		
+				
 		P(HiseSettings::Project::UseRawFrontend);
 		D("If enabled, the project will not use the preset structure and scripted user interface and lets you use HISE as C++ framework.");
 		D("You will have to implement a custom C++ class in the `AdditionalSourceCode` subfolder.");
@@ -396,7 +419,12 @@ Array<juce::Identifier> HiseSettings::SnexWorkbench::getAllIds()
         D("If you export a plugin with HISE it will create as much channels as the routing matrix of the master container requires.");
         D(" If you don't want this behaviour, you can enable this option to force the plugin to just use a stereo channel configuration");
         P_();
-        
+    
+				P(HiseSettings::Project::AdminPermissions);
+				D("If enabled, standalone builds on Windows will prompt the user for administrator privileges.");
+				D(" This is neccessary for tasks that access restricted locations such as the user's VST3 directory.");
+				P_();
+		    
 		P(HiseSettings::User::Company);
 		D("Your company name. This will be used for the path to the app data directory so make sure you don't use weird characters here");
 		P_();
@@ -425,11 +453,22 @@ Array<juce::Identifier> HiseSettings::SnexWorkbench::getAllIds()
 		P_();
 
 		P(HiseSettings::Compiler::UseIPP);
-		D("If enabled, HISE uses the FFT routines from the Intel Performance Primitive library (which can be downloaded for free) in order");
+		D("If enabled, HISE uses the FFT routines from the Intel Performance Primitive library (which can be downloaded for free) in order ");
 		D("to speed up the convolution reverb");
 		D("> If you use the convolution reverb in your project, this is almost mandatory, but there are a few other places that benefit from having this library");
 		P_();
 
+		P(HiseSettings::Compiler::FaustPath);
+		D("Set the path to your Faust installation here. ");
+		D("It will be used to look up the standard faust libraries on platforms which don't have a default path. ");
+		D("There should be at least the following directories inside: \"share\", \"lib\", \"include\"");
+		P_();
+
+        P(HiseSettings::Compiler::FaustExternalEditor);
+        D("If enabled, the edit button in the faust node will launch an external editor for ");
+        D("editing the faust source files. If disabled, it will use a FaustCodeEditor floating tile");
+        P_();
+        
         P(HiseSettings::Compiler::LegacyCPUSupport);
 		D("If enabled, then all SSE instructions are replaced by their native implementation. This can be used to compile a version that runs on legacy CPU models."); 
 		P_();
@@ -443,6 +482,11 @@ Array<juce::Identifier> HiseSettings::SnexWorkbench::getAllIds()
 		P(HiseSettings::Scripting::CodeFontSize);
 		D("Changes the default font size for the console, all code editors and the script watch table");
 		D("> You can temporarily change the font size for individual elements using Cmd+Scrollwheel, however this will not be persistent.");
+		P_();
+
+		P(HiseSettings::Scripting::EnableOptimizations);
+		D("Enables some compiler optimizations like constant folding or dead code removal for the HiseScript compiler");
+		D("> This setting is baked into a plugin when you compile it");
 		P_();
 
 		P(HiseSettings::Compiler::Support32BitMacOS);
@@ -471,6 +515,10 @@ Array<juce::Identifier> HiseSettings::SnexWorkbench::getAllIds()
 		D(" x++;");
 		D("");
 		D("```\n");
+		P_();
+
+		P(HiseSettings::Scripting::SaveConnectedFilesOnCompile);
+		D("If this is enabled, it will save a connected script file everytime the script is compiled. By default this is disabled, but if you want to apply changes to a connected script file, you will have to enable this setting");
 		P_();
 
 		P(HiseSettings::Scripting::GlobalScriptPath);
@@ -603,15 +651,19 @@ juce::File HiseSettings::Data::getFileForSetting(const Identifier& id) const
 
 	auto handler_ = &GET_PROJECT_HANDLER(mc->getMainSynthChain());
 
-	if (id == SettingFiles::ProjectSettings)	return handler_->getWorkDirectory().getChildFile("project_info.xml");
-	else if (id == SettingFiles::UserSettings)		return handler_->getWorkDirectory().getChildFile("user_info.xml");
-	else if (id == SettingFiles::CompilerSettings)	return appDataFolder.getChildFile("compilerSettings.xml");
+	auto wd = handler_->getWorkDirectory();
+
+	if (wd.isDirectory())
+	{
+		if (id == SettingFiles::ProjectSettings)	return handler_->getWorkDirectory().getChildFile("project_info.xml");
+		else if (id == SettingFiles::UserSettings)	return handler_->getWorkDirectory().getChildFile("user_info.xml");
+	}
+
+	if (id == SettingFiles::CompilerSettings)	return appDataFolder.getChildFile("compilerSettings.xml");
 	else if (id == SettingFiles::ScriptingSettings)	return appDataFolder.getChildFile("ScriptSettings.xml");
 	else if (id == SettingFiles::OtherSettings)		return appDataFolder.getChildFile("OtherSettings.xml");
 	else if (id == SettingFiles::DocSettings)		return appDataFolder.getChildFile("DocSettings.xml");
 	else if (id == SettingFiles::SnexWorkbenchSettings) return appDataFolder.getChildFile("SnexWorkbench.xml");
-
-	jassertfalse;
 
 #endif
 	
@@ -645,6 +697,16 @@ void HiseSettings::Data::loadSettingsFromFile(const Identifier& id)
 	addMissingSettings(v, id);
 }
 
+File HiseSettings::Data::getFaustPath() const
+{
+#if JUCE_MAC
+    auto hisePath = File(getSetting(HiseSettings::Compiler::HisePath).toString());
+    return hisePath.getChildFile("tools").getChildFile("faust");
+#else
+	return File(getSetting(HiseSettings::Compiler::FaustPath).toString());
+#endif
+}
+
 var HiseSettings::Data::getSetting(const Identifier& id) const
 {
 	for (const auto& c : data)
@@ -667,7 +729,62 @@ var HiseSettings::Data::getSetting(const Identifier& id) const
 		}
 	}
 
-	return getDefaultSetting(id);
+	auto value = getDefaultSetting(id);
+    
+    if(value == "Yes")
+        return var(true);
+    else if (value == "No")
+        return var(false);
+    else
+        return value;
+}
+
+var HiseSettings::Data::getExtraDefinitionsAsObject() const
+{
+#if JUCE_WINDOWS
+    
+    auto defName = Project::ExtraDefinitionsWindows;
+#elif JUCE_MAC
+    auto defName = Project::ExtraDefinitionsOSX;
+#elif JUCE_LINUX
+    auto defName = Project::ExtraDefinitionsLinux;
+#endif
+
+    auto s = getSetting(defName).toString();
+
+    StringArray items;
+
+    if (s.contains(","))
+        items = StringArray::fromTokens(s, ",", "");
+    else if (s.contains(";"))
+        items = StringArray::fromTokens(s, ";", "");
+    else
+        items = StringArray::fromLines(s);
+
+    DynamicObject::Ptr obj = new DynamicObject();
+
+    for (const auto& i : items)
+    {
+        obj->setProperty(i.upToFirstOccurrenceOf("=", false, false).trim(), i.fromFirstOccurrenceOf("=", false, false).trim());
+    }
+    
+    for(const auto& sp: temporaryExtraDefinitions)
+        obj->setProperty(sp.name, sp.value);
+    
+    return var(obj.get());
+}
+
+String HiseSettings::Data::getTemporaryDefinitionsAsString() const
+{
+    String s;
+    
+    if(temporaryExtraDefinitions.isEmpty())
+        return s;
+    
+    for(const auto& p: temporaryExtraDefinitions)
+        s << "\n" << p.name.toString() << "=" << p.value.toString();
+    
+    return s;
 }
 
 void HiseSettings::Data::addSetting(ValueTree& v, const Identifier& id)
@@ -684,11 +801,13 @@ juce::StringArray HiseSettings::Data::getOptionsFor(const Identifier& id)
 {
 	if (id == Project::EmbedAudioFiles ||
 		id == Project::EmbedImageFiles ||
+		id == Project::EmbedUserPresets ||
 		id == Compiler::UseIPP ||
         id == Compiler::LegacyCPUSupport ||
 		id == Scripting::EnableCallstack ||
 		id == Other::EnableAutosave ||
 		id == Scripting::EnableDebugMode ||
+		id == Scripting::EnableOptimizations ||
 		id == Other::AudioThreadGuardEnabled ||
 		id == Other::UseOpenGL ||
 		id == Other::GlassEffect ||
@@ -696,8 +815,10 @@ juce::StringArray HiseSettings::Data::getOptionsFor(const Identifier& id)
 		id == Other::EnableShaderLineNumbers ||
 		id == Compiler::RebuildPoolFiles ||
 		id == Compiler::Support32BitMacOS ||
+        id == Compiler::FaustExternalEditor ||
 		id == Project::SupportMonoFX ||
 		id == Project::EnableMidiInputFX ||
+        id == Project::EnableMidiOut ||
 		id == Project::EnableSoundGeneratorsFX ||
 		id == Project::VST3Support ||
 		id == Project::UseRawFrontend ||
@@ -705,13 +826,16 @@ juce::StringArray HiseSettings::Data::getOptionsFor(const Identifier& id)
 		id == Project::SupportFullDynamicsHLAC ||
 		id == Project::ReadOnlyFactoryPresets ||
         id == Project::ForceStereoOutput ||
+		id == Project::AdminPermissions ||
+		id == Project::EnableGlobalPreprocessor ||
 		id == Documentation::RefreshOnStartup ||
 		id == SnexWorkbench::PlayOnRecompile ||
-		id == SnexWorkbench::AddFade)
+		id == SnexWorkbench::AddFade ||
+		id == Scripting::SaveConnectedFilesOnCompile)
 	    return { "Yes", "No" };
 
 	if (id == Compiler::VisualStudioVersion)
-		return { "Visual Studio 2015", "Visual Studio 2017" };
+		return { "Visual Studio 2017", "Visual Studio 2022" };
 
 	if (id == Project::ExpansionType)
 	{
@@ -801,6 +925,7 @@ bool HiseSettings::Data::isFileId(const Identifier& id)
 		   id == Scripting::GlobalScriptPath || 
 		   id == Project::RedirectSampleFolder ||
 		   id == Compiler::CustomNodePath ||
+		   id == Compiler::FaustPath ||
 		   id == Other::GlobalSamplePath ||
 		   id == Other::ExternalEditorPath ||
 		   id == Documentation::DocRepository;
@@ -876,18 +1001,22 @@ var HiseSettings::Data::getDefaultSetting(const Identifier& id) const
 	else if (id == Project::PluginCode)			    return "Abcd";
 	else if (id == Project::EmbedAudioFiles)		return "Yes";
 	else if (id == Project::EmbedImageFiles)		return "Yes";
+	else if (id == Project::EmbedUserPresets)		return "Yes";
 	else if (id == Project::SupportFullDynamicsHLAC)	return "No";
 	else if (id == Project::RedirectSampleFolder)	BACKEND_ONLY(return handler_.isRedirected(ProjectHandler::SubDirectories::Samples) ? handler_.getSubDirectory(ProjectHandler::SubDirectories::Samples).getFullPathName() : "");
 	else if (id == Project::AAXCategoryFX)			return "AAX_ePlugInCategory_Modulation";
 	else if (id == Project::SupportMonoFX)			return "No";
 	else if (id == Project::EnableMidiInputFX)		return "No";
+    else if (id == Project::EnableMidiOut)          return "No";
 	else if (id == Project::EnableSoundGeneratorsFX) return "No";
 	else if (id == Project::ReadOnlyFactoryPresets) return "No";
     else if (id == Project::ForceStereoOutput)      return "No";
+		else if (id == Project::AdminPermissions) return "No";
 	else if (id == Project::VST3Support)			return "No";
 	else if (id == Project::UseRawFrontend)			return "No";
 	else if (id == Project::ExpansionType)			return "Disabled";
 	else if (id == Project::LinkExpansionsToProject)   return "No";
+	else if (id == Project::EnableGlobalPreprocessor) return "No";
 	else if (id == Other::UseOpenGL)				return "No";
 	else if (id == Other::GlassEffect)				return "No";
 	else if (id == Other::EnableAutosave)			return "Yes";
@@ -899,12 +1028,19 @@ var HiseSettings::Data::getDefaultSetting(const Identifier& id) const
 	else if (id == Documentation::RefreshOnStartup) return "Yes";
 	else if (id == Scripting::CodeFontSize)			return 17.0;
 	else if (id == Scripting::EnableCallstack)		return "No";
+	else if (id == Scripting::EnableOptimizations)	return "No";
 	else if (id == Scripting::CompileTimeout)		return 5.0;
+	else if (id == Scripting::SaveConnectedFilesOnCompile) return "No";
+#if HISE_USE_VS2022
+	else if (id == Compiler::VisualStudioVersion)	return "Visual Studio 2022";
+#else
 	else if (id == Compiler::VisualStudioVersion)	return "Visual Studio 2017";
+#endif
 	else if (id == Compiler::UseIPP)				return "Yes";
 	else if (id == Compiler::LegacyCPUSupport) 		return "No";
 	else if (id == Compiler::RebuildPoolFiles)		return "Yes";
 	else if (id == Compiler::Support32BitMacOS)		return "Yes";
+    else if (id == Compiler::FaustExternalEditor)   return "No";
 	else if (id == SnexWorkbench::AddFade)			return "Yes";
 	else if (id == SnexWorkbench::PlayOnRecompile)  return "Yes";
 	else if (id == User::CompanyURL)				return "http://yourcompany.com";
@@ -1045,7 +1181,8 @@ void HiseSettings::Data::settingWasChanged(const Identifier& id, const var& newV
 		mc->getAutoSaver().updateAutosaving();
 	else if (id == Other::AudioThreadGuardEnabled)
 		mc->getKillStateHandler().enableAudioThreadGuard(newValue);
-
+	else if (id == Scripting::EnableOptimizations)
+		mc->compileAllScripts();
 	else if (id == Scripting::EnableDebugMode)
 		newValue ? mc->getDebugLogger().startLogging() : mc->getDebugLogger().stopLogging();
 	else if (id == Audio::Samplerate)
