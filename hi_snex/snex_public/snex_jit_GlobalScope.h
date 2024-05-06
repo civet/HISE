@@ -108,10 +108,15 @@ struct ExternalPreprocessorDefinition
 		return name.compareNatural(other.name) == 0;
 	}
 
-	Type t;
+	ExternalPreprocessorDefinition(Type t_ = Type::Empty):
+	  t(t_)
+	{};
+
+	const Type t;
 	String name;
 	String value;
 	String description;
+	Array<Identifier> macroParameters;
 	int charNumber = -1;
 	String fileName;
 };
@@ -146,6 +151,8 @@ struct DebugHandler
 	virtual void blink(int line) {};
 
 	virtual void recompiled() {};
+
+	virtual void clearLogger() {};
 
 	/** Override this and change the behaviour for the handler depending on its supposed enablement. */
 	virtual void setEnabled(bool shouldBeEnabled)
@@ -401,7 +408,8 @@ private:
 	You have to pass a reference to an object of this scope to the Compiler.
 */
 class GlobalScope : public FunctionClass,
-	public BaseScope
+				    public BaseScope,
+					public AsyncUpdater
 {
 public:
 
@@ -431,6 +439,8 @@ public:
 
 	void addObjectDeleteListener(ObjectDeleteListener* l);
 	void removeObjectDeleteListener(ObjectDeleteListener* l);
+
+	Map getMap() override;
 
 	static GlobalScope* getFromChildScope(BaseScope* scope)
 	{
@@ -585,9 +595,24 @@ public:
 
 	bool isDebugModeEnabled() const { return debugMode; }
 
+    void setUseInterpreter(bool shouldUseInterpreter) { interpreterMode = shouldUseInterpreter; }
+    
+    bool isUsingInterpreter() const { return interpreterMode; }
+    
+	void clearDebugMessages();
+
 private:
 
-	bool debugMode = false;
+	void handleAsyncUpdate();
+
+	bool clearNext = false;
+	hise::SimpleReadWriteLock messageLock;
+	Array<String> pendingMessages;
+
+	Map currentMap;
+
+    bool interpreterMode = false;
+    bool debugMode = false;
 
 	Array<Identifier> noInliners;
 

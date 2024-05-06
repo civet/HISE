@@ -39,10 +39,10 @@ class BackendProcessorEditor;
 
 /** A searchable list of the current preset. */
 class PatchBrowser : public SearchableListComponent,
-					 public DragAndDropTarget,
+					 public DragAndDropContainer,
 					 public ButtonListener,
-					 public Timer,
-					 public MainController::ProcessorChangeHandler::Listener
+				     public MainController::ProcessorChangeHandler::Listener,
+					 public Timer
 {
 
 public:
@@ -82,6 +82,7 @@ public:
 		
 		float channelValues[NUM_MAX_CHANNELS];
 		int numChannels;
+		bool suspended = false;
 
 		ProcessorType type;
 
@@ -107,11 +108,13 @@ public:
 
 	// ====================================================================================================================
 
+#if 0
 	bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;;
 	void itemDragEnter(const SourceDetails& dragSourceDetails) override;
 	void itemDragExit(const SourceDetails& dragSourceDetails) override;
 	void itemDragMove(const SourceDetails& dragSourceDetails) override;
 	void itemDropped(const SourceDetails& dragSourceDetails) override;
+#endif
 
 	void refreshBypassState();
 
@@ -127,6 +130,13 @@ public:
 
 	void moduleListChanged(Processor* /*changedProcessor*/, MainController::ProcessorChangeHandler::EventType type) override
 	{
+		if(type == MainController::ProcessorChangeHandler::EventType::ClearBeforeRebuild)
+		{
+			clearCollections();
+			return;
+		}
+
+#if HISE_OLD_PROCESSOR_DISPATCH
 		if (type == MainController::ProcessorChangeHandler::EventType::ProcessorRenamed ||
 			type == MainController::ProcessorChangeHandler::EventType::ProcessorColourChange ||
 			type == MainController::ProcessorChangeHandler::EventType::ProcessorBypassed)
@@ -134,6 +144,7 @@ public:
 			repaintAllItems();
 		}
 		else
+#endif
 		{
 			rebuildModuleList(true);
 		}
@@ -160,6 +171,8 @@ private:
 
 	class ModuleDragTarget : public ButtonListener,
 							 public Label::Listener,
+							 public Processor::BypassListener,
+							 public DragAndDropTarget,
                              public SettableTooltipClient
 	{
 	public:
@@ -188,6 +201,8 @@ private:
 
 		ModuleDragTarget(Processor* p);
 
+		~ModuleDragTarget();
+
 		void buttonClicked(Button *b);
 
 		const Processor *getProcessor() const { return p.get(); }
@@ -196,6 +211,34 @@ private:
 		DragState getDragState() const { return dragState; };
 		virtual void checkDragState(const SourceDetails& dragSourceDetails);
 		virtual void resetDragState();
+
+		bool canBeDragged() const
+		{
+			if(auto c = dynamic_cast<const Chain*>(getProcessor()))
+			{
+				if(auto ms = dynamic_cast<const ModulatorSynth*>(c))
+				{
+					auto isRoot = ms->getMainController()->getMainSynthChain() == ms;
+
+					return !isRoot;
+				}
+
+				return false;
+			}
+			else
+			{
+				return true;
+			}
+		}
+
+		bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;
+
+		void itemDragEnter(const SourceDetails& dragSourceDetails) override { checkDragState(dragSourceDetails); }
+		void itemDragExit(const SourceDetails& dragSourceDetails) override { resetDragState(); }
+
+		void itemDragMove(const SourceDetails& dragSourceDetails) override {}
+
+		void itemDropped(const SourceDetails& dragSourceDetails) override;
 
 		void handleRightClick(bool isInEditMode);
 
@@ -240,9 +283,34 @@ private:
 
 		HiseShapeButton closeButton;
 
+		bool startDrag(const MouseEvent& e);
+
+		void stopDrag(const MouseEvent& e)
+		{
+			dragging = false;
+			dynamic_cast<Component*>(this)->repaint();
+		}
+
+		void onNameOrColourUpdate(dispatch::library::Processor* p)
+		{
+			colour = getProcessor()->getColour();
+			id = getProcessor()->getId();
+			idLabel.setText(id, dontSendNotification);
+
+			dynamic_cast<Component*>(this)->repaint();
+		}
+
+		void bypassStateChanged(Processor* p, bool bypassState) override
+		{
+			if (auto pb = dynamic_cast<Component*>(this)->findParentComponentOfClass<PatchBrowser>())
+				pb->refreshBypassState();
+		}
+
 	public:
 
 		HiseShapeButton createButton;
+
+		bool dragging = false;
 
 	private:
 
@@ -257,7 +325,11 @@ private:
         String id;
         bool itemBypassed;
 		bool isOver;
-        
+
+		
+
+		dispatch::library::Processor::NameAndColourListener idUpdater;
+
         JUCE_DECLARE_WEAK_REFERENCEABLE(ModuleDragTarget);
 	};
 
@@ -266,8 +338,8 @@ private:
 	// ====================================================================================================================
 
 	class PatchCollection : public SearchableListComponent::Collection,
-							public ModuleDragTarget,
-							public Processor::BypassListener
+							public ModuleDragTarget
+							
 	{
 	public:
 
@@ -275,20 +347,25 @@ private:
 
 		~PatchCollection();
 
-		void bypassStateChanged(Processor* p, bool bypassState) override
-		{
-			if (auto pb = findParentComponentOfClass<PatchBrowser>())
-				pb->refreshBypassState();
-		}
-
 		void mouseDown(const MouseEvent& e) override;
-
+		
 		void refreshFoldButton();
 		void buttonClicked(Button *b) override;
 
 		void repaintChildItems()
 		{
 			
+		}
+
+		void mouseUp(const MouseEvent& e) override
+		{
+			stopDrag(e);
+		}
+
+		void mouseDrag(const MouseEvent& e) override
+		{
+			if(e.mouseWasDraggedSinceMouseDown())
+				startDrag(e);
 		}
 
 		void paint(Graphics &g) override;
@@ -303,7 +380,6 @@ private:
 		{
 			repaint();
 		}
-
 
         void applyLayout() override;
         
@@ -324,8 +400,6 @@ private:
 			}
 		}
 
-		
-
 	private:
 
 		Rectangle<int> iconArea;
@@ -333,7 +407,7 @@ private:
 		bool inPopup = false;
 		ScopedPointer<ShapeButton> foldButton;
 		int hierarchy;
-
+		
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PatchCollection)
         JUCE_DECLARE_WEAK_REFERENCEABLE(PatchCollection);
 	};
@@ -341,8 +415,7 @@ private:
 	// ====================================================================================================================
 
 	class PatchItem :  public SearchableListComponent::Item,
-					   public ModuleDragTarget,
-					   public Processor::BypassListener
+					   public ModuleDragTarget
 	{
 	public:
 
@@ -358,6 +431,17 @@ private:
         void paint(Graphics& g) override;
 
 		void mouseDown(const MouseEvent& e);
+
+		void mouseUp(const MouseEvent& e) override
+		{
+			stopDrag(e);
+		}
+
+		void mouseDrag(const MouseEvent& e) override
+		{
+			if(e.mouseWasDraggedSinceMouseDown())
+				startDrag(e);
+		}
 
 		void mouseEnter(const MouseEvent& e) override
 		{
@@ -391,12 +475,14 @@ private:
 				repaint();
 			}
 		}
+        
+        Rectangle<int> bypassArea;
 
 	private:
 
 		bool inPopup = false;
         
-		Rectangle<int> bypassArea;
+		
 		
         WeakReference<Processor> parent;
         
@@ -463,24 +549,36 @@ public:
 
 	struct AutomationCollection : public SearchableListComponent::Collection,
 								  public ControlledObject,
+								  NEW_AUTOMATION_WITH_COMMA(public dispatch::ListenerOwner)
 								  public PooledUIUpdater::SimpleTimer
 	{
-		struct ConnectionItem : public SearchableListComponent::Item,
-								public SafeChangeListener
+		struct ConnectionItem : public SearchableListComponent::Item
 		{
 			ConnectionItem(AutomationData::Ptr d_, AutomationData::ConnectionBase::Ptr c_);
 
 			~ConnectionItem();
 
-			void changeListenerCallback(SafeChangeBroadcaster* b) override
-			{
-				repaint();
-			}
-
 			void paint(Graphics& g) override;
 
 			AutomationData::Ptr d;
 			AutomationData::ConnectionBase::Ptr c;
+
+			struct Updater: public Processor::OtherListener
+			{
+				Updater(ConnectionItem& parent_, Processor* p):
+				  OtherListener(p, dispatch::library::ProcessorChangeEvent::Any),
+				  parent(parent_)
+				{};
+
+				void otherChange(Processor* p) override
+				{
+					parent.repaint();
+				}
+
+				ConnectionItem& parent;
+			};
+
+			ScopedPointer<Updater> updater;
 		};
 
 		void paint(Graphics& g) override;
@@ -496,6 +594,8 @@ public:
 
 		bool hasMidiConnection = false;
 		bool hasComponentConnection = false;
+
+		IF_NEW_AUTOMATION_DISPATCH(dispatch::library::CustomAutomationSource::Listener listener);
 
 		JUCE_DECLARE_WEAK_REFERENCEABLE(AutomationCollection);
 	};

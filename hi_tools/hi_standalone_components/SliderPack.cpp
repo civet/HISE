@@ -32,6 +32,206 @@
 
 namespace hise { using namespace juce;
 
+	SliderPackData::Listener::~Listener()
+	{}
+
+	void SliderPackData::Listener::sliderAmountChanged(SliderPackData* d)
+	{}
+
+	void SliderPackData::Listener::displayedIndexChanged(SliderPackData* d, int newIndex)
+	{}
+
+	void SliderPackData::Listener::setSliderPack(SliderPackData* d)
+	{
+		connectedSliderPack = d;
+	}
+
+	void SliderPackData::Listener::onComplexDataEvent(ComplexDataUIUpdaterBase::EventType t, var v)
+	{
+		switch (t)
+		{
+		case ComplexDataUIUpdaterBase::EventType::ContentRedirected:
+			sliderAmountChanged(connectedSliderPack);
+			break;
+		case ComplexDataUIUpdaterBase::EventType::ContentChange:
+			sliderPackChanged(connectedSliderPack, (int)v);
+			break;
+		case ComplexDataUIUpdaterBase::EventType::DisplayIndex:
+			displayedIndexChanged(connectedSliderPack, (int)v);
+			break;
+		default:
+			break;
+		}
+	}
+
+	void SliderPackData::startDrag()
+	{
+		
+	}
+
+	bool SliderPackData::fromBase64String(const String& b64)
+	{
+		fromBase64(b64);
+
+		return getNumSliders() > 0;
+	}
+
+	String SliderPackData::toBase64String() const
+	{
+		return toBase64();
+	}
+
+	int SliderPackData::getNextIndexToDisplay() const
+	{
+		return nextIndexToDisplay;
+	}
+
+	void SliderPackData::setDisplayedIndex(int index)
+	{
+		nextIndexToDisplay = index;
+		internalUpdater.sendDisplayChangeMessage((float)index, sendNotificationAsync);
+	}
+
+	const float* SliderPackData::getCachedData() const
+	{
+		return dataBuffer->buffer.getReadPointer(0);
+	}
+
+	var SliderPackData::getDataArray() const
+	{ return var(dataBuffer.get()); }
+
+	void SliderPackData::setFlashActive(bool shouldBeShown)
+	{ flashActive = shouldBeShown; }
+
+	void SliderPackData::setShowValueOverlay(bool shouldBeShown)
+	{ showValueOverlay = shouldBeShown; }
+
+	bool SliderPackData::isFlashActive() const
+	{ return flashActive; }
+
+	bool SliderPackData::isValueOverlayShown() const
+	{ return showValueOverlay; }
+
+	void SliderPackData::setDefaultValue(double newDefaultValue)
+	{
+		defaultValue = (float)newDefaultValue;
+	}
+
+	float SliderPackData::getDefaultValue() const
+	{ return defaultValue; }
+
+	void SliderPackData::addListener(Listener* listener)
+	{
+		listener->setSliderPack(this);
+		internalUpdater.addEventListener(listener);
+	}
+
+	void SliderPackData::removeListener(Listener* listener)
+	{
+		listener->setSliderPack(nullptr);
+		internalUpdater.removeEventListener(listener);
+	}
+
+	void SliderPackData::sendValueChangeMessage(int index, NotificationType notify)
+	{
+		internalUpdater.sendContentChangeMessage(notify, index);
+	}
+
+	void SliderPackData::setUsePreallocatedLength(int numMaxSliders)
+	{
+		if(numMaxSliders != numPreallocated)
+		{
+			numPreallocated = numMaxSliders;
+            
+			if(numPreallocated > 0)
+			{
+				preallocatedData.calloc(numPreallocated);
+                
+				int numToCopy = jmin(numMaxSliders, getNumSliders());
+                
+				FloatVectorOperations::copy(preallocatedData.get(), dataBuffer->buffer.getReadPointer(0), numToCopy);
+                
+				{
+					SimpleReadWriteLock::ScopedWriteLock sl(getDataLock());
+					dataBuffer->referToData(preallocatedData.get(), numToCopy);
+				}
+                
+				internalUpdater.sendContentRedirectMessage();
+			}
+			else
+			{
+				auto newBuffer = new VariantBuffer(getNumSliders());
+                
+				FloatVectorOperations::copy(newBuffer->buffer.getWritePointer(0), dataBuffer->buffer.getReadPointer(0), getNumSliders());
+                
+				swapBuffer(newBuffer, sendNotification);
+                
+				preallocatedData.free();
+			}
+            
+            
+		}
+	}
+
+	SliderPackData::SliderPackAction::SliderPackAction(SliderPackData* data_, int sliderIndex_, float oldValue_,
+		float newValue_, NotificationType n_):
+		UndoableAction(),
+		singleValue(true),
+		data(data_),
+		sliderIndex(sliderIndex_),
+		oldValue(oldValue_),
+		newValue(newValue_),
+		n(n_)
+	{}
+
+	SliderPackData::SliderPackAction::SliderPackAction(SliderPackData* data_, const Array<float>& newValues, NotificationType n_):
+		UndoableAction(),
+		singleValue(false),
+		data(data_),
+		n(n_)
+	{
+		newData.addArray(newValues);
+		data->writeToFloatArray(oldData);
+
+		for(int i = 0; i < newValues.size(); i++)
+		{
+			String s;
+			s << String(oldData[i]) + " -> " + String(newData[i]);
+			DBG(s);
+		}
+		
+	}
+
+	bool SliderPackData::SliderPackAction::perform()
+	{
+		if (data != nullptr)
+		{
+			if(singleValue)
+				data->setValue(sliderIndex, newValue, n, false);
+			else
+				data->setFromFloatArray(newData, n, false);
+			
+			return true;
+		}
+
+		return false;
+	}
+
+	bool SliderPackData::SliderPackAction::undo()
+	{
+		if (data != nullptr)
+		{
+			if(singleValue)
+				data->setValue(sliderIndex, oldValue, n, false);
+			else
+				data->setFromFloatArray(oldData, n, false);
+
+			return true;
+		}
+
+		return false;
+	}
+
 SliderPackData::SliderPackData(UndoManager* undoManager_, PooledUIUpdater* updater) :
 stepSize(0.01),
 nextIndexToDisplay(-1),
@@ -100,17 +300,29 @@ float SliderPackData::getValue(int index) const
 	return defaultValue;
 }
 
-void SliderPackData::setFromFloatArray(const Array<float> &valueArray, NotificationType n)
+void SliderPackData::setFromFloatArray(const Array<float> &valueArray, NotificationType n, bool useUndoManager)
 {
+	if(auto um = getUndoManager(useUndoManager))
 	{
-        int numToCopy = jmin(valueArray.size(), getNumSliders());
-        FloatSanitizers::sanitizeArray((float*)valueArray.getRawDataPointer(), numToCopy);
-        
-		SimpleReadWriteLock::ScopedReadLock sl(getDataLock());
-        FloatVectorOperations::copy(dataBuffer->buffer.getWritePointer(0), valueArray.begin(), numToCopy);
+		um->perform(new SliderPackAction(this, valueArray, n));
 	}
+	else
+	{
+		{
+			int numToCopy = jmin(valueArray.size(), getNumSliders());
+	        FloatSanitizers::sanitizeArray((float*)valueArray.getRawDataPointer(), numToCopy);
 
-	internalUpdater.sendContentChangeMessage(n, -1);
+			for(int i = 0; i < valueArray.size(); i++)
+			{
+				DBG(valueArray[i]);
+			}
+
+			SimpleReadWriteLock::ScopedReadLock sl(getDataLock());
+	        FloatVectorOperations::copy(dataBuffer->buffer.getWritePointer(0), valueArray.begin(), numToCopy);
+		}
+
+		internalUpdater.sendContentChangeMessage(n, -1);
+	}
 }
 
 void SliderPackData::writeToFloatArray(Array<float> &valueArray) const
@@ -118,8 +330,7 @@ void SliderPackData::writeToFloatArray(Array<float> &valueArray) const
 	SimpleReadWriteLock::ScopedReadLock sl(getDataLock());
 
 	valueArray.ensureStorageAllocated(getNumSliders());
-
-	memcpy(valueArray.begin(), dataBuffer->buffer.getReadPointer(0), sizeof(float)*getNumSliders());
+	valueArray.addArray(dataBuffer->buffer.getReadPointer(0), getNumSliders());
 }
 
 String SliderPackData::dataVarToBase64(const var& data)
@@ -364,6 +575,8 @@ void SliderPack::resized()
 {
 	int w = getWidth();
 
+    setTextAreaPopup(getLocalBounds().removeFromRight(100).removeFromTop(40));
+    
     if(data != nullptr && (sliderWidths.isEmpty() || getNumSliders()+1 != (sliderWidths.size())))
     {
         float widthPerSlider = (float)w / (float)data->getNumSliders();
@@ -426,18 +639,68 @@ void SliderPack::sliderValueChanged(Slider *s)
     
 	NotificationType n = sendNotificationSync;
 
-	if (callbackOnMouseUp)
-		n = dontSendNotification;
+	bool useUndo = true;
 
-	data->setValue(index, (float)s->getValue(), n, true);
+	if (callbackOnMouseUp)
+	{
+		n = dontSendNotification;
+		useUndo = false;
+	}
+
+    auto currentValue = (float)s->getValue();
+    
+	if(this->toggleMaxMode)
+	{
+		data->setValue(index, currentStepSequencerInputValue, n, useUndo);
+	}
+	else
+	{
+		data->setValue(index, currentValue, n, useUndo);
+	}
 }
 
 void SliderPack::mouseDown(const MouseEvent &e)
 {
+	CHECK_MIDDLE_MOUSE_DOWN(e);
+
 	if (!isEnabled()) return;
 
 	int x = e.getEventRelativeTo(this).getMouseDownPosition().getX();
 	int y = e.getEventRelativeTo(this).getMouseDownPosition().getY();
+
+	auto n = sendNotificationSync;
+
+	if(callbackOnMouseUp)
+		n = dontSendNotification;
+
+	if(toggleMaxMode)
+	{
+        int sliderIndex = getSliderIndexForMouseEvent(e);
+        
+        if(isPositiveAndBelow(sliderIndex, data->getNumSliders()))
+        {
+			auto rng = sliders[sliderIndex]->getRange();
+			auto thisValue = sliders[sliderIndex]->getValue();
+
+			auto useGhostNoteValue = e.mods.isAnyModifierKeyDown();
+			auto ghostNoteValue = rng.getStart() + 0.5 * rng.getLength();
+
+			if(thisValue == rng.getStart())
+			{
+				if(useGhostNoteValue)
+					currentStepSequencerInputValue = ghostNoteValue;
+				else
+					currentStepSequencerInputValue = rng.getEnd();
+			}
+			else
+			{
+				if(useGhostNoteValue == (thisValue == ghostNoteValue))
+					currentStepSequencerInputValue = rng.getStart();
+				else
+					currentStepSequencerInputValue = useGhostNoteValue ? ghostNoteValue : rng.getEnd();
+			}
+        }
+	}
 
 	if (e.mods.isRightButtonDown() || e.mods.isCommandDown())
 	{
@@ -452,8 +715,8 @@ void SliderPack::mouseDown(const MouseEvent &e)
 		int sliderIndex = getSliderIndexForMouseEvent(e);
 
 		
-
-		getData()->setDisplayedIndex(sliderIndex);
+		if(!callbackOnMouseUp)
+			getData()->setDisplayedIndex(sliderIndex);
 
 		Slider *s = sliders[sliderIndex];
 
@@ -462,12 +725,12 @@ void SliderPack::mouseDown(const MouseEvent &e)
 
 		double normalizedValue = (double)(getHeight() - y) / (double)getHeight();
 
-		double value = s->proportionOfLengthToValue(normalizedValue);
+		double value = toggleMaxMode ? currentStepSequencerInputValue : s->proportionOfLengthToValue(normalizedValue);
 
 		currentlyDragged = true;
 		currentlyDraggedSlider = sliderIndex;
 
-		s->setValue(value, sendNotificationSync);
+		s->setValue(value, n);
 
 		currentlyDraggedSliderValue = s->getValue();
 
@@ -480,12 +743,19 @@ void SliderPack::mouseDown(const MouseEvent &e)
 
 void SliderPack::mouseDrag(const MouseEvent &e)
 {
+	CHECK_MIDDLE_MOUSE_DRAG(e);
+
 	if (!isEnabled()) return;
 
 	int x = e.getEventRelativeTo(this).getPosition().getX();
 	int y = e.getEventRelativeTo(this).getPosition().getY();
 
 	Rectangle<int> thisBounds(0, 0, getWidth(), getHeight());
+
+	auto n = sendNotificationSync;
+
+	if(callbackOnMouseUp)
+		n = dontSendNotification;
 
 	if (!rightClickLine.getStart().isOrigin())
 	{
@@ -500,9 +770,11 @@ void SliderPack::mouseDrag(const MouseEvent &e)
 			if (x < 0) x = 0;
 		}
 
-		rightClickLine.setEnd((float)x, (float)y);
+		repaintWithTextBox(Rectangle<float>(rightClickLine.getStart(), rightClickLine.getEnd()).toNearestInt().expanded(5));
 
-		repaint();
+		rightClickLine.setEnd((float)x, e.mods.isShiftDown() ? rightClickLine.getStartY() : (float)y);
+
+        repaintWithTextBox(Rectangle<float>(rightClickLine.getStart(), rightClickLine.getEnd()).toNearestInt().expanded(5));
 	}
 	else
 	{
@@ -526,17 +798,21 @@ void SliderPack::mouseDrag(const MouseEvent &e)
 		{
 			double normalizedValue = (double)(getHeight() - y) / (double)getHeight();
 
-			double value = s->proportionOfLengthToValue(normalizedValue);
+			double value = toggleMaxMode ? currentStepSequencerInputValue : s->proportionOfLengthToValue(normalizedValue);
+
+			if(isPositiveAndBelow(currentlyDraggedSlider, sliders.size()))
+                repaintWithTextBox(sliders[currentlyDraggedSlider]->getBoundsInParent());
 
 			currentlyDragged = true;
 			currentlyDraggedSlider = sliderIndex;
 			currentlyDraggedSliderValue = value;
 
-			s->setValue(value, sendNotificationSync);
+			s->setValue(value, n);
 
 			currentlyDraggedSliderValue = s->getValue();
 
-			repaint();
+			if(isPositiveAndBelow(currentlyDraggedSlider, sliders.size()))
+                repaintWithTextBox(sliders[currentlyDraggedSlider]->getBoundsInParent());
 		}
 
 		if (std::abs(sliderIndex - lastDragIndex) > 1)
@@ -557,7 +833,7 @@ void SliderPack::mouseDrag(const MouseEvent &e)
 				alpha += delta;
 
 				if (auto s = sliders[i])
-					s->setValue(v, sendNotificationSync);
+					s->setValue(v, n);
 			}
 		}
 
@@ -568,15 +844,29 @@ void SliderPack::mouseDrag(const MouseEvent &e)
 
 void SliderPack::mouseUp(const MouseEvent &e)
 {
+	CHECK_MIDDLE_MOUSE_UP(e);
+
 	if (!isEnabled()) return;
 
 	currentlyDragged = false;
 
-	if(!rightClickLine.getStart().isOrigin()) setValuesFromLine();
+	if(!rightClickLine.getStart().isOrigin())
+	{
+		setValuesFromLine();
+		return;
+	}
 
 	if (callbackOnMouseUp)
-		getData()->getUpdater().sendContentChangeMessage(sendNotificationSync, -1);
+	{
+		Array<float> newData;
+		newData.ensureStorageAllocated(getNumSliders());
 
+		for(int i = 0; i < getNumSliders(); i++)
+			newData.add((float)sliders[i]->getValue());
+		
+		getData()->setFromFloatArray(newData, sendNotificationAsync, true);
+	}
+	
 	repaint();
 }
 
@@ -584,7 +874,9 @@ void SliderPack::mouseExit(const MouseEvent &)
 {
 	if (!isEnabled()) return;
 
+	showOverlayOnMove = false;
 	currentlyDragged = false;
+	currentlyHoveredSlider = -1;
 	repaint();
 }
 
@@ -641,7 +933,7 @@ void SliderPack::paintOverChildren(Graphics &g)
 			l->drawSliderPackRightClickLine(g, *this, rightClickLine);
 	}
 
-	else if (currentlyDragged && data->isValueOverlayShown())
+	else if ((currentlyDragged || showOverlayOnMove) && data->isValueOverlayShown())
 	{
 		const double logFromStepSize = log10(data->getStepSize());
 		const int unit = -roundToInt(logFromStepSize);
@@ -654,10 +946,10 @@ void SliderPack::paintOverChildren(Graphics &g)
 
 void SliderPack::setValuesFromLine()
 {
-	data->setNewUndoAction();
+	Array<float> newValues;
 
-    int lastIndex = -1;
-    
+	newValues.ensureStorageAllocated(getNumSliders());
+
 	for (int i = 0; i < sliders.size(); i++)
 	{
 		Slider *s = sliders[i];
@@ -673,14 +965,21 @@ void SliderPack::setValuesFromLine()
 			double normalizedValue = ((double)getHeight() - y) / (double)getHeight();
 			double value = s->proportionOfLengthToValue(normalizedValue);
 
-            data->setValue(i, value, dontSendNotification, true);
-            lastIndex = -1;
+			newValues.add(value);
+		}
+		else
+		{
+			newValues.add((float)s->getValue());
 		}
 	}
-    
-	data->getUpdater().sendContentChangeMessage(sendNotificationAsync, lastIndex);
+
+	data->setFromFloatArray(newValues, sendNotificationAsync, true);
+	
+	repaint();
 
 	rightClickLine = Line<float>(0.0f, 0.0f, 0.0f, 0.0f);
+
+	
 }
 
 void SliderPack::displayedIndexChanged(SliderPackData* d, int newIndex)
@@ -736,7 +1035,8 @@ void SliderPack::timerCallback()
 
 void SliderPack::mouseDoubleClick(const MouseEvent &e)
 {
-	if (!isEnabled()) return;
+	if (!isEnabled() || toggleMaxMode) 
+		return;
 
 	if (e.mods.isShiftDown())
 	{
@@ -964,6 +1264,112 @@ void SliderPack::SliderLookAndFeel::drawLinearSlider(Graphics &g, int /*x*/, int
 			false));
 		g.fillRect(leftX, 2.0f, actualWidth, (float)(height - 2));
 	}
+}
+
+SliderPack::LookAndFeelMethods::~LookAndFeelMethods()
+{}
+
+void SliderPack::sliderAmountChanged(SliderPackData* d)
+{
+	slidersNeedRebuild = true;
+	startTimer(30);
+}
+
+void SliderPack::sliderPackChanged(SliderPackData* s, int index)
+{
+	for (int i = 0; i < sliders.size(); i++)
+	{
+		auto shouldBe = data->getValue(i);
+
+		if (sliders[i]->getValue() != shouldBe)
+			sliders[i]->setValue(shouldBe, dontSendNotification);
+	}
+}
+
+int SliderPack::getCurrentlyDraggedSliderIndex() const
+{ return currentlyDraggedSlider; }
+
+double SliderPack::getCurrentlyDraggedSliderValue() const
+{ return currentlyDraggedSliderValue; }
+
+void SliderPack::setComplexDataUIBase(ComplexDataUIBase* newData)
+{
+	if (auto sp = dynamic_cast<SliderPackData*>(newData))
+		setSliderPackData(sp);
+}
+
+void SliderPack::mouseMove(const MouseEvent& mouseEvent)
+{
+	auto thisIndex = getSliderIndexForMouseEvent(mouseEvent);
+
+	showOverlayOnMove = mouseEvent.mods.isShiftDown();
+
+	if(showOverlayOnMove)
+	{
+		currentlyDraggedSlider = thisIndex;
+
+		if(auto s = sliders[currentlyDraggedSlider])
+		{
+			currentlyDraggedSliderValue = s->getValue();
+		}
+		
+		repaint();
+	}
+	
+	if(thisIndex != currentlyHoveredSlider)
+	{
+		if(isPositiveAndBelow(currentlyHoveredSlider, sliders.size()))
+            repaintWithTextBox(sliders[currentlyHoveredSlider]->getBoundsInParent());
+
+		currentlyHoveredSlider = thisIndex;
+
+		if(isPositiveAndBelow(currentlyHoveredSlider, sliders.size()))
+            repaintWithTextBox(sliders[currentlyHoveredSlider]->getBoundsInParent());
+	}
+}
+
+void SliderPack::notifyListeners(int index, NotificationType n)
+{
+	if (getData() != nullptr)
+	{
+		getData()->sendValueChangeMessage(index, n);
+	}
+}
+
+const SliderPackData* SliderPack::getData() const
+{ return data; }
+
+SliderPackData* SliderPack::getData()
+{ return data; }
+
+void SliderPack::setSpecialLookAndFeel(LookAndFeel* l, bool shouldOwn)
+{
+	EditorBase::setSpecialLookAndFeel(l, shouldOwn);
+	sliders.clear();
+	rebuildSliders();
+}
+
+void SliderPack::setSliderWidths(const Array<var>& newWidths)
+{
+	sliderWidths = newWidths;
+	resized();
+}
+
+void SliderPack::addListener(Listener* l)
+{
+	if (auto d = getData())
+		d->addListener(l);
+}
+
+void SliderPack::removeListener(Listener* listener)
+{
+	if (auto d = getData())
+		d->removeListener(listener);
+}
+
+void SliderPack::setCallbackOnMouseUp(bool shouldFireOnMouseUp)
+{
+	callbackOnMouseUp = shouldFireOnMouseUp;
 }
 
 void SliderPack::LookAndFeelMethods::drawSliderPackBackground(Graphics& g, SliderPack& s)

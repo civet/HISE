@@ -109,7 +109,7 @@ struct MainController::UserPresetHandler::CustomAutomationData::CableConnection:
 			v = parent->range.convertFrom0to1((float)v);
 
 			ScopedValueSetter<bool> svs(recursive, true);
-			parent->call(v, true);
+			parent->call(v, dispatch::DispatchType::sendNotificationSync);
 		}
 	}
 
@@ -128,7 +128,7 @@ struct MainController::UserPresetHandler::CustomAutomationData::CableConnection:
 		return "Automation";
 	}
 
-	void call(float v) const final override
+	void call(float v, dispatch::DispatchType) const final override
 	{
 		if (isValid() && !recursive)
 		{
@@ -164,6 +164,7 @@ struct MainController::UserPresetHandler::CustomAutomationData::CableConnection:
 MainController::UserPresetHandler::CustomAutomationData::CustomAutomationData(CustomAutomationData::List newList, MainController* mc, int index_, const var& d) :
 	ControlledObject(mc),
 	index(index_),
+	NEW_AUTOMATION_WITH_COMMA(dispatcher(mc->getCustomAutomationSourceManager(), *this, index, dispatch::HashedCharPtr(d["ID"].toString())))
 	r(Result::ok())
 {
 	static const Identifier id_("ID");
@@ -217,13 +218,18 @@ MainController::UserPresetHandler::CustomAutomationData::CustomAutomationData(Cu
 	args[0] = index;
 	args[1] = var(lastValue);
 
-	if (id.toString().isEmpty())
+    if (id.isEmpty())
 		r = Result::fail("No ID");
 
+#if USE_OLD_AUTOMATION_DISPATCH
 	asyncListeners.enableLockFreeUpdate(mc->getGlobalUIUpdater());
-
+    syncListeners.setLockListenersDuringMessage(true);
+    asyncListeners.setLockListenersDuringMessage(true);
 	asyncListeners.sendMessage(dontSendNotification, index, lastValue);
 	syncListeners.sendMessage(dontSendNotification, args);
+#endif
+
+	dispatcher.setValue(lastValue, dispatch::DispatchType::dontSendNotification);
 }
 
 hise::MainController::UserPresetHandler::CustomAutomationData::ConnectionBase::Ptr MainController::UserPresetHandler::CustomAutomationData::parse(CustomAutomationData::List newList, MainController* mc, const var& c)
@@ -235,8 +241,8 @@ hise::MainController::UserPresetHandler::CustomAutomationData::ConnectionBase::P
 
 	auto pId = c[processorId].toString();
 	auto paramId = c[parameterId].toString();
-	auto automId = c[automationId].toString();
-	auto cId = c[cableId].toString();
+	
+	
 
 	if (pId.isNotEmpty() && paramId.isNotEmpty())
 	{
@@ -255,11 +261,14 @@ hise::MainController::UserPresetHandler::CustomAutomationData::ConnectionBase::P
 			throw String("Can't find processor / parameter with ID " + pId + "." + paramId);
 		}
 	}
-	else if (automId.isNotEmpty())
+    
+    auto automId = c[automationId].toString();
+    
+    if (automId.isNotEmpty())
 	{
 		for (auto l : newList)
 		{
-			if (l->id == Identifier(automId))
+			if (l->id == automId)
 			{
 				auto p = new MetaConnection();
 				p->target = l;
@@ -269,7 +278,10 @@ hise::MainController::UserPresetHandler::CustomAutomationData::ConnectionBase::P
 		
 		throw String("Can't find automation ID for meta automation: " + automId);
 	}
-	else if (cId.isNotEmpty())
+    
+    auto cId = c[cableId].toString();
+    
+    if (cId.isNotEmpty())
 	{
 		if (auto m = scriptnode::routing::GlobalRoutingManager::Helpers::getOrCreate(mc))
 		{
@@ -309,8 +321,13 @@ void MainController::UserPresetHandler::CustomAutomationData::updateFromConnecti
 		args[0] = index;
 		args[1] = newValue;
 
+#if USE_OLD_AUTOMATION_DISPATCH
 		syncListeners.sendMessage(sendNotificationSync, args);
 		asyncListeners.sendMessage(sendNotificationAsync, index, newValue);
+#endif
+
+		IF_NEW_AUTOMATION_DISPATCH(dispatcher.setValue(newValue, dispatch::DispatchType::sendNotificationSync));
+
 	}
 }
 
@@ -334,11 +351,22 @@ bool MainController::UserPresetHandler::CustomAutomationData::isConnectedToMidi(
 
 bool MainController::UserPresetHandler::CustomAutomationData::isConnectedToComponent() const
 {
+#if USE_NEW_AUTOMATION_DISPATCH
+	return false;//return dispatcher.getNumListenersWithClass<ScriptingApi::Content::ScriptComponent>() != 0;
+#elif USE_OLD_AUTOMATION_DISPATCH
 	return asyncListeners.template getNumListenersWithClass<ScriptingApi::Content::ScriptComponent>() != 0;
+#else
+	return false;
+#endif
+
+
+	
 }
 
-void MainController::UserPresetHandler::CustomAutomationData::call(float newValue, bool sendToListeners, const std::function<bool(ConnectionBase*)>& connectionFilter)
+void MainController::UserPresetHandler::CustomAutomationData::call(float newValue, dispatch::DispatchType n, const std::function<bool(ConnectionBase*)>& connectionFilter)
 {
+	bool sendToListeners = n != dispatch::DispatchType::dontSendNotification;
+
 	FloatSanitizers::sanitizeFloatNumber(newValue);
 
 	newValue = range.getRange().clipValue(newValue);
@@ -352,26 +380,22 @@ void MainController::UserPresetHandler::CustomAutomationData::call(float newValu
 		for (auto pc : connectionList)
 		{
 			if(!connectionFilter || connectionFilter(pc))
-				pc->call(newValue);
+				pc->call(newValue, n);
 		}
-			
-		syncListeners.sendMessage(sendNotificationSync, args);
-		asyncListeners.sendMessage(sendNotificationAsync, index, lastValue);
-	}
-	else
-	{
-		syncListeners.sendMessage(dontSendNotification, args);
-		asyncListeners.sendMessage(dontSendNotification, index, lastValue);
-	}
+	}	
+
+	IF_OLD_AUTOMATION_DISPATCH(syncListeners.sendMessage(sendNotificationSync, args));
+	IF_OLD_AUTOMATION_DISPATCH(asyncListeners.sendMessage(sendNotificationAsync, index, lastValue));
+	IF_NEW_AUTOMATION_DISPATCH(dispatcher.setValue(lastValue, n));
 }
 
 
-void MainController::UserPresetHandler::CustomAutomationData::ProcessorConnection::call(float v) const
+void MainController::UserPresetHandler::CustomAutomationData::ProcessorConnection::call(float v, dispatch::DispatchType n) const
 {
 	jassert(connectedProcessor != nullptr);
 
 	if (*this)
-		connectedProcessor.get()->setAttribute(connectedParameterIndex, v, sendNotification);
+		connectedProcessor.get()->setAttribute(connectedParameterIndex, v, n);
 }
 
 String MainController::UserPresetHandler::CustomAutomationData::ProcessorConnection::getDisplayString() const
@@ -402,17 +426,19 @@ float MainController::UserPresetHandler::CustomAutomationData::ProcessorConnecti
 MainController::UserPresetHandler::UserPresetHandler(MainController* mc_) :
 	mc(mc_)
 {
-	
+	timeOfLastPresetLoad = Time::getMillisecondCounter();
 }
 
-void MainController::UserPresetHandler::loadUserPreset(const ValueTree& v, bool useUndoManagerIfEnabled)
+void MainController::UserPresetHandler::loadUserPresetFromValueTree(const ValueTree& v, const File& oldFile, const File& newFile, bool useUndoManagerIfEnabled)
 {
 	if (useUndoManagerIfEnabled && useUndoForPresetLoads)
 	{
-		mc->getControlUndoManager()->perform(new UndoableUserPresetLoad(mc, v));
+        mc->getControlUndoManager()->beginNewTransaction();
+		mc->getControlUndoManager()->perform(new UndoableUserPresetLoad(mc, oldFile, newFile, v));
 	}
 	else
 	{
+		currentlyLoadedFile = newFile;
 		pendingPreset = v;
 
 		auto f = [](Processor*p)
@@ -439,7 +465,7 @@ void MainController::UserPresetHandler::preprocess(ValueTree& presetToLoad)
 	}
 }
 
-void MainController::UserPresetHandler::loadUserPreset(const File& f)
+void MainController::UserPresetHandler::loadUserPreset(const File& f, bool useUndoManagerIfEnabled)
 {
 	auto xml = XmlDocument::parse(f);
 
@@ -449,7 +475,7 @@ void MainController::UserPresetHandler::loadUserPreset(const File& f)
 
 		if (v.isValid())
 		{
-			loadUserPreset(v);
+			loadUserPresetFromValueTree(v, currentlyLoadedFile, f, useUndoManagerIfEnabled);
 		}
 	}
 }
@@ -459,10 +485,12 @@ File MainController::UserPresetHandler::getCurrentlyLoadedFile() const
 	return currentlyLoadedFile;
 }
 
+	/*
 void MainController::UserPresetHandler::setCurrentlyLoadedFile(const File& f)
 {
 	currentlyLoadedFile = f;
 }
+*/
 
 void MainController::UserPresetHandler::sendRebuildMessage()
 {
@@ -504,18 +532,19 @@ void MainController::UserPresetHandler::saveUserPresetInternal(const String& nam
 
 	if (name.isNotEmpty())
 		currentPresetFile = currentPresetFile.getSiblingFile(name + ".preset");
-
-	setCurrentlyLoadedFile(currentPresetFile);
-
+	
 	UserPresetHelpers::saveUserPreset(mc->getMainSynthChain(), currentPresetFile.getFullPathName());
 }
 
-
 void MainController::UserPresetHandler::loadUserPresetInternal()
 {
+	ScopedValueSetter<void*> svs(currentThreadThatIsLoadingPreset, LockHelpers::getCurrentThreadHandleOrMessageManager());
+
 	{
 		LockHelpers::freeToGo(mc);
-        
+
+		timeOfLastPresetLoad = Time::getMillisecondCounter();
+
 		ValueTree userPresetToLoad = pendingPreset;
 
 #if USE_BACKEND
@@ -529,7 +558,12 @@ void MainController::UserPresetHandler::loadUserPresetInternal()
 		// Reload the macro connections before restoring the preset values
 		// so that it will update the correct connections with `setMacroControl()` in a control callback
 		if (mc->getMacroManager().isMacroEnabledOnFrontend())
-			mc->getMacroManager().getMacroChain()->loadMacrosFromValueTree(userPresetToLoad, false);
+		{
+			// If we're in exclusive mode and using the macros as plugin parameter, we will only restore them in internal presets
+			if (!HISE_MACROS_ARE_PLUGIN_PARAMETERS || isInternalPresetLoad() || !mc->getMacroManager().isExclusive())
+				mc->getMacroManager().getMacroChain()->loadMacrosFromValueTree(userPresetToLoad, false);
+		}
+			
 
 #if USE_RAW_FRONTEND
 
@@ -546,11 +580,11 @@ void MainController::UserPresetHandler::loadUserPresetInternal()
 			{
 				if (!sp->isFront()) continue;
 
-				UserPresetHelpers::restoreModuleStates(mc->getMainSynthChain(), userPresetToLoad);
+				restoreStateManager(userPresetToLoad, UserPresetIds::Modules);
 
 				if (mc->getUserPresetHandler().isUsingCustomDataModel())
 				{
-					mc->getUserPresetHandler().loadCustomValueTree(userPresetToLoad);
+					restoreStateManager(userPresetToLoad, UserPresetIds::CustomJSON);
 				}
 				else
 				{
@@ -579,30 +613,37 @@ void MainController::UserPresetHandler::loadUserPresetInternal()
 
 #endif
 
-		ValueTree autoData = userPresetToLoad.getChildWithName("MidiAutomation");
-
-		if (autoData.isValid())
-			mc->getMacroManager().getMidiControlAutomationHandler()->restoreFromValueTree(autoData);
-
-		auto mpeData = userPresetToLoad.getChildWithName("MPEData");
-
-		if (mpeData.isValid())
-		{
-			mc->getMacroManager().getMidiControlAutomationHandler()->getMPEData().restoreFromValueTree(mpeData);
-		}
-		else
-		{
-			mc->getMacroManager().getMidiControlAutomationHandler()->getMPEData().reset();
-		}
+		restoreStateManager(userPresetToLoad, UserPresetIds::MidiAutomation);
+		restoreStateManager(userPresetToLoad, UserPresetIds::MPEData);
 
 		// Now we can restore the values of the macro controls
 		if (mc->getMacroManager().isMacroEnabledOnFrontend())
-			mc->getMacroManager().getMacroChain()->loadMacroValuesFromValueTree(userPresetToLoad);
+		{
+			if(!HISE_MACROS_ARE_PLUGIN_PARAMETERS || isInternalPresetLoad() || !mc->getMacroManager().isExclusive())
+			{
+				mc->getMacroManager().getMacroChain()->loadMacroValuesFromValueTree(userPresetToLoad);
+			}
+		}
+
+		// restore the remaining state managers...
+		restoreStateManager(userPresetToLoad, UserPresetIds::AdditionalStates);
 
 		postPresetLoad();
 	}
 
 	mc->getSampleManager().preloadEverything();
+}
+
+void MainController::UserPresetHandler::postPresetSave()
+{
+	// Already on the message thread
+	jassert(MessageManager::getInstance()->isThisTheMessageThread());
+
+	for (auto l : listeners)
+	{
+		if (l != nullptr)
+			l->presetSaved(currentlyLoadedFile);
+	}
 }
 
 void MainController::UserPresetHandler::postPresetLoad()
@@ -642,10 +683,17 @@ void MainController::UserPresetHandler::incPreset(bool next, bool stayInSameDire
 	auto userDirectory = FrontendHandler::getUserPresetDirectory();
 #endif
 
+	if (auto e = FullInstrumentExpansion::getCurrentFullExpansion(mc))
+		userDirectory = e->getSubDirectory(FileHandlerBase::UserPresets);
+
 	userDirectory.findChildFiles(allPresets, File::findFiles, true, "*.preset");
     PresetBrowser::DataBaseHelpers::cleanFileList(mc, allPresets);
 	allPresets.sort();
-    
+
+	auto expFolder = mc->getExpansionHandler().getExpansionFolder();
+
+	auto wasExpansionPreset = currentlyLoadedFile.isAChildOf(expFolder);
+
 	if (!currentlyLoadedFile.existsAsFile())
 	{
 		currentlyLoadedFile = allPresets.getFirst();
@@ -658,15 +706,24 @@ void MainController::UserPresetHandler::incPreset(bool next, bool stayInSameDire
 			currentlyLoadedFile.getParentDirectory().findChildFiles(allPresets, File::findFiles, false, "*.preset");
             PresetBrowser::DataBaseHelpers::cleanFileList(mc, allPresets);
 			allPresets.sort();
-            
-            
+		}
+		else if(mc->getExpansionHandler().getNumExpansions() > 0)
+		{
+			for(int i = 0; i < mc->getExpansionHandler().getNumExpansions(); i++)
+			{
+				auto expansionPresetFolder = mc->getExpansionHandler().getExpansion(i)->getSubDirectory(FileHandlerBase::UserPresets);
+				auto thisList = expansionPresetFolder.findChildFiles(File::findFiles, true, "*.preset");
+				PresetBrowser::DataBaseHelpers::cleanFileList(mc, thisList);
+				thisList.sort();
+				allPresets.addArray(thisList);
+			}
 		}
 
 		if (allPresets.size() == 1)
 			return;
-
+		
 		const int oldIndex = allPresets.indexOf(currentlyLoadedFile);
-
+		
 		if (next)
 		{
 			const int newIndex = (oldIndex + 1) % allPresets.size();
@@ -681,6 +738,25 @@ void MainController::UserPresetHandler::incPreset(bool next, bool stayInSameDire
 			currentlyLoadedFile = allPresets[newIndex];
 		}
 	}
+
+	if(currentlyLoadedFile.isAChildOf(expFolder))
+	{
+		for(int i = 0; i < mc->getExpansionHandler().getNumExpansions(); i++)
+		{
+			auto e = mc->getExpansionHandler().getExpansion(i);
+			
+			if(currentlyLoadedFile.isAChildOf(e->getRootFolder()))
+			{
+				mc->getExpansionHandler().setCurrentExpansion(e, sendNotificationAsync);
+				break;
+			}
+		}
+	}
+	else if (wasExpansionPreset)
+	{
+		mc->getExpansionHandler().setCurrentExpansion(nullptr, sendNotificationAsync);
+	}
+
 
 	loadUserPreset(currentlyLoadedFile);
 }
@@ -708,33 +784,12 @@ bool MainController::UserPresetHandler::isReadOnly(const File& f)
 #endif
 }
 
-void MainController::UserPresetHandler::loadCustomValueTree(const ValueTree& presetData)
-{
-	auto v = presetData.getChildWithName("CustomJSON");
-	if (v.isValid())
-	{
-		auto obj = ValueTreeConverters::convertValueTreeToDynamicObject(v);
-
-		//auto obj = JSON::parse(v["Data"].toString());
-
-		
-
-		if (obj.isObject() || obj.isArray())
-		{
-			for (auto l : listeners)
-			{
-				l->loadCustomUserPreset(obj);
-			}
-		}
-	}
-}
-
 juce::StringArray MainController::UserPresetHandler::getCustomAutomationIds() const
 {
 	StringArray sa;
 	for (auto l : customAutomationData)
 	{
-		sa.add(l->id.toString());
+		sa.add(l->id);
 	}
 
 	return sa;
@@ -746,7 +801,7 @@ int MainController::UserPresetHandler::getCustomAutomationIndex(const Identifier
 
 	for (auto l : customAutomationData)
 	{
-		if (l->id == id)
+		if (l->id == id.toString())
 			return index;
 
 		index++;
@@ -755,24 +810,9 @@ int MainController::UserPresetHandler::getCustomAutomationIndex(const Identifier
     return -1;
 }
 
-juce::ValueTree MainController::UserPresetHandler::createCustomValueTree(const String& presetName)
-{
-	jassert(isUsingCustomData);
-
-	for (auto l : listeners)
-	{
-		auto obj = l->saveCustomUserPreset(presetName);
-
-		if (obj.isObject())
-			return ValueTreeConverters::convertDynamicObjectToValueTree(obj, "CustomJSON");
-	}
-
-	return {};
-}
-
 bool MainController::UserPresetHandler::setCustomAutomationData(CustomAutomationData::List newList)
 {
-	if (isUsingCustomData)
+	if (isUsingCustomDataModel())
 	{
 		customAutomationData.swapWith(newList);
 
@@ -789,7 +829,7 @@ MainController::UserPresetHandler::CustomAutomationData::Ptr MainController::Use
 {
 	for (auto l : customAutomationData)
 	{
-		if (l->id == id)
+		if (l->id == id.toString())
 			return l;
 	}
 
@@ -798,7 +838,17 @@ MainController::UserPresetHandler::CustomAutomationData::Ptr MainController::Use
 
 void MainController::UserPresetHandler::setUseCustomDataModel(bool shouldUseCustomModel, bool shouldUsePersistentObject)
 {
-	isUsingCustomData = shouldUseCustomModel;
+	if (shouldUseCustomModel != isUsingCustomDataModel())
+	{
+		if (shouldUseCustomModel)
+			customStateManager = new CustomStateManager(*this);
+		else
+		{
+			removeStateManager(customStateManager);
+			customStateManager = nullptr;
+		}
+	}
+
 	usePersistentObject = shouldUsePersistentObject;
 }
 

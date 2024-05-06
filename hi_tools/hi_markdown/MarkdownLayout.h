@@ -57,7 +57,11 @@ namespace MarkdownStyleIds
 
 struct MarkdownLayout
 {
-	MarkdownLayout(const AttributedString& s, float width, bool allInOne=false);
+	// AARGH, Windows can't use multithreaded typeface pointers, so we need to supply
+	// our own getStringWidth function...
+	using StringWidthFunction = std::function<float(const Font&, const String&)>;
+
+	MarkdownLayout(const AttributedString& s, float width, const StringWidthFunction& f, bool allInOne=false);
 
 	struct StyleData
 	{
@@ -80,23 +84,26 @@ struct MarkdownLayout
 
 		bool useSpecialBoldFont = false;
 
-		static StyleData createBrightStyle()
-		{
-			MarkdownLayout::StyleData l;
-			l.textColour = Colour(0xFF333333);
-			l.headlineColour = Colour(0xFF444444);
-			l.backgroundColour = Colour(0xFFEEEEEE);
-			l.linkColour = Colour(0xFF000044);
-			l.codeColour = Colour(0xFF333333);
-			l.tableHeaderBackgroundColour = Colours::grey.withAlpha(0.2f);
-			l.tableLineColour = Colours::grey.withAlpha(0.2f);
+		std::array<float, 4> headlineFontSize = { 2.375f, 1.9375f, 1.5f, 1.2f };
 
-			return l;
+		std::array<std::pair<int, std::pair<float, float>>, 8> margins;
+		
+		std::pair<float, float> getMargin(int elementType, std::pair<float, float> defaultMargin) const
+		{
+			for(const auto& s: margins)
+			{
+				if(s.first == elementType)
+					return s.second;
+			}
+
+			return defaultMargin;
 		}
+
+		static StyleData createBrightStyle();
 
 		bool fromDynamicObject(var obj, const std::function<Font(const String&)>& fontLoader);
 
-		var toDynamicObject() const;
+		var toDynamicObject(bool colourAsString=false) const;
 
 		static StyleData createDarkStyle()
 		{
@@ -125,6 +132,8 @@ struct MarkdownLayout
 	float getHeight() const;
 
 	StyleData styleData;
+
+	StringWidthFunction stringWidthFunction;
 
 	juce::GlyphArrangement normalText;
 	juce::GlyphArrangement codeText;

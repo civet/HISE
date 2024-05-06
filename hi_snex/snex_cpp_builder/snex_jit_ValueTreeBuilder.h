@@ -41,81 +41,12 @@ namespace cppgen {
 using namespace juce;
 using namespace scriptnode;
 
-struct ValueTreeIterator
+struct ValueTreeIterator: public valuetree::Helpers
 {
-	using Func = std::function<bool(ValueTree& v)>;
+	
+	
 
-	enum IterationType
-	{
-		Forward,
-		Backwards,
-		ChildrenFirst,
-		ChildrenFirstBackwards,
-		OnlyChildren,
-		OnlyChildrenBackwards
-	};
-
-	static ValueTree findParentWithType(const ValueTree& v, const Identifier& id)
-	{
-		auto p = v.getParent();
-
-		if (!p.isValid())
-			return {};
-
-		if (p.getType() == id)
-			return p;
-
-		return findParentWithType(p, id);
-	}
-
-	static bool isLast(const ValueTree& v)
-	{
-		return (v.getParent().getNumChildren() - 1) == getIndexInParent(v);
-	}
-
-	static bool isParent(const ValueTree& v, const ValueTree& possibleParent)
-	{
-		if (!v.isValid())
-			return false;
-
-		if (v == possibleParent)
-			return true;
-
-		return isParent(v.getParent(), possibleParent);
-	}
-
-	static int getIndexInParent(const ValueTree& v)
-	{
-		return v.getParent().indexOf(v);
-	}
-
-	static ValueTree getRoot(const ValueTree& v)
-	{
-		auto p = v.getParent();
-
-		if (p.isValid())
-			return getRoot(p);
-
-		return v;
-	}
-
-    static bool fixCppIllegalCppKeyword(String& s)
-    {
-        if(s == "switch")
-        {
-            s = "switcher";
-            return true;
-        }
-        
-        return false;
-    }
-    
-	static bool isBetween(IterationType l, IterationType u, IterationType v);
-	static bool isBackwards(IterationType t);
-	static bool isRecursive(IterationType t);
-	static bool forEach(ValueTree v, IterationType type, const Func& f);
-
-	static bool forEachParent(ValueTree& v, const Func& f);
+	static bool fixCppIllegalCppKeyword(String& s);
 
 	static bool needsModulationWrapper(ValueTree& v);
 
@@ -129,6 +60,8 @@ struct ValueTreeIterator
 
 	static bool isComplexDataNode(const ValueTree& nodeTree);
 
+    static bool isRuntimeTargetNode(const ValueTree& nodeTree);
+    
 	static int getNumDataTypes(const ValueTree& nodeTree, ExternalData::DataType t);
 
 	static int getMaxDataTypeIndex(const ValueTree& rootTree, ExternalData::DataType t);
@@ -145,7 +78,11 @@ struct ValueTreeIterator
 
 	static ValueTree getTargetParameterTree(const ValueTree& connectionTree);
 
+    static int getFixRuntimeHash(const ValueTree& nodeTree);
+    
 	static int calculateChannelCount(const ValueTree& nodeTree, int numCurrentChannels);
+
+	static bool isContainerWithFixedParameters(const ValueTree& nodeTree);
 
 	static bool hasChildNodeWithProperty(const ValueTree& nodeTree, Identifier propId);
 
@@ -693,6 +630,8 @@ struct ValueTreeBuilder: public Base
 
 private:
 
+    void checkUnflushed(Node::Ptr n);
+    
 	SampleList externalReferences;
 
 	ReferenceCountedArray<hise::MultiChannelAudioBuffer::DataProvider> audioFileProviders;
@@ -780,6 +719,8 @@ private:
 		Node::List getContainersWithParameter();
 
 		bool hasComplexTypes() const;
+        
+        bool hasRuntimeTargets() const;
 
 		ValueTreeBuilder& parent;
 		Format outputFormat;
@@ -888,6 +829,8 @@ private:
 
 	Node::Ptr getNode(const NamespacedIdentifier& id, bool allowZeroMatch) const;
 
+    Node::Ptr parseRuntimeTargetNode(Node::Ptr u);
+    
 	Node::Ptr parseFaustNode(Node::Ptr u);
 
 	Node::Ptr parseRoutingNode(Node::Ptr u);
@@ -952,7 +895,7 @@ private:
 	ValueTree v;
 	const int rootChannelAmount;
     int numChannelsToCompile;
-	
+	bool allowPlainParameterChild = true;
 };
 
 

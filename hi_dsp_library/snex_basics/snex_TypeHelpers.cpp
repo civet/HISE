@@ -28,8 +28,11 @@ snex::Types::ID Types::Helpers::getTypeFromTypeName(const juce::String& cppTypeN
 	if (cppTypeName == "int") return Types::ID::Integer;
 	if (cppTypeName == "bool") return Types::ID::Integer;
 	if (cppTypeName == "block") return Types::ID::Block;
+	if (cppTypeName == "void") return Types::ID::Void;
+    if (cppTypeName == "void*") return Types::ID::Pointer;
+    if (cppTypeName == "pointer") return Types::ID::Pointer;
+	if (cppTypeName == "any")     return Types::ID::Dynamic;
 	
-	jassertfalse;
 	return Types::ID::Void;
 }
 
@@ -74,12 +77,19 @@ juce::String Types::Helpers::getTypeName(ID id)
 
 Colour Types::Helpers::getColourForType(ID type)
 {
+    
+    if(type == Types::ID::Void)
+        return Colours::grey;
+    
+    if(type < (ID)(int)HiseEvent::Type::numTypes)
+        return Colour(0xFFC65638);
+    
 	switch (type)
 	{
 	case Types::ID::Void:			return Colours::white;
 	case Types::ID::Integer:		return Colour(0xffbe952c);
 	case Types::ID::Float:			
-	case Types::ID::Double:			
+    case Types::ID::Double:			return Colour(0xff3a6666);
 	case Types::ID::Block:			return Colour(0xff7559a4);
 	case Types::ID::Pointer:		return Colours::aqua;
 	case Types::ID::Dynamic:		return Colours::white;
@@ -369,7 +379,7 @@ juce::String Types::Helpers::getCppValueString(const VariableStorage& v)
 	}
 	else if (type == Types::ID::Pointer)
 	{
-		return "0x" + juce::String::toHexString(reinterpret_cast<uint64_t>(v.getDataPointer())).toUpperCase();
+		return "p0x" + juce::String::toHexString(reinterpret_cast<uint64_t>(v.getDataPointer())).toUpperCase() + "";
 	}
 	else if (type == Types::ID::Block)
 	{
@@ -399,6 +409,8 @@ juce::String Types::Helpers::getCppTypeName(ID type)
 
 snex::Types::ID Types::Helpers::getTypeFromStringValue(const juce::String& value)
 {
+	if (value.contains("p"))
+		return Types::ID::Pointer;
 	if (value.contains("."))
 	{
 		if (value.contains("f"))

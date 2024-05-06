@@ -63,6 +63,24 @@ namespace hise { using namespace juce;
 #endif
 #endif
 
+/** This can be used to change the threshold of what is considered "silence" in HISE.
+
+    This value is used at different places to figure out whether to stop smoothing, stop a decaying envelope curve, etc.
+ 
+    It tries to use a sensible default here, but you can override this (as a positive value, it will calculate the gain factor by taking the
+    number as negative dB value and convert it to a gain factor).
+*/
+#ifndef HISE_SILENCE_THRESHOLD_DB
+#define HISE_SILENCE_THRESHOLD_DB 60
+#endif
+
+/** This can be used to allow a frame processing context in scriptnode to use more than two channels.
+ *  It's set to two channels as a default value because 99% of all projects will not use more channels, but if you use the frame container
+ *	with more than two channels, bump this value to ensure it keeps working.
+ */
+#ifndef HISE_NUM_MAX_FRAME_CONTAINER_CHANNELS
+#define HISE_NUM_MAX_FRAME_CONTAINER_CHANNELS 2
+#endif
 
 #if HI_RUN_UNIT_TESTS
 #define jassert_skip_unit_test(x)
@@ -108,12 +126,17 @@ namespace hise { using namespace juce;
 
 #define SCALE_FACTOR() ((float)Desktop::getInstance().getDisplays().getMainDisplay().scale)
 
-#if JUCE_DEBUG || USE_FRONTEND || JUCE_MAC
+#if RETURN_IF_NO_THROW
 #define RETURN_IF_NO_THROW(x) return x;
 #define RETURN_VOID_IF_NO_THROW() return;
+#endif
+
+#if JUCE_DEBUG
+#define DEBUG_ONLY(x) x
+#define RETURN_DEBUG_ONLY(x) return x
 #else
-#define RETURN_IF_NO_THROW(x)
-#define RETURN_VOID_IF_NO_THROW()
+#define DEBUG_ONLY(x)
+#define RETURN_DEBUG_ONLY(x)
 #endif
 
 #if JUCE_WINDOWS || JUCE_MAC || JUCE_IOS
@@ -126,8 +149,17 @@ namespace hise { using namespace juce;
 
 #else
 
+#if USE_LATO_AS_DEFAULT
+static Typeface::Ptr oxygenBoldTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::LatoBold_ttf, HiBinaryData::FrontendBinaryData::LatoBold_ttfSize);
+static Typeface::Ptr oxygenTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::LatoRegular_ttf, HiBinaryData::FrontendBinaryData::LatoRegular_ttfSize);
+#else
 static Typeface::Ptr oxygenBoldTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::oxygen_bold_ttf, HiBinaryData::FrontendBinaryData::oxygen_bold_ttfSize);
 static Typeface::Ptr oxygenTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::oxygen_regular_ttf, HiBinaryData::FrontendBinaryData::oxygen_regular_ttfSize);
+#endif
+
+
+
+
 static Typeface::Ptr sourceCodeProTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::SourceCodeProRegular_otf, HiBinaryData::FrontendBinaryData::SourceCodeProRegular_otfSize);
 static Typeface::Ptr sourceCodeProBoldTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::SourceCodeProBold_otf, HiBinaryData::FrontendBinaryData::SourceCodeProBold_otfSize);
 
@@ -155,8 +187,14 @@ class LinuxFontHandler
 
     LinuxFontHandler()
     {
-        Typeface::Ptr oxygenBoldTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::oxygen_bold_ttf, HiBinaryData::FrontendBinaryData::oxygen_bold_ttfSize);
-        Typeface::Ptr oxygenTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::oxygen_regular_ttf, HiBinaryData::FrontendBinaryData::oxygen_regular_ttfSize);
+#if USE_LATO_AS_DEFAULT
+		Typeface::Ptr oxygenBoldTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::LatoBold_ttf, HiBinaryData::FrontendBinaryData::LatoBold_ttfSize);
+		Typeface::Ptr oxygenTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::LatoRegular_ttf, HiBinaryData::FrontendBinaryData::LatoRegular_ttfSize);
+#else
+		Typeface::Ptr oxygenBoldTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::oxygen_bold_ttf, HiBinaryData::FrontendBinaryData::oxygen_bold_ttfSize);
+		Typeface::Ptr oxygenTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::oxygen_regular_ttf, HiBinaryData::FrontendBinaryData::oxygen_regular_ttfSize);
+#endif
+
         Typeface::Ptr sourceCodeProTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::SourceCodeProRegular_otf, HiBinaryData::FrontendBinaryData::SourceCodeProRegular_otfSize);
         Typeface::Ptr sourceCodeProBoldTypeFace = Typeface::createSystemTypefaceFor(HiBinaryData::FrontendBinaryData::SourceCodeProBold_otf, HiBinaryData::FrontendBinaryData::SourceCodeProBold_otfSize);
 
@@ -494,6 +532,11 @@ private:
 /** This is set by the HISE projects to figure out the default VS version for the export. */
 #ifndef HISE_USE_VS2022
 #define HISE_USE_VS2022 0
+#endif
+
+/** This sets the global raster size for dragging components. */
+#ifndef HI_RASTER_SIZE
+#define HI_RASTER_SIZE 10
 #endif
 
 

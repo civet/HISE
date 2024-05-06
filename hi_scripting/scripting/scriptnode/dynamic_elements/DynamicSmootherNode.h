@@ -61,6 +61,82 @@ namespace control
 		control::multilogic::logic_op lastData;
 	};
 
+	struct blend_editor : public ScriptnodeExtraComponent<pimpl::combined_parameter_base<multilogic::blend>>
+	{
+		using LogicBase = pimpl::combined_parameter_base<multilogic::blend>;
+
+		blend_editor(LogicBase* b, PooledUIUpdater* u):
+		  ScriptnodeExtraComponent<LogicBase>(b, u),
+		  dragger(u)
+		{
+			addAndMakeVisible(dragger);
+
+			setSize(256, 50);
+		};
+
+		void paint(Graphics& g) override
+		{
+			auto alpha = (float)lastData.alpha * 2.0f - 1.0f;
+
+			auto b = getLocalBounds().removeFromRight((getWidth() * 2) / 3).toFloat();
+
+			auto area = b.reduced(JUCE_LIVE_CONSTANT(40), 15).toFloat();
+
+			ScriptnodeComboBoxLookAndFeel::drawScriptnodeDarkBackground(g, area, true);
+
+			
+
+			area = area.reduced(4);
+
+			auto w = (area.getWidth() - area.getHeight()) * 0.5f;
+
+			auto tb = area.translated(0, 20);
+
+			area = area.withSizeKeepingCentre(area.getHeight(), area.getHeight());
+
+			area = area.translated(alpha * w, 0);
+
+			g.setColour(getHeaderColour());
+
+			g.fillEllipse(area);
+
+			g.setFont(GLOBAL_BOLD_FONT());
+
+			g.drawText(String(lastData.getValue(), 2), tb, Justification::centred);
+		}
+
+		void timerCallback() override
+		{
+			auto thisData = getObject()->getUIData();
+
+			if (!(thisData == lastData))
+			{
+				lastData = thisData;
+				repaint();
+			}
+		}
+
+		void resized() override
+		{
+			auto b = getLocalBounds();
+
+
+			dragger.setBounds(b.removeFromLeft(getWidth()/3).withSizeKeepingCentre(32, 32));
+
+
+		}
+
+		static Component* createExtraComponent(void* obj, PooledUIUpdater* updater)
+		{
+			auto typed = static_cast<mothernode*>(obj);
+			return new blend_editor(dynamic_cast<LogicBase*>(typed), updater);
+		}
+
+		ModulationSourceBaseComponent dragger;
+
+		control::multilogic::blend lastData;
+	};
+
 	struct intensity_editor : public ScriptnodeExtraComponent<pimpl::combined_parameter_base<multilogic::intensity>>
 	{
 		using IntensityBase = pimpl::combined_parameter_base<multilogic::intensity>;
@@ -563,6 +639,7 @@ struct dynamic
     {
         Ms2Freq,
         Freq2Ms,
+        Freq2Samples,
         Ms2Samples,
         Samples2Ms,
         Ms2BPM,
@@ -571,6 +648,7 @@ struct dynamic
 		Pitch2Cent,
 		Cent2Pitch,
         Midi2Freq,
+		Freq2Norm,
         Gain2dB,
         dB2Gain,
         numModes
@@ -584,8 +662,8 @@ struct dynamic
     
     static StringArray getConverterNames()
     {
-        return { "Ms2Freq", "Freq2Ms", "Ms2Samples", "Samples2Ms", "Ms2BPM",
-                 "Pitch2St", "St2Pitch", "Pitch2Cent", "Cent2Pitch", "Midi2Freq", "Gain2dB", "db2Gain" };
+        return { "Ms2Freq", "Freq2Ms", "Freq2Samples", "Ms2Samples", "Samples2Ms", "Ms2BPM",
+                 "Pitch2St", "St2Pitch", "Pitch2Cent", "Cent2Pitch", "Midi2Freq", "Freq2Norm", "Gain2dB", "db2Gain" };
     }
     
     void initialise(NodeBase* n)
@@ -598,6 +676,7 @@ struct dynamic
     {
         m.prepare(ps);
         s.prepare(ps);
+        fs.prepare(ps);
     }
     
     double getValue(double input)
@@ -608,12 +687,14 @@ struct dynamic
             case Mode::Freq2Ms:    return freq2ms().getValue(input);
             case Mode::Ms2Samples: return m.getValue(input);
             case Mode::Samples2Ms: return s.getValue(input);
+            case Mode::Freq2Samples: return fs.getValue(input);
             case Mode::Ms2BPM:     return ms2bpm().getValue(input);
             case Mode::Pitch2St:   return pitch2st().getValue(input);
             case Mode::St2Pitch:   return st2pitch().getValue(input);
 			case Mode::Pitch2Cent: return pitch2cent().getValue(input);
 			case Mode::Cent2Pitch: return cent2pitch().getValue(input);
             case Mode::Midi2Freq:  return midi2freq().getValue(input);
+			case Mode::Freq2Norm:  return freq2norm().getValue(input);
             case Mode::Gain2dB:    return gain2db().getValue(input);
             case Mode::dB2Gain:    return db2gain().getValue(input);
             default: return input;
@@ -671,6 +752,7 @@ struct dynamic
             {
                 case Mode::Ms2Freq: inputDomain = "ms"; outputDomain = "Hz"; break;
                 case Mode::Freq2Ms: inputDomain = "Hz"; outputDomain = "ms"; break;
+                case Mode::Freq2Samples: inputDomain = "Hz"; outputDomain = "smp"; break;
                 case Mode::Ms2Samples:  inputDomain = "ms"; outputDomain = " smp"; break;
                 case Mode::Samples2Ms:  inputDomain = "smp"; outputDomain = "ms"; break;
                 case Mode::Ms2BPM:    inputDomain = "ms"; outputDomain = "BPM"; break;
@@ -679,6 +761,7 @@ struct dynamic
 				case Mode::Cent2Pitch: inputDomain = "ct"; outputDomain = ""; break;
 				case Mode::Pitch2Cent: inputDomain = ""; outputDomain = "ct"; break;
                 case Mode::Midi2Freq:  inputDomain = ""; outputDomain = "Hz"; break;
+				case Mode::Freq2Norm:  inputDomain = "Hz"; outputDomain = ""; break;
                 case Mode::Gain2dB: inputDomain = ""; outputDomain = "dB"; break;
                 case Mode::dB2Gain: inputDomain = "dB"; outputDomain = ""; break;
                 default: break;
@@ -699,6 +782,7 @@ struct dynamic
             {
                 case Mode::Ms2Freq: setRange({0.0, 1000.0, 1.0}); break;
                 case Mode::Freq2Ms: setRange({20.0, 20000.0, 0.1}, 1000.0); break;
+                case Mode::Freq2Samples: setRange({20.0, 20000.0, 0.1}, 1000.0); break;
                 case Mode::Ms2Samples:  setRange({0.0, 1000.0, 1.0}); break;
                 case Mode::Samples2Ms:  setRange({0.0, 44100.0, 1.0}); break;
                 case Mode::Pitch2St:  setRange({0.5, 2.0}, 1.0); break;
@@ -707,6 +791,7 @@ struct dynamic
 				case Mode::Pitch2Cent: setRange({ 0.5, 2.0 }, 1.0); break;
 				case Mode::Cent2Pitch: setRange({ -100.0, 100.0, 0.0 }); break;
                 case Mode::Midi2Freq:  setRange({0, 127.0, 1.0}); break;
+				case Mode::Freq2Norm:  setRange({0.0, 20000.0}); break;
                 case Mode::Gain2dB: setRange({0.0, 1.0, 0.0}); break;
                 case Mode::dB2Gain: setRange({-100.0, 0.0, 0.1}, -12.0); break;
                 default: break;
@@ -749,6 +834,7 @@ struct dynamic
     
     conversion_logic::ms2samples m;
     conversion_logic::samples2ms s;
+    conversion_logic::freq2samples fs;
     
     JUCE_DECLARE_WEAK_REFERENCEABLE(dynamic);
 };

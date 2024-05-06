@@ -47,6 +47,7 @@ DECLARE_ID(ProjectSettings);
 DECLARE_ID(UserSettings);
 DECLARE_ID(CompilerSettings);
 DECLARE_ID(GeneralSettings);
+DECLARE_ID(ExpansionSettings);
 DECLARE_ID(AudioSettings);
 DECLARE_ID(MidiSettings);
 DECLARE_ID(ScriptingSettings);
@@ -78,6 +79,7 @@ DECLARE_ID(ExtraDefinitionsLinux);
 DECLARE_ID(AppGroupID);
 DECLARE_ID(RedirectSampleFolder);
 DECLARE_ID(AAXCategoryFX);
+DECLARE_ID(VST3Category);
 DECLARE_ID(SupportMonoFX);
 DECLARE_ID(EnableSoundGeneratorsFX);
 DECLARE_ID(EnableMidiInputFX);
@@ -92,6 +94,13 @@ DECLARE_ID(ReadOnlyFactoryPresets);
 DECLARE_ID(ForceStereoOutput);
 DECLARE_ID(AdminPermissions);
 DECLARE_ID(EmbedUserPresets);
+DECLARE_ID(OverwriteOldUserPresets);
+DECLARE_ID(UseGlobalAppDataFolderWindows);
+DECLARE_ID(UseGlobalAppDataFolderMacOS);
+DECLARE_ID(DefaultUserPreset);
+DECLARE_ID(CompileWithPerfetto);
+DECLARE_ID(CompileWithDebugSymbols);
+DECLARE_ID(IncludeLorisInFrontend);
 
 Array<Identifier> getAllIds();
 
@@ -108,10 +117,20 @@ DECLARE_ID(Support32BitMacOS);
 DECLARE_ID(CustomNodePath);
 DECLARE_ID(FaustPath);
 DECLARE_ID(FaustExternalEditor);
+DECLARE_ID(EnableLoris);
 
 Array<Identifier> getAllIds();
 
 } // Compiler
+
+namespace ExpansionSettings
+{
+DECLARE_ID(UUID);
+DECLARE_ID(Tags);
+DECLARE_ID(Description);
+
+Array<Identifier> getAllIds();
+}
 
 namespace User
 {
@@ -133,7 +152,9 @@ DECLARE_ID(CompileTimeout);
 DECLARE_ID(CodeFontSize);
 DECLARE_ID(EnableOptimizations);
 DECLARE_ID(EnableDebugMode);
+DECLARE_ID(WarnIfUndefinedParameters);
 DECLARE_ID(SaveConnectedFilesOnCompile);
+DECLARE_ID(EnableMousePositioning);
 
 Array<Identifier> getAllIds();
 
@@ -144,7 +165,6 @@ namespace Other
 DECLARE_ID(GlobalSamplePath);
 DECLARE_ID(UseOpenGL);
 DECLARE_ID(EnableShaderLineNumbers);
-DECLARE_ID(GlassEffect);
 DECLARE_ID(EnableAutosave);
 DECLARE_ID(AutosaveInterval);
 DECLARE_ID(AudioThreadGuardEnabled);

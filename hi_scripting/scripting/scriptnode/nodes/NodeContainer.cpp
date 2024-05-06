@@ -243,40 +243,47 @@ void NodeContainer::parameterAddedOrRemoved(ValueTree child, bool wasAdded)
 
 void NodeContainer::updateChannels(ValueTree v, Identifier id)
 {
-	if (v == asNode()->getValueTree())
+	try
 	{
-		channelLayoutChanged(nullptr);
-
-		if (originalSampleRate > 0.0)
+		if (v == asNode()->getValueTree())
 		{
-			PrepareSpecs ps;
-            ps.numChannels = asNode()->getCurrentChannelAmount();
-			ps.blockSize = originalBlockSize;
-			ps.sampleRate = originalSampleRate;
-			ps.voiceIndex = lastVoiceIndex;
+			channelLayoutChanged(nullptr);
 
-			asNode()->prepare(ps);
+			if (originalSampleRate > 0.0)
+			{
+				PrepareSpecs ps;
+				ps.numChannels = asNode()->getCurrentChannelAmount();
+				ps.blockSize = originalBlockSize;
+				ps.sampleRate = originalSampleRate;
+				ps.voiceIndex = lastVoiceIndex;
+
+				asNode()->prepare(ps);
+			}
+		}
+		else if (v.getParent() == getNodeTree())
+		{
+			if (channelRecursionProtection)
+				return;
+
+			auto childNode = asNode()->getRootNetwork()->getNodeForValueTree(v);
+			ScopedValueSetter<bool> svs(channelRecursionProtection, true);
+			channelLayoutChanged(childNode);
+
+			if (originalSampleRate > 0.0)
+			{
+				PrepareSpecs ps;
+				ps.numChannels = asNode()->getCurrentChannelAmount();
+				ps.blockSize = originalBlockSize;
+				ps.sampleRate = originalSampleRate;
+				ps.voiceIndex = lastVoiceIndex;
+
+				asNode()->prepare(ps);
+			}
 		}
 	}
-	else if (v.getParent() == getNodeTree())
+	catch (scriptnode::Error& e)
 	{
-		if (channelRecursionProtection)
-			return;
-
-		auto childNode = asNode()->getRootNetwork()->getNodeForValueTree(v);
-		ScopedValueSetter<bool> svs(channelRecursionProtection, true);
-		channelLayoutChanged(childNode);
-
-		if (originalSampleRate > 0.0)
-		{
-			PrepareSpecs ps;
-            ps.numChannels = asNode()->getCurrentChannelAmount();
-			ps.blockSize = originalBlockSize;
-			ps.sampleRate = originalSampleRate;
-			ps.voiceIndex = lastVoiceIndex;
-
-			asNode()->prepare(ps);
-		}
+		asNode()->getRootNetwork()->getExceptionHandler().addError(asNode(), e);
 	}
 }
 
@@ -559,10 +566,12 @@ NodeContainerFactory::NodeContainerFactory(DspNetwork* parent) :
 	registerNodeRaw<FixedBlockNode<256>>();
 	registerNodeRaw<FixedBlockXNode>();
 	registerNodeRaw<OfflineChainNode>();
+    registerNodeRaw<RepitchNode>();
 	registerNodeRaw<CloneNode>();
 	registerNodeRaw<NoMidiChainNode>();
 	registerNodeRaw<SoftBypassNode>();
     registerNodeRaw<SidechainNode>();
+	registerNodeRaw<BranchNode>();
 }
 
 juce::ValueTree NodeContainer::MacroParameter::getConnectionTree()

@@ -32,6 +32,7 @@
 
 #ifndef FILEBROWSER_H_INCLUDED
 #define FILEBROWSER_H_INCLUDED
+#include "hi_tools/hi_markdown/MarkdownRenderer.h"
 
 namespace hise { using namespace juce;
 
@@ -69,6 +70,7 @@ private:
 class BackendProcessorEditor;
 
 class FileBrowser : public Component,
+					public MidiKeyboardFocusTraverser::ParentWithKeyboardFocus,
 					public DragAndDropContainer,
 					public ApplicationCommandTarget,
 					public TextEditor::Listener,
@@ -153,7 +155,9 @@ public:
 
 	void previewFile(const File& f);
 
-	void textEditorReturnKeyPressed(TextEditor& editor) override;
+	void resetToRoot();
+
+	void textEditorTextChanged(TextEditor& editor) override;
 
 	~FileBrowser();
 
@@ -241,13 +245,14 @@ private:
 
 				if (additionalWildcard.contains("*"))
 				{
-					if (!file.getFullPathName().matchesWildcard(additionalWildcard, !File::areFileNamesCaseSensitive()))
-						return false;
+                    return file.getFullPathName().matchesWildcard(additionalWildcard, !File::areFileNamesCaseSensitive());
 				}
 				else
 				{
-					if (!file.getFileNameWithoutExtension().contains(additionalWildcard))
-						return false;
+                    auto st = additionalWildcard;
+                    auto sm = file.getFileNameWithoutExtension();
+                    
+                    return FuzzySearcher::fitsSearch(additionalWildcard, sm, 0.4);
 				}
 			}
 
@@ -319,14 +324,14 @@ private:
             v.addChild(favorites[i]->exportAsValueTree(), -1, nullptr);
         }
         
-        File favoritesFile = NativeFileHandler::getAppDataDirectory().getChildFile("Favorites.xml");
+        File favoritesFile = NativeFileHandler::getAppDataDirectory(nullptr).getChildFile("Favorites.xml");
         
         favoritesFile.replaceWithText(v.toXmlString());
     }
     
     void loadFavoriteFile()
     {
-        File favoritesFile = NativeFileHandler::getAppDataDirectory().getChildFile("Favorites.xml");
+        File favoritesFile = NativeFileHandler::getAppDataDirectory(nullptr).getChildFile("Favorites.xml");
         
         auto xml = XmlDocument::parse(favoritesFile);
         
@@ -394,6 +399,7 @@ private:
 
     JUCE_DECLARE_WEAK_REFERENCEABLE(FileBrowser);
 };
+
 
 } // namespace hise
 

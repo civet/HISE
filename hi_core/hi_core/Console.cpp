@@ -47,7 +47,7 @@ CodeEditorComponent(doc, tok)
     setColour(CodeEditorComponent::ColourIds::highlightColourId, Colours::white.withAlpha(0.15f));
     
 	setLineNumbersShown(false);
-    setScrollbarThickness(14);
+    setScrollbarThickness(13);
     
     fader.addScrollBarToAnimate(getScrollbar(true));
     fader.addScrollBarToAnimate(getScrollbar(false));
@@ -82,6 +82,35 @@ void Console::resized()
 	newTextConsole->setBounds(getLocalBounds());
 }
 
+void Console::codeDocumentTextInserted(const String&, int)
+{
+	auto fh = newTextConsole->getFont().getHeight();
+
+	int numLinesVisible = jmax<int>(0, newTextConsole->getDocument().getNumLines() - (int)((float)newTextConsole->getHeight() / fh));
+
+	newTextConsole->scrollToLine(numLinesVisible);
+}
+
+void Console::codeDocumentTextDeleted(int, int)
+{}
+
+void Console::setTokeniser(CodeTokeniser* newTokeniser)
+{
+	tokeniser = newTokeniser;
+	addAndMakeVisible(newTextConsole = new ConsoleEditorComponent(*mc->getConsoleHandler().getConsoleData(), tokeniser.get()));
+	newTextConsole->addMouseListener(this, true);
+}
+
+void Console::updateFontSize(Console& c, float newSize)
+{
+	c.newTextConsole->setFont(GLOBAL_MONOSPACE_FONT().withHeight(newSize));
+}
+
+CodeEditorComponent::ColourScheme Console::ConsoleTokeniser::getDefaultColourScheme()
+{ return s; }
+
+void Console::ConsoleEditorComponent::addPopupMenuItems(PopupMenu& popupMenu, const MouseEvent* mouseEvent)
+{}
 
 
 void Console::clear()
@@ -263,8 +292,17 @@ int Console::ConsoleTokeniser::readNextToken(CodeDocument::Iterator& source)
     if(tokenIndex == -1)
         tokenIndex = 1;
     else
-        c = source.nextChar();
-    
+    {
+	    c = source.nextChar();
+    }
+        
+
+    if(tokenIndex == 5)
+    {
+	    source.skipToEndOfLine();
+        return tokenIndex;
+    }
+
     while(!source.isEOF())
     {
         auto nextToken = tokenChars.indexOfChar(source.peekNextChar());

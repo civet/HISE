@@ -49,22 +49,11 @@ public:
 
 	~ScriptUserPresetHandler();
 
-	Identifier getObjectName() const override { RETURN_STATIC_IDENTIFIER("UserPresetHandler"); }
+	Identifier getObjectName() const override;
 
-	int getNumChildElements() const override
-	{
-		return 2;
-	}
+	int getNumChildElements() const override;
 
-	DebugInformationBase* getChildElement(int index) override
-	{
-		if (index == 0)
-			return preCallback.createDebugObject("preCallback");
-		if (index == 1)
-			return postCallback.createDebugObject("postCallback");
-        
-        return nullptr;
-	}
+	DebugInformationBase* getChildElement(int index) override;
 
 	// =================================================================================== API Methods
 
@@ -77,12 +66,18 @@ public:
 	/** Sets a callback that will be executed after the preset has been loaded. */
 	void setPostCallback(var presetPostCallback);
 
+	/** Sets a callback that will be executed after a preset has been saved. */
+	void setPostSaveCallback(var presetPostSaveCallback);
+
 	/** Enables a preprocessing of every user preset that is being loaded. */
 	void setEnableUserPresetPreprocessing(bool processBeforeLoading, bool shouldUnpackComplexData);
 
     /** Returns true if the user preset that is about to be loaded is a DAW state (or initial state). This function is only useful during the pre / post load callbacks. */
     bool isInternalPresetLoad() const;
     
+	/** Returns true if this is called somewhere inside a preset load. This takes the thread ID into account to avoid false positives when calling this on another thread. */
+	bool isCurrentlyLoadingPreset() const;
+
 	/** Checks if the given version string is a older version than the current project version number. */
 	bool isOldVersion(const String& version);
 
@@ -92,14 +87,21 @@ public:
 	/** Enables host / MIDI automation with the custom user preset model. */
 	void setCustomAutomation(var automationData);
 
-	/** Attaches a callback to automation changes. Use empty string to attach to all callbacks. */
-	void attachAutomationCallback(String automationId, var updateCallback, bool isSynchronous);
+	/** Attaches a callback to automation changes. Pass a non-function as updateCallback to remove the callback for the given automation ID. */
+	void attachAutomationCallback(String automationId, var updateCallback, var isSynchronous);
 
 	/** Clears all attached callbacks. */
 	void clearAttachedCallbacks();
 
 	/** Updates the given automation values and optionally sends out a message. */
-	void updateAutomationValues(var data, bool sendMessage, bool useUndoManager);
+	void updateAutomationValues(var data, var sendMessage, bool useUndoManager);
+
+	/** Returns the amount of seconds since the last preset has been loaded. */
+	double getSecondsSinceLastPresetLoad();
+
+	/** Loads the default user preset (if it's defined in the project). */
+	void resetToDefaultUserPreset();
+	
 
 	/** Creates an object containing the values for every automation ID. */
 	var createObjectForAutomationValues();
@@ -113,6 +115,12 @@ public:
 	/** Restores the values for all UI elements that are connected to a processor with the `processorID` / `parameterId` properties. */
 	void updateConnectedComponentsFromModuleState();
 	
+	/** Returns the automation index. */
+	int getAutomationIndex(String automationID);
+
+	/** Sends an automation value change for the given index. */
+	bool setAutomationValue(int automationIndex, float newValue);
+
 	/** Runs a few tests that catches data persistency issues. */
 	void runTest();
 
@@ -126,61 +134,35 @@ public:
 
 	void presetChanged(const File& newPreset) override;
 
-	void presetListUpdated() override
-	{
+	void presetSaved(const File& newPreset) override;
 
-	}
+	void presetListUpdated() override;
 
-	
 
-	void loadCustomUserPreset(const var& dataObject) override
-	{
-		if (customLoadCallback)
-		{
-			var args = dataObject;
-			auto ok = customLoadCallback.callSync(&args, 1, nullptr);
+	void loadCustomUserPreset(const var& dataObject) override;
 
-			if (!ok.wasOk())
-				debugError(getMainController()->getMainSynthChain(), ok.getErrorMessage());
-		}
-	}
-
-	var saveCustomUserPreset(const String& presetName) override
-	{
-		if (customSaveCallback)
-		{
-			var rv;
-			var args = presetName;
-			auto ok = customSaveCallback.callSync(&args, 1, &rv);
-
-			if (!ok.wasOk())
-				debugError(getMainController()->getMainSynthChain(), ok.getErrorMessage());
-
-			return rv;
-		}
-
-		return {};
-	}
-	
-	
+	var saveCustomUserPreset(const String& presetName) override;
 
 private:
 
-	struct AttachedCallback: public ReferenceCountedObject
+	struct AttachedCallback:	NEW_AUTOMATION_WITH_COMMA(public dispatch::ListenerOwner)
+								public ReferenceCountedObject
 	{
-		AttachedCallback(ScriptUserPresetHandler* parent, MainController::UserPresetHandler::CustomAutomationData::Ptr cData, var f, bool isSynchronous);
+		AttachedCallback(ScriptUserPresetHandler* parent, MainController::UserPresetHandler::CustomAutomationData::Ptr cData, var f, dispatch::DispatchType n);
 
 		~AttachedCallback();
 
-		String id;
-		WeakCallbackHolder customUpdateCallback;
-		WeakCallbackHolder customAsyncUpdateCallback;
-
 		static void onCallbackSync(AttachedCallback& c, var* args);
-
 		static void onCallbackAsync(AttachedCallback& c, int index, float newValue);
 
+		void onUpdate(int index, float value);
+
 		MainController::UserPresetHandler::CustomAutomationData::Ptr cData;
+		IF_NEW_AUTOMATION_DISPATCH(dispatch::library::CustomAutomationSource::Listener listener);
+		WeakCallbackHolder customAsyncUpdateCallback;
+		WeakCallbackHolder customUpdateCallback;
+
+		dispatch::DispatchType n;
 
 		JUCE_DECLARE_WEAK_REFERENCEABLE(AttachedCallback);
 	};
@@ -193,6 +175,7 @@ private:
 	bool unpackComplexData = false;
 	WeakCallbackHolder preCallback;
 	WeakCallbackHolder postCallback;
+	WeakCallbackHolder postSaveCallback;
 
 	WeakCallbackHolder customLoadCallback;
 	WeakCallbackHolder customSaveCallback;
@@ -396,41 +379,11 @@ public:
 	struct DefaultHandler : public ControlledObject,
 		public ExpansionHandler::Listener
 	{
-		DefaultHandler(MainController* mc, ValueTree t) :
-			ControlledObject(mc),
-			defaultPreset(t),
-			defaultIsLoaded(true)
-		{
-			getMainController()->getExpansionHandler().addListener(this);
-		}
+		DefaultHandler(MainController* mc, ValueTree t);
 
-		~DefaultHandler()
-		{
-			getMainController()->getExpansionHandler().removeListener(this);
-		}
+		~DefaultHandler();
 
-		void expansionPackLoaded(Expansion* e) override
-		{
-			if (e != nullptr)
-			{
-				defaultIsLoaded = false;
-			}
-			else
-			{
-				if (!defaultIsLoaded)
-				{
-					auto copy = defaultPreset.createCopy();
-
-					getMainController()->getKillStateHandler().killVoicesAndCall(getMainController()->getMainSynthChain(), [copy, this](Processor* p)
-					{
-						defaultIsLoaded = true;
-						p->getMainController()->loadPresetFromValueTree(copy);
-
-						return SafeFunctionCall::OK;
-					}, MainController::KillStateHandler::SampleLoadingThread);
-				}
-			}
-		}
+		void expansionPackLoaded(Expansion* e) override;
 
 	private:
 
@@ -438,16 +391,9 @@ public:
 		bool defaultIsLoaded = true;
 	};
 
-	FullInstrumentExpansion(MainController* mc, const File& f) :
-		ScriptEncryptedExpansion(mc, f)
-	{
+	FullInstrumentExpansion(MainController* mc, const File& f);
 
-	}
-
-	~FullInstrumentExpansion()
-	{
-		getMainController()->getExpansionHandler().removeListener(this);
-	}
+	~FullInstrumentExpansion();
 
 	static void setNewDefault(MainController* mc, ValueTree t);
 
@@ -455,10 +401,7 @@ public:
 
 	static Expansion* getCurrentFullExpansion(const MainController* mc);
 
-	void setIsProjectExporter()
-	{
-		isProjectExport = true;
-	}
+	void setIsProjectExporter();
 
 	ValueTree getValueTreeFromFile(Expansion::ExpansionType type);
 
@@ -470,10 +413,7 @@ public:
 
 	Result encodeExpansion() override;
 
-	ValueTree getEmbeddedNetwork(const String& id) override
-	{
-		return networks.getChildWithProperty("ID", id);
-	}
+	ValueTree getEmbeddedNetwork(const String& id) override;
 
 	bool fullyLoaded = false;
 	ValueTree presetToLoad;
@@ -570,9 +510,17 @@ class ExpansionEncodingWindow : public DialogWindowWithBackgroundThread,
 {
 public:
 
+	enum class ExportMode
+	{
+		HXI,			// The default expansion format
+		Rhapsody,		// LWZ zip file
+		HiseProject,	// The default expansion with the file extension .hiseproject and the project setting XML file
+		numExportModes
+	};
+
 	static constexpr int AllExpansionId = 9000000;
 
-	ExpansionEncodingWindow(MainController* mc, Expansion* eToEncode, bool isProjectExport);
+	ExpansionEncodingWindow(MainController* mc, Expansion* eToEncode, bool isProjectExport, bool isRhapsody=true);
 	~ExpansionEncodingWindow();
 
 	void logMessage(const String& message, bool /*isCritical*/)
@@ -580,12 +528,19 @@ public:
 		showStatusMessage(message);
 	}
 
+	Result performChecks();
+
 	void run() override;
 	void threadFinished();
 
 	Result encodeResult;
 	
 	bool projectExport = false;
+	
+	ExportMode exportMode = ExportMode::HXI;
+
+	File rhapsodyOutput;
+
 	WeakReference<Expansion> e;
 };
 
@@ -639,6 +594,9 @@ struct ScriptUnlocker : public juce::OnlineUnlockStatus,
 		/** Checks if the possibleKeyData might contain a key file. */
 		bool isValidKeyFile(var possibleKeyData);
 
+		/** Returns the license key file as File object. */
+		var getLicenseKeyFile();
+
 		/** Returns the user email that was used for the registration. */
 		String getUserEmail() const;
 
@@ -671,5 +629,79 @@ struct ScriptUnlocker : public juce::OnlineUnlockStatus,
 
 	JUCE_DECLARE_WEAK_REFERENCEABLE(ScriptUnlocker);
 };
+
+/** A wrapper around the beatport authentication system. */
+class BeatportManager: public ConstScriptingObject
+{
+public:
+  
+	BeatportManager(ProcessorWithScriptingContent* sp);
+
+	~BeatportManager();
+
+	Identifier getObjectName() const override { RETURN_STATIC_IDENTIFIER("BeatportManager"); }
+
+	// ======================================================================== API Methods */
+
+	/** Sets the product ID dynamically. */
+	void setProductId(const String& productId);
+	
+	/** Requests DRM validation and returns a JSON object with the validation result. */
+	var validate();
+
+	/** Checks if the beatport access is valid. */
+	bool isBeatportAccess();
+
+	// ===================================================================================== */
+
+	/** Returns the folder inside the project repository where the beatport SDK is located. */
+	static File getBeatportProjectFolder(MainController* mc)
+	{
+#if USE_BACKEND
+		auto f = mc->getCurrentFileHandler().getSubDirectory(FileHandlerBase::AdditionalSourceCode).getChildFile("beatport");
+
+		if(!f.isDirectory())
+			f.createDirectory();
+
+		return f;
+#else
+		// this function should never be called in a compiled plugin because it will call into the real SDK...
+		jassertfalse;
+		return {};
+#endif
+
+	}
+
+private:
+
+#if HISE_INCLUDE_BEATPORT
+	struct Pimpl
+	{
+		Pimpl();
+
+		~Pimpl();
+
+		void setProductId(const String& productId);
+
+		var validate();
+
+		bool isBeatportAccess() const;
+
+	private:
+
+		struct Data;
+		
+		// will be created on first usage;
+		Data* data;
+	};
+
+	ScopedPointer<Pimpl> pimpl;
+#endif
+	
+	struct Wrapper;
+
+	JUCE_DECLARE_WEAK_REFERENCEABLE(BeatportManager);
+};
+
 
 } // namespace hise

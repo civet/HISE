@@ -152,7 +152,7 @@ void dynamic::editor::timerCallback()
 
 namespace parameter
 {
-	void clone_holder::callEachClone(int index, double v)
+	void clone_holder::callEachClone(int index, double v, bool)
 	{
 		SimpleReadWriteLock::ScopedReadLock sl(connectionLock);
 
@@ -160,7 +160,9 @@ namespace parameter
 
 		if (auto p = cloneTargets[index])
 		{
-			v = p->getRange().convertFrom0to1(v, true);
+			if(isNormalised)
+				v = p->getRange().convertFrom0to1(v, true);
+
 			p->call(v);
 		}
 	}
@@ -314,7 +316,7 @@ namespace parameter
 
 		for (int i = 0; i < lastValues.size(); i++)
 		{
-			callEachClone(i, lastValues[i]);
+			callEachClone(i, lastValues[i], false);
 		}
 	}
 
@@ -447,13 +449,15 @@ void dynamic_list::updateParameterAmount(Identifier, var newValue)
 juce::Path ui::Factory::createPath(const String& url) const
 {
 	Path p;
-	LOAD_PATH_IF_URL("add", HiBinaryData::ProcessorEditorHeaderIcons::addIcon);
-	LOAD_PATH_IF_URL("delete", SampleMapIcons::deleteSamples);
+	LOAD_EPATH_IF_URL("add", HiBinaryData::ProcessorEditorHeaderIcons::addIcon);
+	LOAD_EPATH_IF_URL("delete", SampleMapIcons::deleteSamples);
 	LOAD_PATH_IF_URL("drag", ColumnIcons::targetIcon);
 	LOAD_PATH_IF_URL("edit", ColumnIcons::moveIcon);
 
 	return p;
 }
+
+
 
 namespace ui
 {
@@ -655,7 +659,20 @@ namespace ui
         return changedSomething;
     }
 
-	void dynamic_list_editor::timerCallback()
+    void dynamic_list_editor::showEditButtons(bool shouldShowButtons)
+    {
+	    addButton.setVisible(shouldShowButtons);
+	    removeButton.setVisible(shouldShowButtons);
+	    editButton.setVisible(shouldShowButtons);
+	    resized();
+    }
+
+    void dynamic_list_editor::setTextFunction(int index, const std::function<String(int)>& f)
+    {
+	    externalTextFunctions.set(index, f);
+    }
+
+    void dynamic_list_editor::timerCallback()
 	{
         rebuildDraggers();
 	}
@@ -735,6 +752,8 @@ namespace ui
 
 	void dynamic_list_editor::DragComponent::mouseDown(const MouseEvent& e)
 	{
+		CHECK_MIDDLE_MOUSE_DOWN(e);
+
 		if (e.mods.isRightButtonDown())
 		{
 			if (auto t = pdl->targets[index])
@@ -746,6 +765,8 @@ namespace ui
 
 	void dynamic_list_editor::DragComponent::mouseDrag(const MouseEvent& e)
 	{
+		CHECK_MIDDLE_MOUSE_DRAG(e);
+
 		if (e.mods.isRightButtonDown())
 		{
 			return;
@@ -776,6 +797,8 @@ namespace ui
 
 	void dynamic_list_editor::DragComponent::mouseUp(const MouseEvent& event)
 	{
+		CHECK_MIDDLE_MOUSE_UP(event);
+
 		findParentComponentOfClass<DspNetworkGraph>()->repaint();
 	}
 

@@ -217,9 +217,9 @@ struct Selector : public Component,
 	Path createPath(const String& url) const override
 	{
 		Path p;
-		LOAD_PATH_IF_URL("new", SampleMapIcons::newSampleMap);
-		LOAD_PATH_IF_URL("embedded", HnodeIcons::mapIcon);
-		LOAD_PATH_IF_URL("import", SampleMapIcons::pasteSamples);
+		LOAD_EPATH_IF_URL("new", SampleMapIcons::newSampleMap);
+		LOAD_EPATH_IF_URL("embedded", HnodeIcons::mapIcon);
+		LOAD_EPATH_IF_URL("import", SampleMapIcons::pasteSamples);
 		return p;
 	}
 
@@ -282,15 +282,8 @@ Component* DspNetworkGraphPanel::createComponentForNetwork(DspNetwork* p)
 Component* DspNetworkGraphPanel::createEmptyComponent()
 {
 #if USE_BACKEND
-
-	// don't show this in the workbench
-	if (findParentComponentOfClass<SnexWorkbenchEditor>() != nullptr)
-		return nullptr;
-
 	if (auto h = dynamic_cast<DspNetwork::Holder*>(getProcessor()))
-	{
 		return new Selector(h, getMainController());
-	}
 #endif
 
 	return nullptr;
@@ -389,7 +382,7 @@ struct FaustEditorWrapper: public Component,
     {
         if(currentDocument != nullptr)
         {
-            currentDocument->file.replaceWithText(currentDocument->d.getAllContent());
+            currentDocument->writeFile();
             network->faustManager.sendCompileMessage(currentDocument->file, sendNotificationSync);
         }
     }
@@ -409,8 +402,14 @@ struct FaustEditorWrapper: public Component,
         
         if(currentDocument == nullptr)
         {
-            documents.add(new FaustDocument(f));
-            currentDocument = documents.getLast();
+			auto ef = network->getMainController()->getExternalScriptFile(f, false);
+
+			if(ef != nullptr)
+				currentDocument = documents.add(new FaustDocument(ef));
+			else if(f.existsAsFile())
+				currentDocument = documents.add(new FaustDocument(f));
+			else
+				return;
         }
         
 		bottomBar = new EditorBottomBar(dynamic_cast<JavascriptProcessor*>(network->getScriptProcessor()));
@@ -475,18 +474,48 @@ struct FaustEditorWrapper: public Component,
             editor->setBounds(b);
         }
     }
-    
+
     struct FaustDocument
     {
         FaustDocument(const File& f):
           file(f),
-          doc(d)
+          docToUse(&d),
+		  doc(*docToUse),
+		  resourceType(ExternalScriptFile::ResourceType::FileBased)
         {
+			// should use the other constructor...
+			jassert(f.existsAsFile());
             d.replaceAllContent(f.loadFileAsString());
         };
-        
-        File file;
-        CodeDocument d;
+
+		FaustDocument(ExternalScriptFile::Ptr p):
+		  file(p->getFile()),
+		  docToUse(&p->getFileDocument()),
+		  doc(*docToUse),
+		  resourceType(ExternalScriptFile::ResourceType::EmbeddedInSnippet)
+		{}
+
+		bool writeFile()
+		{
+			if(resourceType == ExternalScriptFile::ResourceType::FileBased)
+			{
+				return file.replaceWithText(docToUse->getAllContent());
+			}
+
+			return false;
+		}
+
+		File file;
+
+	private:
+		
+		CodeDocument d;
+
+    public:
+
+		const ExternalScriptFile::ResourceType resourceType;
+
+		CodeDocument* docToUse = nullptr;
         mcl::TextDocument doc;
     };
     
@@ -540,7 +569,7 @@ SnexPopupEditor::SnexPopupEditor(const String& name, SnexSource* src, bool isPop
 	d.getCodeDocument().replaceAllContent(codeValue.getValue().toString());
 	d.getCodeDocument().clearUndoHistory();
 
-	for (auto& o : snex::OptimizationIds::getAllIds())
+	for (auto& o : snex::OptimizationIds::Helpers::getAllIds())
 		s.addOptimization(o);
 
 	s.addDebugHandler(this);
@@ -612,7 +641,7 @@ void SnexPopupEditor::buttonClicked(Button* b)
 	}
 	if (b == &optimiseButton)
 	{
-		auto allIds = snex::OptimizationIds::getAllIds();
+		auto allIds = snex::OptimizationIds::Helpers::getAllIds();
 
 		PopupLookAndFeel plaf;
 		PopupMenu m;
@@ -830,13 +859,13 @@ void WorkbenchTestPlayer::postPostCompile(WorkbenchData::Ptr wb)
 void WorkbenchTestPlayer::play()
 {
 	playButton.setToggleStateAndUpdateIcon(true);
-	getMainController()->setBufferToPlay(wb->getTestData().testOutputData);
+	getMainController()->setBufferToPlay(wb->getTestData().testOutputData, 44100.0);
 }
 
 void WorkbenchTestPlayer::stop()
 {
 	playButton.setToggleStateAndUpdateIcon(false);
-	getMainController()->setBufferToPlay({});
+	getMainController()->setBufferToPlay({}, 44100.0);
 }
 
 void WorkbenchTestPlayer::timerCallback()
@@ -874,7 +903,7 @@ juce::Path WorkbenchTestPlayer::Factory::createPath(const String& url) const
 	if (!p.isEmpty())
 		return p;
 
-	LOAD_PATH_IF_URL("midi", HiBinaryData::SpecialSymbols::midiData);
+	LOAD_EPATH_IF_URL("midi", HiBinaryData::SpecialSymbols::midiData);
 
 	return p;
 }

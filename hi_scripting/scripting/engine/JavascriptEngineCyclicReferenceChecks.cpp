@@ -490,6 +490,56 @@ void HiseJavascriptEngine::RootObject::prepareCycleReferenceCheck()
 #endif
 }
 
+HiseJavascriptEngine::RootObject::ScopedLocalThisObject::ScopedLocalThisObject(RootObject& r_,  var newObject):
+	r(r_)
+{
+    auto useNewObject = !newObject.isUndefined() && !newObject.isVoid();
+    
+	if (useNewObject)
+	{
+		prevObject = r.localThreadThisObject.get();
+		r.localThreadThisObject = newObject;
+	}
+}
+
+HiseJavascriptEngine::RootObject::ScopedLocalThisObject::~ScopedLocalThisObject()
+{
+    auto usePrevObject = !prevObject.isUndefined() && !prevObject.isVoid();
+    
+	if (usePrevObject)
+	{
+		r.localThreadThisObject = prevObject;
+	}
+}
+
+HiseJavascriptEngine::RootObject::LocalScopeCreator::ScopedSetter::ScopedSetter(
+	ReferenceCountedObjectPtr<RootObject> r_, LocalScopeCreator::Ptr p):
+	r(r_.get())
+{
+#if ENABLE_SCRIPTING_BREAKPOINTS
+	auto isMessageThread = MessageManager::getInstanceWithoutCreating()->isThisTheMessageThread();
+
+	if (!isMessageThread)
+	{
+		auto& cp = r->currentLocalScopeCreator.get();
+		prevValue = p;
+		std::swap(prevValue, cp);
+		ok = true;
+	}
+#endif
+}
+
+HiseJavascriptEngine::RootObject::LocalScopeCreator::ScopedSetter::~ScopedSetter()
+{
+#if ENABLE_SCRIPTING_BREAKPOINTS
+	if (ok)
+	{
+		auto& cp = r->currentLocalScopeCreator.get();
+		std::swap(cp, prevValue);
+	}
+#endif
+}
+
 void HiseJavascriptEngine::RootObject::HiseSpecialData::prepareCycleReferenceCheck()
 {
 	JavascriptNamespace::prepareCycleReferenceCheck();

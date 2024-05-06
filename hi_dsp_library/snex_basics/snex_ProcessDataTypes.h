@@ -249,6 +249,55 @@ template <int C> struct ProcessData: public InternalData
 	/** Generates a frame processor that allows frame-based iteration over all given channels. */
 	FrameProcessor<C> toFrameData();
 
+	bool isSilent() const
+	{
+		static_assert(getNumChannels() <= 2, "only allowed with stereo channels");
+
+		if (numSamples == 0)
+			return true;
+
+		float* l = data[0];
+		float* r = getNumChannels() == 2 ? data[1] : data[0];
+
+		using SSEFloat = dsp::SIMDRegister<float>;
+
+		auto alignedL = SSEFloat::getNextSIMDAlignedPtr(l);
+		auto alignedR = SSEFloat::getNextSIMDAlignedPtr(r);
+
+		auto numUnaligned = alignedL - l;
+		auto numAligned = numSamples - numUnaligned;
+
+		static const auto gain90dB = Decibels::decibelsToGain(-90.0f);
+
+		while (--numUnaligned >= 0)
+		{
+			if (std::abs(*l++) > gain90dB || std::abs(*r++) > gain90dB)
+				return false;
+		}
+
+		constexpr int sseSize = SSEFloat::SIMDRegisterSize / sizeof(float);
+
+		while (numAligned >= sseSize)
+		{
+			auto l_ = SSEFloat::fromRawArray(alignedL);
+			auto r_ = SSEFloat::fromRawArray(alignedR);
+
+			auto sqL = SSEFloat::abs(l_);
+			auto sqR = SSEFloat::abs(r_);
+
+			auto max = SSEFloat::max(sqL, sqR).sum();
+
+			if (max > gain90dB)
+				return false;
+
+			alignedL += sseSize;
+			alignedR += sseSize;
+			numAligned -= sseSize;
+		}
+
+		return true;
+	}
+
 	/** Gets the number of channels. */
 	static constexpr int getNumChannels();
 	
@@ -297,6 +346,32 @@ struct ProcessDataDyn: public InternalData
 
 	int getNumChannels() const { return numChannels; };
 	
+	bool isSilent()
+	{
+		bool silent = true;
+
+		if (getNumChannels() == 1)
+		{
+			return reinterpret_cast<ProcessData<1>*>(this)->isSilent();
+		}
+		else
+		{
+			for (int i = 0; i < getNumChannels() - 1; i += 2)
+			{
+				ProcessData<2> c(data + i, numSamples);
+
+				silent &= c.isSilent();
+
+				if (!silent)
+					return false;
+			}
+		}
+
+		
+
+		return silent;
+	}
+
 	template <int NumChannels> FrameProcessor<NumChannels> toFrameData()
 	{
 		return FrameProcessor<NumChannels>(data, numSamples);
@@ -523,30 +598,35 @@ struct FrameConverters
 		}
 	}
 
+
+
+	template <int N> constexpr static bool allowFrameContainerChannel() { return N <= HISE_NUM_MAX_FRAME_CONTAINER_CHANNELS; }
+
 	template <typename DspClass, typename FrameDataType> static forcedinline void forwardToFixFrame16(DspClass* ptr, FrameDataType& data)
 	{
 		static_assert(Helpers::isRefArrayType<FrameDataType>(), "unneeded call to forwardToFrameFix");
 
+
+
 		switch (data.size())
 		{
-		case 1:		ptr->processFrame(span<float, 1>::as(data.begin())); break;
-		case 2:		ptr->processFrame(span<float, 2>::as(data.begin())); break;
-#if 0
-		case 3:		ptr->processFrame(span<float, 3>::as(data.begin())); break;
-		case 4:		ptr->processFrame(span<float, 4>::as(data.begin())); break;
-		case 5:		ptr->processFrame(span<float, 5>::as(data.begin())); break;
-		case 6:		ptr->processFrame(span<float, 6>::as(data.begin())); break;
-		case 7:		ptr->processFrame(span<float, 7>::as(data.begin())); break;
-		case 8:		ptr->processFrame(span<float, 8>::as(data.begin())); break;
-		case 9:		ptr->processFrame(span<float, 9>::as(data.begin())); break;
-		case 10:	ptr->processFrame(span<float, 10>::as(data.begin())); break;
-		case 11:	ptr->processFrame(span<float, 11>::as(data.begin())); break;
-		case 12:	ptr->processFrame(span<float, 12>::as(data.begin())); break;
-		case 13:	ptr->processFrame(span<float, 13>::as(data.begin())); break;
-		case 14:	ptr->processFrame(span<float, 14>::as(data.begin())); break;
-		case 15:	ptr->processFrame(span<float, 15>::as(data.begin())); break;
-		case 16:	ptr->processFrame(span<float, 16>::as(data.begin())); break;
-#endif
+		case 1:		if constexpr (allowFrameContainerChannel<1>())  { ptr->processFrame(span<float,  1>::as(data.begin())); break; }
+		case 2:		if constexpr (allowFrameContainerChannel<2>())  { ptr->processFrame(span<float,  2>::as(data.begin())); break; }
+		case 3:		if constexpr (allowFrameContainerChannel<3>())  { ptr->processFrame(span<float,  3>::as(data.begin())); break; }
+		case 4:		if constexpr (allowFrameContainerChannel<4>())  { ptr->processFrame(span<float,  4>::as(data.begin())); break; }
+		case 5:		if constexpr (allowFrameContainerChannel<5>())  { ptr->processFrame(span<float,  5>::as(data.begin())); break; }
+		case 6:		if constexpr (allowFrameContainerChannel<6>())  { ptr->processFrame(span<float,  6>::as(data.begin())); break; }
+		case 7:		if constexpr (allowFrameContainerChannel<7>())  { ptr->processFrame(span<float,  7>::as(data.begin())); break; }
+		case 8:		if constexpr (allowFrameContainerChannel<8>())  { ptr->processFrame(span<float,  8>::as(data.begin())); break; }
+		case 9:		if constexpr (allowFrameContainerChannel<9>())  { ptr->processFrame(span<float,  9>::as(data.begin())); break; }
+		case 10:	if constexpr (allowFrameContainerChannel<10>()) { ptr->processFrame(span<float, 10>::as(data.begin())); break; }
+		case 11:	if constexpr (allowFrameContainerChannel<11>()) { ptr->processFrame(span<float, 11>::as(data.begin())); break; }
+		case 12:	if constexpr (allowFrameContainerChannel<12>()) { ptr->processFrame(span<float, 12>::as(data.begin())); break; }
+		case 13:	if constexpr (allowFrameContainerChannel<13>()) { ptr->processFrame(span<float, 13>::as(data.begin())); break; }
+		case 14:	if constexpr (allowFrameContainerChannel<14>()) { ptr->processFrame(span<float, 14>::as(data.begin())); break; }
+		case 15:	if constexpr (allowFrameContainerChannel<15>()) { ptr->processFrame(span<float, 15>::as(data.begin())); break; }
+		case 16:	if constexpr (allowFrameContainerChannel<16>()) { ptr->processFrame(span<float, 16>::as(data.begin())); break; }
+		default:    jassertfalse; // seems to have fallen through...
 		}
 	}
 
@@ -554,24 +634,23 @@ struct FrameConverters
 	{
 		switch (data.getNumChannels())
 		{
-		case 1:   processFix<1>(ptr, data); break;
-		case 2:   processFix<2>(ptr, data); break;
-#if 0
-		case 3:   processFix<3>(ptr, data); break;
-		case 4:   processFix<4>(ptr, data); break;
-		case 5:   processFix<5>(ptr, data); break;
-		case 6:   processFix<6>(ptr, data); break;
-		case 7:   processFix<7>(ptr, data); break;
-		case 8:   processFix<8>(ptr, data); break;
-		case 9:   processFix<9>(ptr, data); break;
-		case 10: processFix<10>(ptr, data); break;
-		case 11: processFix<11>(ptr, data); break;
-		case 12: processFix<12>(ptr, data); break;
-		case 13: processFix<13>(ptr, data); break;
-		case 14: processFix<14>(ptr, data); break;
-		case 15: processFix<15>(ptr, data); break;
-		case 16: processFix<16>(ptr, data); break;
-#endif
+		case 1:  if constexpr (allowFrameContainerChannel< 1>()) { processFix< 1>(ptr, data); break; }
+		case 2:  if constexpr (allowFrameContainerChannel< 2>()) { processFix< 2>(ptr, data); break; }
+		case 3:  if constexpr (allowFrameContainerChannel< 3>()) { processFix< 3>(ptr, data); break; }
+		case 4:  if constexpr (allowFrameContainerChannel< 4>()) { processFix< 4>(ptr, data); break; }
+		case 5:  if constexpr (allowFrameContainerChannel< 5>()) { processFix< 5>(ptr, data); break; }
+		case 6:  if constexpr (allowFrameContainerChannel< 6>()) { processFix< 6>(ptr, data); break; }
+		case 7:  if constexpr (allowFrameContainerChannel< 7>()) { processFix< 7>(ptr, data); break; }
+		case 8:  if constexpr (allowFrameContainerChannel< 8>()) { processFix< 8>(ptr, data); break; }
+		case 9:  if constexpr (allowFrameContainerChannel< 9>()) { processFix< 9>(ptr, data); break; }
+		case 10: if constexpr (allowFrameContainerChannel<10>()) { processFix<10>(ptr, data); break; }
+		case 11: if constexpr (allowFrameContainerChannel<11>()) { processFix<11>(ptr, data); break; }
+		case 12: if constexpr (allowFrameContainerChannel<12>()) { processFix<12>(ptr, data); break; }
+		case 13: if constexpr (allowFrameContainerChannel<13>()) { processFix<13>(ptr, data); break; }
+		case 14: if constexpr (allowFrameContainerChannel<14>()) { processFix<14>(ptr, data); break; }
+		case 15: if constexpr (allowFrameContainerChannel<15>()) { processFix<15>(ptr, data); break; }
+		case 16: if constexpr (allowFrameContainerChannel<16>()) { processFix<16>(ptr, data); break; }
+		default: jassertfalse; // seems to have fallen through...
 		}
 	}
 };

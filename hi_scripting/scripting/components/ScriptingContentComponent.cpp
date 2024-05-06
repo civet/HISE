@@ -48,6 +48,7 @@ mod(m)
 
 ScriptContentComponent::ScriptContentComponent(ProcessorWithScriptingContent *p_) :
 	AsyncValueTreePropertyListener(p_->getScriptingContent()->getContentProperties(), p_->getScriptingContent()->getUpdateDispatcher()),
+	updater(*this, dynamic_cast<Processor*>(p_)),
 	contentRebuildNotifier(*this),
 	modalOverlay(*this),
 	processor(p_),
@@ -58,13 +59,13 @@ ScriptContentComponent::ScriptContentComponent(ProcessorWithScriptingContent *p_
 
     setNewContent(processor->getScriptingContent());
 
-	setInterceptsMouseClicks(false, true);
+	setInterceptsMouseClicks(true, true);
 
     setWantsKeyboardFocus(true);
     
 	p->addDeleteListener(this);
 
-	p->addChangeListener(this);
+	OLD_PROCESSOR_DISPATCH(p->addChangeListener(this));
 	p->getMainController()->addScriptListener(this, true);
 
 	addChildComponent(modalOverlay);
@@ -72,6 +73,8 @@ ScriptContentComponent::ScriptContentComponent(ProcessorWithScriptingContent *p_
 
 ScriptContentComponent::~ScriptContentComponent()
 {
+
+
 	if (contentData.get() != nullptr)
 	{
 		for (int i = 0; i < contentData->getNumComponents(); i++)
@@ -85,12 +88,18 @@ ScriptContentComponent::~ScriptContentComponent()
 
 	if (p.get() != nullptr)
 	{
+        SUSPEND_GLOBAL_DISPATCH(p->getMainController(), "delete scripting UI");
+        
 		p->getMainController()->removeScriptListener(this);
-		p->removeChangeListener(this);
+		OLD_PROCESSOR_DISPATCH(p->removeChangeListener(this));
 		p->removeDeleteListener(this);
-	};
-
-	componentWrappers.clear();
+        
+        componentWrappers.clear();
+	}
+    else
+    {
+        componentWrappers.clear();
+    }
 }
 
 
@@ -111,13 +120,13 @@ void ScriptContentComponent::refreshMacroIndexes()
 			MacroControlBroadcaster::MacroControlledParameterData * pData = mcb->getMacroControlData(macroIndex)->getParameterWithProcessorAndIndex(p, i);
 
 			// Check if the name matches
-			if(pData->getParameterName() != componentWrappers[i]->getComponent()->getName())
+			if(pData->getParameterName() != componentWrappers[i]->getScriptComponent()->getName().toString())
 			{
 				const String x = pData->getParameterName();
 
 				mcb->getMacroControlData(macroIndex)->removeParameter(x);
 
-				p->getMainController()->getMacroManager().getMacroChain()->sendChangeMessage();
+				p->getMainController()->getMacroManager().getMacroChain()->sendOtherChangeMessage(dispatch::library::ProcessorChangeEvent::Macro);
 
 				debugToConsole(p, "Index mismatch: Removed Macro Control for " + x);
 			}
@@ -186,14 +195,6 @@ void ScriptContentComponent::changeListenerCallback(SafeChangeBroadcaster *b)
 	{
 		setEnabled(false);
 	}
-
-	if (p == b)
-	{
-#if USE_BACKEND
-		updateValues();
-#endif
-	}
-	
 	else if (auto sc = dynamic_cast<ScriptingApi::Content::ScriptComponent*>(b))
 	{
 		auto index = contentData->getComponentIndex(sc->name);
@@ -208,7 +209,7 @@ void ScriptContentComponent::changeListenerCallback(SafeChangeBroadcaster *b)
 	}
 	else
 	{
-		updateContent();
+		OLD_PROCESSOR_DISPATCH(updateContent());
 	}
 }
 
@@ -391,6 +392,73 @@ void ScriptContentComponent::setModalPopup(ScriptCreatedComponentWrapper* wrappe
 		modalOverlay.closeModalPopup();
 }
 
+bool ScriptContentComponent::onDragAction(DragAction a, ScriptComponent* source, var& data)
+{
+	if (a == ScriptingApi::Content::RebuildListener::DragAction::Start)
+	{
+		if (currentDragInfo == nullptr)
+		{
+			currentDragInfo = new ComponentDragInfo(this, source, data);
+
+			for (auto cw : componentWrappers)
+			{
+				if (cw->getScriptComponent() == source)
+				{
+					currentDragInfo->start(cw->getComponent());
+				}
+			}
+
+			return true;
+		}
+	}
+	if (a == ScriptingApi::Content::RebuildListener::DragAction::Repaint)
+	{
+		currentDragInfo->callRepaint();
+		return true;
+	}
+	if (a == ScriptingApi::Content::RebuildListener::DragAction::Query)
+	{
+		if (currentDragInfo == nullptr)
+			return false;
+
+		return currentDragInfo->getCurrentComponent(false, data);
+	}
+
+	return false;
+}
+
+void ScriptContentComponent::itemDropped(const SourceDetails& dragSourceDetails)
+{
+	if (isDragAndDropActive() && currentDragInfo != nullptr)
+	{
+		currentDragInfo->stop();
+		currentDragInfo = nullptr;
+	}
+}
+
+bool ScriptContentComponent::isInterestedInDragSource(const SourceDetails& dragSourceDetails)
+{
+	if (isDragAndDropActive() && currentDragInfo != nullptr)
+	{
+		var obj;
+
+		if (!currentDragInfo->dragTargetChanged())
+			return currentDragInfo->isValid(false);
+
+		return currentDragInfo->isValid(true);
+	}
+
+	return false;
+}
+
+void ScriptContentComponent::dragOperationEnded(const DragAndDropTarget::SourceDetails& dragData)
+{
+	if (currentDragInfo != nullptr && !currentDragInfo->stopped)
+		currentDragInfo->stop();
+
+	currentDragInfo = nullptr;
+}
+
 void ScriptContentComponent::scriptWasCompiled(JavascriptProcessor *jp)
 {
 	if (jp == getScriptProcessor())
@@ -455,18 +523,49 @@ void ScriptContentComponent::prepareScreenshot()
 void ScriptContentComponent::contentWasRebuilt()
 {
 	contentRebuildNotifier.notify(processor->getScriptingContent());
+
+	setWantsKeyboardFocus(processor->getScriptingContent()->hasKeyPressCallbacks());
 }
 
 
 
 void ScriptContentComponent::setNewContent(ScriptingApi::Content *c)
 {
+	SUSPEND_GLOBAL_DISPATCH(p->getMainController(), "rebuild scripting UI");
+
 	if (c == nullptr) return;
 
+	currentTextBox = nullptr;
 	contentData = c;
 
 	deleteAllScriptComponents();
 
+    contentData->textInputBroadcaster.addListener(*this, [](ScriptContentComponent& c, ScriptingApi::Content::TextInputDataBase::Ptr ptr)
+    {
+		c.currentTextBox = ptr;
+
+        if(ptr == nullptr || ptr->done)
+            return;
+        
+        Component* comp = &c;
+        
+        if(ptr->parentId.isNotEmpty())
+        {
+            Identifier pid(ptr->parentId);
+            
+            for(int i = 0; i < c.componentWrappers.size(); i++)
+            {
+                if(c.componentWrappers[i]->getScriptComponent()->getName() == pid)
+                {
+                    comp = c.componentWrappers[i]->getComponent();
+                    break;
+                }
+            }
+        }
+        
+        ptr->show(comp);
+    });
+    
 	valuePopupProperties = new ScriptCreatedComponentWrapper::ValuePopup::Properties(p->getMainController(), c->getValuePopupProperties());
 
 	for (int i = 0; i < contentData->components.size(); i++)
@@ -545,8 +644,14 @@ void ScriptContentComponent::refreshContentButton()
 
 }
 
-bool ScriptContentComponent::keyPressed(const KeyPress &/*key*/)
+bool ScriptContentComponent::keyPressed(const KeyPress& k)
 {
+	if(contentData != nullptr && contentData->hasKeyPressCallbacks())
+	{
+		if(contentData->handleKeyPress(k))
+			return true;
+	}
+
 	return false;
 }
 
@@ -558,8 +663,9 @@ void ScriptContentComponent::processorDeleted(Processor* /*deletedProcessor*/)
 
 void ScriptContentComponent::paint(Graphics &g)
 {
-	if(findParentComponentOfClass<FloatingTilePopup>() == nullptr)
-		g.fillAll(JUCE_LIVE_CONSTANT_OFF(Colour(0xff252525)));
+	TRACE_COMPONENT();
+
+	g.fillAll(JUCE_LIVE_CONSTANT_OFF(Colour(0xff252525)));
 }
 
 void ScriptContentComponent::paintOverChildren(Graphics& g)
@@ -587,7 +693,19 @@ void ScriptContentComponent::paintOverChildren(Graphics& g)
 				ug.draw1PxRect(vg.area);
 		}
 	}
+
+	if(processor->simulatedSuspensionState)
+	{
+		g.fillAll(Colours::black.withAlpha(0.8f));
+		g.setColour(Colours::white);
+		g.setFont(GLOBAL_BOLD_FONT());
+		g.drawText("Suspended...", 0, 0, getWidth(), getHeight(), Justification::centred, false);
+		return;
+	}
+
 #endif
+
+	
 
 	if (isRebuilding)
 	{
@@ -800,5 +918,271 @@ std::vector<Component*> ScriptContentComponent::SimpleTraverser::getAllComponent
 {
 	return {};
 }
+
+ScriptContentComponent::ComponentDragInfo::ComponentDragInfo(ScriptContentComponent* parent_, ScriptComponent* sc, const var& dragData_):
+	ControlledObject(sc->getScriptProcessor()->getMainController_()),
+	parent(*parent_),
+	paintRoutine(sc->getScriptProcessor(), nullptr, dragData_["paintRoutine"], 2),
+	dragCallback(sc->getScriptProcessor(), nullptr, dragData_["dragCallback"], 1),
+	scriptComponent(sc),
+	dragData(dragData_)
+{
+	if (!paintRoutine)
+	{
+		debugError(dynamic_cast<Processor*>(sc->getScriptProcessor()), "dragData must have a paintRoutine property");
+		return;
+	}
+
+	if (!dragCallback)
+	{
+		debugError(dynamic_cast<Processor*>(sc->getScriptProcessor()), "dragData must have a paintRoutine property");
+		return;
+	}
+
+	graphicsObject = var(new ScriptingObjects::GraphicsObject(sc->getScriptProcessor(), sc));
+
+	paintRoutine.incRefCount();
+	paintRoutine.setThisObject(sc);
+
+	dragCallback.incRefCount();
+	dragCallback.setThisObject(sc);
+
+	dynamic_cast<ScriptingObjects::GraphicsObject*>(graphicsObject.getObject())->getDrawHandler().addDrawActionListener(this);
+
+	//startDragging(obj, nullptr,);
+}
+
+ScriptContentComponent::ComponentDragInfo::~ComponentDragInfo()
+{
+	paintRoutine.clear();
+	dragCallback.clear();
+	dragData = var();
+}
+
+juce::ScaledImage ScriptContentComponent::ComponentDragInfo::getDragImage(bool refresh)
+{
+	if (!refresh && img.getImage().isValid())
+		return img;
+
+	jassert(MessageManager::getInstance()->isThisTheMessageThread());
+
+	auto sc = dynamic_cast<ScriptComponent*>(scriptComponent.getObject());
+
+	Rectangle<int> imgArea;
+	auto r = Result::ok();
+
+	if (dragData.hasProperty("area"))
+		imgArea = ApiHelpers::getRectangleFromVar(dragData["area"], &r).toNearestInt();
+	else
+		imgArea = ApiHelpers::getRectangleFromVar(sc->getLocalBounds(0), &r).toNearestInt();
+
+	auto sf = UnblurryGraphics::getScaleFactorForComponent(source);
+
+	auto img_ = Image(Image::PixelFormat::ARGB, imgArea.getWidth() * sf, imgArea.getHeight() * sf, true);
+
+	DrawActions::Handler::Iterator it(&dynamic_cast<ScriptingObjects::GraphicsObject*>(graphicsObject.getObject())->getDrawHandler());
+
+	
+
+	Graphics g(img_);
+	g.addTransform(AffineTransform::scale(sf));
+
+	while (auto a = it.getNextAction())
+	{
+		a->perform(g);
+	}
+
+	img = ScaledImage(img_, sf);
+
+	return img;
+}
+
+void ScriptContentComponent::ComponentDragInfo::stop()
+{
+	dummyComponent = nullptr;
+	
+	var args[2];
+	args[0] = isValid(false);
+	args[1] = currentDragTarget;
+
+	dragCallback.call(args, 2);
+
+	currentDragTarget = {};
+
+	if (currentTargetComponent != nullptr)
+	{
+		var sc(currentTargetComponent);
+
+		MessageManager::callAsync([sc]()
+		{
+			dynamic_cast<ScriptComponent*>(sc.getObject())->sendRepaintMessage();
+		});
+	}
+	
+	stopped = true;
+}
+
+bool ScriptContentComponent::ComponentDragInfo::dragTargetChanged()
+{
+	auto lastTarget = currentTargetComponent;
+
+	var obj;
+	getCurrentComponent(true, obj);
+
+	return lastTarget != currentTargetComponent;
+}
+
+bool ScriptContentComponent::ComponentDragInfo::getCurrentComponent(bool force, var& data)
+{
+	if (!parent.isDragAndDropActive())
+		return false;
+
+	if (!force && currentDragTarget.isNotEmpty())
+	{
+		data = var(currentDragTarget);
+		return true;
+	}
+
+	auto screenPos = Desktop::getInstance().getMainMouseSource().getScreenPosition();
+	auto localPos = parent.getLocalPoint(nullptr, screenPos).roundToInt();
+
+	currentDragTarget = {};
+	
+
+	for (int i = parent.componentWrappers.size() - 1; i >= 0; i--)
+	{
+		auto c = parent.componentWrappers[i];
+
+		if (!c->getComponent()->isShowing())
+			continue;
+
+		auto b = c->getComponent()->getLocalBounds();
+		if (parent.getLocalArea(c->getComponent(), b).contains(localPos))
+		{
+			auto newTargetComponent = c->getScriptComponent();
+
+			if (currentTargetComponent != newTargetComponent)
+			{
+				if(currentTargetComponent != nullptr)
+					currentTargetComponent->sendRepaintMessage();
+
+				currentTargetComponent = newTargetComponent;
+				
+				currentTargetComponent->sendRepaintMessage();
+				
+			}
+
+			currentDragTarget = currentTargetComponent->getId();
+			data = var(currentDragTarget);
+				
+			return true;
+		}
+	}
+
+	if (currentTargetComponent != nullptr)
+		currentTargetComponent->sendRepaintMessage();
+
+	currentTargetComponent = nullptr;
+
+	validTarget = false;
+	return false;
+}
+
+bool ScriptContentComponent::ComponentDragInfo::isValid(bool force)
+{
+	if (!force)
+	{
+		return validTarget;
+	}
+	
+	var enabled(true);
+
+	auto vf = dragData["isValid"];
+
+	if (HiseJavascriptEngine::isJavascriptFunction(vf))
+	{
+		LockHelpers::SafeLock sl(getMainController(), LockHelpers::Type::ScriptLock);
+		
+		auto sc = dynamic_cast<ScriptComponent*>(scriptComponent.getObject());
+		WeakCallbackHolder wc(sc->getScriptProcessor(), nullptr, vf, 1);
+		wc.incRefCount();
+		wc.setThisObject(sc);
+		var ct(currentDragTarget);
+		wc.callSync(&ct, 1, &enabled);
+	}
+
+	if (currentTargetComponent != nullptr)
+		currentTargetComponent->sendRepaintMessage();
+
+	validTarget = (bool)enabled;
+	return validTarget;
+}
+
+void ScriptContentComponent::ComponentDragInfo::callRepaint()
+{
+	if (paintRoutine)
+	{
+		jassert(source != nullptr);
+		jassert(!MessageManager::getInstance()->isThisTheMessageThread());
+		jassert(getMainController()->getKillStateHandler().getCurrentThread() == MainController::KillStateHandler::TargetThread::ScriptingThread);
+
+		auto area = ApiHelpers::getRectangleFromVar(dragData["area"], nullptr);
+
+		auto sc = dynamic_cast<ScriptComponent*>(scriptComponent.getObject());
+
+		auto thisObj = new DynamicObject();
+
+		if (area.isEmpty())
+			thisObj->setProperty("area", sc->getLocalBounds(0));
+		else
+			thisObj->setProperty("area", ApiHelpers::getVarRectangle(area.withPosition({}).toFloat()));
+
+		thisObj->setProperty("source", sc->getId());
+		thisObj->setProperty("target", currentDragTarget);
+		thisObj->setProperty("valid", isValid(false));
+
+		var args[2] = { graphicsObject, var(thisObj) };
+
+		paintRoutine.callSync(args, 2, nullptr);
+
+		auto handler = &dynamic_cast<ScriptingObjects::GraphicsObject*>(graphicsObject.getObject())->getDrawHandler();
+		handler->flush(0);
+	}
+}
+
+void ScriptContentComponent::ComponentDragInfo::newPaintActionsAvailable(uint64_t)
+{
+	if (!parent.isDragAndDropActive())
+	{
+		Point<int> o;
+		Point<int>* offset = nullptr;
+
+		if (dragData.hasProperty("offset"))
+		{
+			auto r = Result::ok();
+			o = ApiHelpers::getPointFromVar(dragData["offset"], &r).toInt();
+
+			if (r.wasOk())
+				offset = &o;
+		}
+
+		auto customArea = ApiHelpers::getIntRectangleFromVar(dragData["area"]);
+
+		auto cToUse = source;
+
+		if (!customArea.isEmpty())
+		{
+			source->addChildComponent(dummyComponent = new Component());
+			dummyComponent->setBounds(customArea);
+			cToUse = dummyComponent.get();
+		}
+
+		parent.startDragging(dragData, cToUse, getDragImage(true), false, offset);
+	}
+	else
+		parent.setCurrentDragImage(getDragImage(true));
+}
+
+
 
 } // namespace hise

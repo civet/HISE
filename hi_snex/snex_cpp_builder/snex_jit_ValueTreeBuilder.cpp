@@ -118,6 +118,17 @@ struct CloneHelpers
     }
 };
 
+void ValueTreeBuilder::checkUnflushed(Node::Ptr n)
+{
+    if(n->isFlushed())
+    {
+        Error e;
+        e.v = n->nodeTree;
+        e.errorMessage << "Trying to wrap node that was already flushed";
+        throw e;
+    }
+}
+
 Result ValueTreeBuilder::cleanValueTreeIds(ValueTree& vToClean)
 {
     Array<Identifier> existingIds;
@@ -125,7 +136,7 @@ Result ValueTreeBuilder::cleanValueTreeIds(ValueTree& vToClean)
     auto r = Result::ok();
     auto rptr = &r;
     
-	ValueTreeIterator::forEach(vToClean, ValueTreeIterator::ChildrenFirst, [&existingIds, rptr](ValueTree& c)
+	ValueTreeIterator::forEach(vToClean, [&existingIds, rptr](ValueTree& c)
 	{
 		static const Array<Identifier> idsToClean = { PropertyIds::ID, PropertyIds::NodeId, PropertyIds::ParameterId };
 
@@ -157,7 +168,7 @@ Result ValueTreeBuilder::cleanValueTreeIds(ValueTree& vToClean)
 		}
 
 		return false;
-	});
+	}, ValueTreeIterator::IterationType::ChildrenFirst);
     
     return r;
 }
@@ -292,9 +303,7 @@ String ValueTreeBuilder::getGlueCode(ValueTreeBuilder::FormatGlueCode c)
 			addEmptyLine();
 
 
-			Include(*this, "JuceHeader.h");
-            
-            ValueTreeIterator::forEach(v, ValueTreeIterator::Forward, [this](ValueTree& c)
+			ValueTreeIterator::forEach(v, [this](ValueTree& c)
             {
                 if(c.getType() == PropertyIds::Node)
                 {
@@ -473,7 +482,37 @@ Node::Ptr ValueTreeBuilder::parseFaustNode(Node::Ptr u)
 		DBG("Exporting faust scriptnode, class: " + faustClass);
 	}
 		
-	return parseRoutingNode(u);
+	return parseRuntimeTargetNode(u);
+}
+
+Node::Ptr ValueTreeBuilder::parseRuntimeTargetNode(Node::Ptr u)
+{
+    if(ValueTreeIterator::isRuntimeTargetNode(u->nodeTree))
+    {
+        NamespacedIdentifier indexClass;
+        
+        auto mid = getNodeId(u->nodeTree).getIdentifier().toString();
+
+        mid << "_index";
+        
+        if(CustomNodeProperties::nodeHasProperty(u->nodeTree, PropertyIds::IsFixRuntimeTarget))
+        {
+            indexClass = NamespacedIdentifier::fromString("runtime_target::indexers::fix_hash");
+            
+            auto hashCode = ValueTreeIterator::getFixRuntimeHash(u->nodeTree);
+            
+            UsingTemplate idx(*this, mid, indexClass);
+            
+            idx << hashCode;
+        
+            idx.flushIfNot();
+            
+            *u << idx;
+        }
+        
+    }
+    
+    return parseRoutingNode(u);
 }
 
 Node::Ptr ValueTreeBuilder::parseRoutingNode(Node::Ptr u)
@@ -711,6 +750,8 @@ Node::Ptr ValueTreeBuilder::parseContainer(Node::Ptr u)
 			pooledTypeDefinitions.add(childNode);
         }
 
+		
+
 		parseContainerParameters(u);
 		parseContainerChildren(u);
 
@@ -733,7 +774,7 @@ Node::Ptr ValueTreeBuilder::parseContainer(Node::Ptr u)
 		{
 			auto smoothingTime = (int)ValueTreeIterator::getNodeProperty(u->nodeTree, PropertyIds::SmoothingTime);
 
-			if (smoothingTime == 0)
+			if (smoothingTime == -1)
 				smoothingTime = 20;
 
 			u = wrapNode(u, NamespacedIdentifier::fromString("bypass::smoothed"), smoothingTime);
@@ -778,6 +819,11 @@ Node::Ptr ValueTreeBuilder::parseContainer(Node::Ptr u)
 			auto os = realPath.fromFirstOccurrenceOf("oversample", false, false).getIntValue();
 			u = wrapNode(u, NamespacedIdentifier::fromString("wrap::oversample"), os);
 		}
+		if(useSpecialWrapper && realPath.startsWith("repitch"))
+		{
+			u = wrapNode(u, NamespacedIdentifier::fromString("wrap::repitch"));
+			*u << "interpolators::dynamic";
+		}
 
         jassert(u->nodeTree.isValid());
 		jassert(!u->isFlushed());
@@ -801,11 +847,129 @@ Node::Ptr ValueTreeBuilder::parseContainer(Node::Ptr u)
 
 Node::Ptr ValueTreeBuilder::parseCloneContainer(Node::Ptr u)
 {
-    auto v = u->nodeTree;
-    auto pTree = v.getChildWithName(PropertyIds::Parameters);
-    auto nTree = v.getChildWithName(PropertyIds::Nodes);
+	
+
+	
+
+    auto ct = u->nodeTree;
+    auto pTree = ct.getChildWithName(PropertyIds::Parameters);
+    auto nTree = ct.getChildWithName(PropertyIds::Nodes);
     
 	auto hasNumCloneAutomation = (bool)pTree.getChild(0)[PropertyIds::Automated];
+
+	auto clone_ptree = pTree.getChildWithProperty(PropertyIds::ID, "NumClones");
+
+
+	auto cloneRange = RangeHelpers::getDoubleRange(clone_ptree);
+	auto numStaticClones = clone_ptree[PropertyIds::Automated] ? -1 : (int)clone_ptree[PropertyIds::Value];
+
+	// Check all `control.clone_cable` nodes if they are connected to a child node of this clone container
+	// and verify that the NumClones parameter has the same range as the NumClones parameter
+	// of this clone container
+	ValueTreeIterator::forEach(v, [cloneRange, nTree, numStaticClones](ValueTree& tree)
+	{
+		auto path = tree[PropertyIds::FactoryPath].toString();
+
+		if (path == "control.clone_cable" || path == "control.clone_forward")
+		{
+			for (auto m : tree.getChildWithName(PropertyIds::ModulationTargets))
+			{
+				auto targetNodeId = m[PropertyIds::NodeId];
+
+				auto targetIsChild = ValueTreeIterator::forEach(nTree, [targetNodeId](ValueTree& tree)
+				{
+					if (tree.getType() == PropertyIds::Node)
+						return tree[PropertyIds::ID] == targetNodeId;
+
+					return false;
+				});
+
+				if (targetIsChild)
+				{
+					auto cableP = tree.getChildWithName(PropertyIds::Parameters).getChildWithProperty(PropertyIds::ID, "NumClones");
+
+					auto cableRange = RangeHelpers::getDoubleRange(cableP);
+
+					int numStaticCableClones = cableP[PropertyIds::Automated] ? -1 : (int)cableP[PropertyIds::Value];
+
+					if(numStaticClones != numStaticCableClones)
+					{
+						Error e;
+						e.errorMessage = "Clone node sanity check failed: ";
+
+						auto cableId = tree[PropertyIds::ID].toString();
+
+						if(numStaticClones == -1 && numStaticCableClones != -1)
+						{
+							e.errorMessage << "\n> `Container.NumClones` is automated but `" << cableId << ".NumClones` is static.";
+						}
+						else if (numStaticClones == -1 && numStaticCableClones != -1)
+						{
+							e.errorMessage << "\n> `Container.NumClones` is static but `" << cableId << ".NumClones` is automated.";
+						}
+						else
+						{
+							e.errorMessage << "`NumClones mismatch between clone container and cable`";
+							e.errorMessage << "\n- `" << cableId << ".NumClones` = " << (numStaticCableClones == -1 ? String("Automated") : String(numStaticCableClones));
+							e.errorMessage << "\n- `Container.NumClones` = " << (numStaticClones == -1 ? String("Automated") : String(numStaticClones));
+						}
+
+						
+						
+						e.v = nTree;
+						throw e;
+					}
+
+					if (numStaticClones == -1 && !RangeHelpers::isEqual(cableRange, cloneRange))
+					{
+						Error e;
+						e.errorMessage = "Clone node sanity check failed: range mismatch between clone container and clone cable";
+						e.errorMessage << "`" << RangeHelpers::toDisplayString(cableRange) << "` vs. `" << RangeHelpers::toDisplayString(cloneRange) << "`";
+						e.v = nTree;
+						throw e;
+					}
+				}
+			}
+		}
+
+		return false;
+	});
+
+	if (hasNumCloneAutomation)
+	{
+		for (auto p : v.getChildWithName(PropertyIds::Parameters))
+		{
+			auto cTree = p.getChildWithName(PropertyIds::Connections);
+
+			auto c = cTree.getChildWithProperty(PropertyIds::NodeId, ct[PropertyIds::ID]);
+
+			if (c.isValid())
+			{
+				auto parameterRange = RangeHelpers::getDoubleRange(p);
+
+				
+
+				if (!RangeHelpers::isEqual(parameterRange, cloneRange))
+				{
+					Error e;
+					e.errorMessage = "Clone node sanity check failed: range mismatch at automated parameter";
+					e.errorMessage << "`" << RangeHelpers::toDisplayString(parameterRange) << "` vs. `" << RangeHelpers::toDisplayString(cloneRange) << "`";
+					e.v = u->nodeTree;
+					throw e;
+				}
+
+				if (cTree.indexOf(c) != 0)
+				{
+					Error e;
+					e.errorMessage = "Clone node sanity check failed: NumClones must be first target in root parameter";
+					e.v = u->nodeTree;
+					throw e;
+				}
+			}
+		}
+
+		
+	}
 
 	auto processType = (CloneProcessType)(int)pTree.getChild(1)[PropertyIds::Value];
 
@@ -892,7 +1056,7 @@ void ValueTreeBuilder::parseContainerChildren(Node::Ptr container)
     
 	bool isMulti = FactoryIds::isMulti(getNodePath(container->nodeTree));
 
-	ValueTreeIterator::forEach(nodeTree, ValueTreeIterator::OnlyChildren, [&](ValueTree& c)
+	ValueTreeIterator::forEach(nodeTree, [&](ValueTree& c)
 	{
 		auto parentPath = getNodePath(ValueTreeIterator::findParentWithType(c, PropertyIds::Node));
 
@@ -907,7 +1071,7 @@ void ValueTreeBuilder::parseContainerChildren(Node::Ptr container)
 			children.add(getNode(c, false));
 
 		return false;
-	});
+	}, ValueTreeIterator::IterationType::OnlyChildren);
 
 	if (children.isEmpty())
 	{
@@ -929,6 +1093,12 @@ void ValueTreeBuilder::parseContainerChildren(Node::Ptr container)
 
 void ValueTreeBuilder::parseContainerParameters(Node::Ptr c)
 {
+	if(ValueTreeIterator::isContainerWithFixedParameters(c->nodeTree))
+	{
+		*c << "parameter::empty";
+		return;
+	}
+	
 	addEmptyLine();
 
 	auto pTree = c->nodeTree.getChildWithName(PropertyIds::Parameters);
@@ -1143,8 +1313,11 @@ PooledParameter::Ptr ValueTreeBuilder::parseParameter(const ValueTree& p, Connec
 		bool isPoly = false;
 
 		int cIndex = 0;
+
 		for (auto& c : chainList)
 		{
+			ScopedValueSetter<bool> svs(allowPlainParameterChild, !unEqualRange);
+
 			if (c.n == nullptr)
 			{
 				jassertfalse;
@@ -1177,7 +1350,7 @@ PooledParameter::Ptr ValueTreeBuilder::parseParameter(const ValueTree& p, Connec
 Node::Ptr ValueTreeBuilder::wrapNode(Node::Ptr u, const NamespacedIdentifier& wrapId, int firstIntParam)
 {
 	// The id is already used by the wrapped node...
-	jassert(!u->isFlushed());
+    checkUnflushed(u);
 
 	Node::Ptr wn = new Node(*this, u->scopedId.id, wrapId);
 
@@ -1228,7 +1401,9 @@ Connection ValueTreeBuilder::getConnection(const ValueTree& c)
 
 	rc.expressionCode = c[PropertyIds::Expression].toString();
 
-	ValueTreeIterator::forEach(v, ValueTreeIterator::Forward, [&](ValueTree& t)
+    auto connectionTree = c;
+    
+	ValueTreeIterator::forEach(v, [&](ValueTree& t)
 	{
 		if (t.getType() == PropertyIds::Node)
 		{
@@ -1257,7 +1432,7 @@ Connection ValueTreeBuilder::getConnection(const ValueTree& c)
 					auto root = ValueTreeIterator::getRoot(t);
 					auto numChannelsToUse = rootChannelAmount;
 
-					ValueTreeIterator::forEach(root, ValueTreeIterator::Forward, [&](ValueTree& c)
+					ValueTreeIterator::forEach(root, [&](ValueTree& c)
 					{
 						if (FactoryIds::isContainer(getNodePath(c)) && ValueTreeIterator::isParent(t, c))
 							numChannelsToUse = ValueTreeIterator::calculateChannelCount(c, numChannelsToUse);
@@ -1268,6 +1443,16 @@ Connection ValueTreeBuilder::getConnection(const ValueTree& c)
 						return false;
 					});
 
+                    if(valuetree::Helpers::isParent(connectionTree, t))
+                    {
+                        Error e;
+                        e.errorMessage = "Recursion in Parameter connection detected: You must not connect a modulation output to a parameter of its parent container.\n";
+                        e.errorMessage << "> `" << t["ID"].toString() << ".";
+                        e.errorMessage << pId << "`";
+                        e.v = t;
+                        throw e;
+                    }
+                    
 					// We allow setting a higher channel count here because the node is not necessarily
 					// inside the current channel container
 					ScopedChannelSetter svs(*this, numChannelsToUse, true);
@@ -1369,8 +1554,6 @@ Node::Ptr ValueTreeBuilder::parseMod(Node::Ptr u)
 		u->addOptionalModeTemplate();
 	}
 
-	addNodeComment(u);
-
 	return parseComplexDataNode(u);
 }
 
@@ -1412,10 +1595,10 @@ snex::cppgen::PooledParameter::Ptr ValueTreeBuilder::createParameterFromConnecti
 		p << "_" << parameterIndexInChain;
 
 
-	if (!c)
+	if (!c || c.index == -1)
 	{
 		Error e;
-		e.errorMessage = "Can't find connection for " + pName.toString();
+		e.errorMessage << "Can't find connection for " << pName.toString() << "\n> Make sure to save the network after you've added Faust or SNEX nodes so that all parameters are saved into the network XML.";
 		throw e;
 	}
 
@@ -1511,7 +1694,7 @@ snex::cppgen::PooledParameter::Ptr ValueTreeBuilder::createParameterFromConnecti
 
 		auto useNormalisedMod = CustomNodeProperties::nodeHasProperty(pTree, PropertyIds::UseUnnormalisedModulation);
 
-		if (RangeHelpers::isEqual(tr, sr) || useNormalisedMod && !c.targetRange.inv)
+		if (allowPlainParameterChild && (RangeHelpers::isEqual(tr, sr) || useNormalisedMod) && !tr.inv)
 		{
 			// skip both ranges and just pass on the parameter;
 			auto up = makeParameter(p, "plain", c);
@@ -1566,85 +1749,16 @@ NamespacedIdentifier ValueTreeBuilder::getNodeVariable(const ValueTree& n)
 	return getCurrentScope().getChildId(typeId);
 }
 
-bool ValueTreeIterator::isBetween(IterationType l, IterationType u, IterationType v)
+
+bool ValueTreeIterator::fixCppIllegalCppKeyword(String& s)
 {
-	return v >= l && v <= u;
-}
-
-bool ValueTreeIterator::isBackwards(IterationType t)
-{
-	return t == Backwards || t == ChildrenFirstBackwards || t == OnlyChildrenBackwards;
-}
-
-bool ValueTreeIterator::isRecursive(IterationType t)
-{
-	return !isBetween(OnlyChildren, OnlyChildrenBackwards, t);
-}
-
-bool ValueTreeIterator::forEach(ValueTree v, IterationType type, const std::function<bool(ValueTree& v)>& f)
-{
-	if (isBetween(Forward, Backwards, type))
+	if (s == "switch")
 	{
-		if (f(v))
-			return true;
-	}
-
-	if (isBackwards(type))
-	{
-		for (int i = v.getNumChildren() - 1; i >= 0; i--)
-		{
-			if (isRecursive(type))
-			{
-				if (forEach(v.getChild(i), type, f))
-					return true;
-			}
-			else
-			{
-                auto c = v.getChild(i);
-				if (f(c))
-					return true;
-			}
-		}
-	}
-	else
-	{
-		for (auto c : v)
-		{
-			if (isRecursive(type))
-			{
-				if (forEach(c, type, f))
-					return true;
-			}
-			else
-			{
-				if (f(c))
-					return true;
-			}
-		}
-	}
-
-	if (isBetween(ChildrenFirst, ChildrenFirstBackwards, type))
-	{
-		if (f(v))
-			return true;
+		s = "switcher";
+		return true;
 	}
 
 	return false;
-}
-
-
-
-bool ValueTreeIterator::forEachParent(ValueTree& v, const Func& f)
-{
-	if (!v.isValid())
-		return false;
-
-	if (f(v))
-		return true;
-
-    
-    auto p = v.getParent();
-	return forEachParent(p, f);
 }
 
 bool ValueTreeIterator::needsModulationWrapper(ValueTree& v)
@@ -1716,6 +1830,35 @@ juce::var ValueTreeIterator::getNodeProperty(const ValueTree& nodeTree, const Id
 	return propTree.getChildWithProperty(PropertyIds::ID, id.toString())[PropertyIds::Value];
 }
 
+int ValueTreeIterator::getFixRuntimeHash(const ValueTree &nodeTree)
+{
+    auto path = getNodeFactoryPath(nodeTree);
+    
+    if(path == NamespacedIdentifier::fromString("routing::global_cable"))
+    {
+        auto c = getNodeProperty(nodeTree, PropertyIds::Connection).toString();
+        return c.hashCode();
+    }
+    if(path == NamespacedIdentifier::fromString("math::neural"))
+    {
+        auto c = getNodeProperty(nodeTree, PropertyIds::Model).toString();
+        return c.hashCode();
+    }
+    
+    jassertfalse;
+    return 0;
+    
+
+}
+
+bool ValueTreeIterator::isRuntimeTargetNode(const ValueTree& nodeTree)
+{
+    auto fix = CustomNodeProperties::nodeHasProperty(nodeTree, PropertyIds::IsFixRuntimeTarget);
+    auto dy = CustomNodeProperties::nodeHasProperty(nodeTree, PropertyIds::IsDynamicRuntimeTarget);
+    
+    return fix || dy;
+}
+
 bool ValueTreeIterator::isComplexDataNode(const ValueTree& nodeTree)
 {
 	auto cTree = nodeTree.getChildWithName(PropertyIds::ComplexData);
@@ -1750,7 +1893,7 @@ int ValueTreeIterator::getMaxDataTypeIndex(const ValueTree& rootTree, ExternalDa
 {
 	int max = -1;
 
-	forEach(rootTree, Forward, [t, &max](ValueTree& v)
+	forEach(rootTree, [t, &max](ValueTree& v)
 	{
 		if (v.getType() == PropertyIds::Node)
 		{
@@ -1785,7 +1928,7 @@ bool ValueTreeIterator::isAutomated(const ValueTree& parameterTree)
 	auto pId = Identifier(parameterTree[PropertyIds::ID].toString());
 	auto nodeId = Identifier(findParentWithType(parameterTree, PropertyIds::Node)[PropertyIds::ID].toString());
 
-	return forEach(root, Forward, [pId, nodeId](ValueTree& v)
+	return forEach(root, [pId, nodeId](ValueTree& v)
 	{
 		if (v.getType() == PropertyIds::Connection || v.getType() == PropertyIds::ModulationTarget)
 		{
@@ -1823,8 +1966,9 @@ snex::NamespacedIdentifier ValueTreeIterator::getNodeFactoryPath(const ValueTree
 		auto isSplit = fId.id.toString() == "split";
 		auto isMulti = fId.id.toString() == "multi";
 		auto isClone = fId.id.toString() == "clone";
+		auto isBranch = fId.id.toString() == "branch";
 
-		if (!isSplit && !isMulti && !isClone)
+		if (!isSplit && !isMulti && !isClone && !isBranch)
 		{
 			return NamespacedIdentifier::fromString("container::chain");
 		}
@@ -1846,7 +1990,7 @@ juce::ValueTree ValueTreeIterator::getTargetParameterTree(const ValueTree& conne
 
 	ValueTree ptr;
 
-	forEach(getRoot(connectionTree), Forward, [&](ValueTree& v)
+	forEach(getRoot(connectionTree), [&](ValueTree& v)
 	{
 		if (v.getType() == PropertyIds::Parameter)
 		{
@@ -1885,27 +2029,38 @@ int ValueTreeIterator::calculateChannelCount(const ValueTree& nodeTree, int numC
 	return numCurrentChannels;
 }
 
+bool ValueTreeIterator::isContainerWithFixedParameters(const ValueTree& nodeTree)
+{
+	static const Array<Identifier> fixContainers =
+	{
+		"oversample",
+		"repitch",
+		"branch"
+	};
+
+	auto s = nodeTree[scriptnode::PropertyIds::FactoryPath].toString().replace(".", "::");
+	auto id = NamespacedIdentifier::fromString(s).id;
+	return fixContainers.contains(id);
+}
+
 bool ValueTreeIterator::hasChildNodeWithProperty(const ValueTree& nodeTree, Identifier propId)
 {
-	return forEach(nodeTree, ChildrenFirst, [propId](ValueTree& v)
+	return forEach(nodeTree, [propId](ValueTree& v)
 	{
 		if (v.getType() != PropertyIds::Node)
 			return false;
 
 		return CustomNodeProperties::nodeHasProperty(v, propId);
-	});
+	}, IterationType::ChildrenFirst);
 }
 
 snex::cppgen::Node::Ptr ValueTreeBuilder::RootContainerBuilder::parse()
 {
 	parent.addNumVoicesTemplate(root);
 
-	if (root->getLength() > 60)
-	{
-		root->scopedId = root->scopedId.getParent().getChildId(root->scopedId.getIdentifier().toString() + "_");
-		root->flushIfNot();
-		parent.addEmptyLine();
-	}
+    root->scopedId = root->scopedId.getParent().getChildId(root->scopedId.getIdentifier().toString() + "_");
+    root->flushIfNot();
+    parent.addEmptyLine();
 
 
 	nodeClassId = Identifier(parent.getGlueCode(FormatGlueCode::MainInstanceClass));
@@ -1968,6 +2123,17 @@ snex::cppgen::Node::Ptr ValueTreeBuilder::RootContainerBuilder::parse()
 			addDefaultParameters();
 		}
 
+		if(hasComplexTypes())
+		{
+			String f; f << "~" << nodeClassId << "() override";
+			parent << f;
+			{
+				StatementBlock sb(parent);
+				parent.addComment("Cleanup external data references", Base::CommentType::FillTo80Light);
+				parent << "this->setExternalData({}, -1);";
+			}
+		}
+
 		if (hasPolyData)
 		{
 			parent.addEmptyLine();
@@ -1980,9 +2146,6 @@ snex::cppgen::Node::Ptr ValueTreeBuilder::RootContainerBuilder::parse()
 			parent << "static constexpr bool isProcessingHiseEvent() { return true; };";
 		}
 
-		
-
-
 		{
 			auto hasTail = parent.v.getParent().getProperty(PropertyIds::HasTail, true);
 			parent.addEmptyLine();
@@ -1992,6 +2155,50 @@ snex::cppgen::Node::Ptr ValueTreeBuilder::RootContainerBuilder::parse()
 			parent << def;
 		}
 
+		{
+			auto isSuspendedOnSilence = parent.v.getParent().getProperty(PropertyIds::SuspendOnSilence, false);
+			parent.addEmptyLine();
+
+			String def;
+			def << "static constexpr bool isSuspendedOnSilence() { return " << (isSuspendedOnSilence ? "true" : "false") << "; };";
+			parent << def;
+		}
+
+        if(hasRuntimeTargets())
+        {
+            parent.addEmptyLine();
+
+            parent << "void connectToRuntimeTarget(bool addConnection, const runtime_target::connection& c)";
+
+            stackVariables.clear();
+
+            StatementBlock sb(parent);
+
+            parent.addComment("Runtime target Connections", Base::CommentType::FillTo80Light);
+
+            ValueTreeIterator::forEach(root->nodeTree.getChildWithName(PropertyIds::Nodes), [&](ValueTree& childNode)
+            {
+                if (childNode.getType() == PropertyIds::Node)
+                {
+                    if (ValueTreeIterator::isRuntimeTargetNode(childNode))
+                    {
+                        auto sv = getChildNodeAsStackVariable(childNode);
+
+                        String def;
+
+                        def << sv->toExpression() << ".connectToRuntimeTarget(addConnection, c);";
+
+                        parent << def;
+
+                        auto type = parent.getNode(childNode, false);
+                        parent.addComment(type->toExpression(), Base::CommentType::AlignOnSameLine);
+                    }
+                }
+
+                return false;
+            });
+        }
+        
 		if (hasComplexTypes())
 		{
 
@@ -2005,7 +2212,7 @@ snex::cppgen::Node::Ptr ValueTreeBuilder::RootContainerBuilder::parse()
 
 			parent.addComment("External Data Connections", Base::CommentType::FillTo80Light);
 
-			ValueTreeIterator::forEach(root->nodeTree.getChildWithName(PropertyIds::Nodes), ValueTreeIterator::Forward, [&](ValueTree& childNode)
+			ValueTreeIterator::forEach(root->nodeTree.getChildWithName(PropertyIds::Nodes), [&](ValueTree& childNode)
 			{
 				if (childNode.getType() == PropertyIds::Node)
 				{
@@ -2080,11 +2287,21 @@ void ValueTreeBuilder::RootContainerBuilder::addDefaultParameters()
 				// call would reset it otherwise.
 				if (p[PropertyIds::ID] == PropertyIds::NumClones.toString())
 				{
-					parent << ";";
-					comment << "" << np.getChildId(p[PropertyIds::ID].toString()).toString();
-					comment << " is deactivated";
-					parent.addComment(comment, Base::CommentType::AlignOnSameLine);
-					continue;
+					// The only exception are clone modes that have a fixed amount of num clones
+					// that will not be updated not update 
+
+					auto mode = ValueTreeIterator::getNodeProperty(sv->nodeTree, PropertyIds::Mode).toString().toLowerCase();
+					
+					auto shouldUpdate = mode.isNotEmpty() && duplilogic::Helpers::shouldUpdateNumClones(mode);
+
+					if(shouldUpdate)
+					{
+						parent << ";";
+						comment << "" << np.getChildId(p[PropertyIds::ID].toString()).toString();
+						comment << " is deactivated";
+						parent.addComment(comment, Base::CommentType::AlignOnSameLine);
+						continue;
+					}
 				}
 			}
 
@@ -2440,7 +2657,7 @@ void ValueTreeBuilder::RootContainerBuilder::addSendConnections()
 
 void ValueTreeBuilder::RootContainerBuilder::createStackVariablesForChildNodes()
 {
-	ValueTreeIterator::forEach(root->nodeTree.getChildWithName(PropertyIds::Nodes), ValueTreeIterator::Forward, [&](ValueTree& childNode)
+	ValueTreeIterator::forEach(root->nodeTree.getChildWithName(PropertyIds::Nodes), [&](ValueTree& childNode)
 	{
 		if (childNode.getType() == PropertyIds::Node)
 		{
@@ -2530,13 +2747,24 @@ snex::cppgen::Node::List ValueTreeBuilder::RootContainerBuilder::getContainersWi
 
 bool ValueTreeBuilder::RootContainerBuilder::hasComplexTypes() const
 {
-	return ValueTreeIterator::forEach(root->nodeTree, ValueTreeIterator::Forward, [](ValueTree& v)
+	return ValueTreeIterator::forEach(root->nodeTree, [](ValueTree& v)
 	{
 		if(ValueTreeIterator::isComplexDataNode(v))
 			return true;
 
 		return false;
 	});
+}
+
+bool ValueTreeBuilder::RootContainerBuilder::hasRuntimeTargets() const
+{
+    return ValueTreeIterator::forEach(root->nodeTree, [](ValueTree& v)
+    {
+        if(ValueTreeIterator::isRuntimeTargetNode(v))
+            return true;
+
+        return false;
+    });
 }
 
 PooledStackVariable::PooledStackVariable(Base& p, const ValueTree& nodeTree_) :
@@ -2560,7 +2788,7 @@ Node::Ptr ValueTreeBuilder::ComplexDataBuilder::parse()
 	auto numTables = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::Table);
 	auto numSliderPacks = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::SliderPack);
 	auto numAudioFiles = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::AudioFile);
-	auto numFilters = ValueTreeIterator::getMaxDataTypeIndex(n->nodeTree, ExternalData::DataType::FilterCoefficients);
+	auto numFilters = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::FilterCoefficients);
 	auto numDisplayBuffers = ValueTreeIterator::getNumDataTypes(n->nodeTree, ExternalData::DataType::DisplayBuffer);
 
 	bool isSingleData = (numTables + numSliderPacks + numAudioFiles + numFilters + numDisplayBuffers) == 1;
@@ -2738,7 +2966,12 @@ Node::Ptr ValueTreeBuilder::ComplexDataBuilder::parseExternalDataNode(ExternalDa
 	if (t == ExternalData::DataType::DisplayBuffer)
 		n = parseSingleDisplayBufferNode(true);
 
+    parent.checkUnflushed(n);
+    
+    
+    
 	Node::Ptr wn = new Node(parent, n->scopedId.id, NamespacedIdentifier("wrap::data"));
+    
 	wn->nodeTree = n->nodeTree;
 	NamespacedIdentifier edId = NamespacedIdentifier::fromString("data::external");
 	edId = edId.getChildId(ExternalData::getDataTypeName(t).toLowerCase());
@@ -2801,6 +3034,8 @@ Node::Ptr ValueTreeBuilder::ComplexDataBuilder::parseMatrixDataNode()
 	if (!needsMatrix(n->nodeTree))
 		return n;
 
+    parent.checkUnflushed(n);
+    
 	Node::Ptr wn = new Node(parent, n->scopedId.id, NamespacedIdentifier("wrap::data"));
 	wn->nodeTree = n->nodeTree;
 	NamespacedIdentifier edId = NamespacedIdentifier::fromString("data::matrix");

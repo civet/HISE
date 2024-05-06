@@ -209,6 +209,26 @@ void BackendProcessorEditor::clearPopup()
 	
 }
 
+void BackendProcessorEditor::refreshContainer(Processor* selectedProcessor)
+{
+	if (container != nullptr)
+	{
+		const int y = viewport->viewport->getViewPositionY();
+
+		setRootProcessor(container->getRootEditor()->getProcessor(), y);
+
+		ProcessorEditor::Iterator iter(getRootContainer()->getRootEditor());
+
+		while (ProcessorEditor *editor = iter.getNextEditor())
+		{
+			if (editor->getProcessor() == selectedProcessor)
+			{
+				editor->grabCopyAndPasteFocus();
+			}
+		}
+	}
+}
+
 void BackendProcessorEditor::scriptWasCompiled(JavascriptProcessor * /*sp*/)
 {
 	parentRootWindow->updateCommands();
@@ -333,7 +353,8 @@ MainTopBar::MainTopBar(FloatingTile* parent) :
 	FloatingTileContent(parent),
 	SimpleTimer(parent->getMainController()->getGlobalUIUpdater()),
 	PreloadListener(parent->getMainController()->getSampleManager()),
-	ComponentWithHelp(parent->getBackendRootWindow())
+	ComponentWithHelp(parent->getBackendRootWindow()),
+	quickPlayButton(parent->getMainController())
 {
     {
         static const String iconData = "1231.nT6K8C1XOzhI.Xiuo5BLOQw..FZHKonCfUDaflA5ZgT2fXIOnsCvqXzRIkTRIR6KqEMqoZZW3Jrm4X+CHC.l..H.Oux8tFOdxKC2FOm8bR3BooKRTgCDZTULUICVnHwzkHMMpHvGRSlhtHUAENTY5AEoJZHhhzjFQanxzEKVHMYhHnfhJThvD8HZBGlZLYhTFbrPiJZRGtXQ4nhJSrVPiJCRQXlhrDMYgiAZTQSHgEVd33++ZPiZCTjlbwiHXr3vLCcDYpxJyrxjIiCGOr3xEINLnQYgxjJtPcqywoQQohjkoHLJ7SF7xLLFlyAZTWTgBYhjvbQRDoHIpHX14HfFkjKTHko.MpHXrD.t5Y6uo1IqZp+m62Vy6kIl26I+p5HdtqPugnoYaod3hOx7sKxZeriO9F5N5uBc80I+4xXb6aPatn57A.nMu2.TNDnQ0A0ENMpKSDMo9pWkJhJSQdfREJQDcQRRlGN3BPfvV1Ne4pp5HtLHt0KqwC11xpfCHZTT.fFkjKRXQS2qew64yEhqsOH.nuT14FO39Xi7siWrCmF0DpKlplHu+tdH3GBt398+7xli58KdI28gMd8cHZcesuLi2q+yNuP72KpKt10saokpiNl6022mkt8cdO6N1WxYtqm7gPX6ZmW27x9tap9ipuV53+My3g4p586h8c+A45+zbs9rzvy46Nndc8w6QH8AMiAhe9puZqoaOdtcJ1Gzd7ldJUDS.s6As6wWrw0Zrx2y6O9wJtdLWcs58K6tNAq5Kkwmm+ki3yuZ61iWm5yq2isfOedB79v9i+mDvPjIE.gADDF5y3WrC09paHrgKE2KWnEWctP56Vu4L1d4He4hOmwaKNgvas5cOGeKD8J3zf.71E53itluv6gM+5mzejuE+fYiHFSbcOK2N+KiBP5V0yc7BDHRnFKQvD.P.PBHAffBgUCLPmQzCHPxncQNk0LAyfEP.4e.crDLxWc0WF5xtPFRNdIN.YbvPxg.izdDQ0OFsF.8tW.dHDORrxg.xnII9jvLBOiG.5xHMxKzzW5eIAiQQ7QA.ZNIBVaFFC49JWE68dx3vmK3QlsG5Aj3bx2.sDjDxJZdlbSipcOtlpvZ9ynMyokW04FbbA4elRMTvGenL8E3CcC1rniW8.olNcQqZ0dUAKJL9hS.xVlOGNzeFmcIRRfWmI1G1N1Vyjn7gJEJ8p8wk9CB7Sba93wICBAYSY7dimsAEOtWJWZo79rvXEo9R05vezh1mgnofRMeLSOesGGWvDXiBfcwW2GUhFKkudo5a13pvfbuX6aqPrmRKOIEFvqBkJLRgMfEVBg4pEFi7hdvFSUq+fSEbuEIdO1pZoy9XNhbLXw0uyymhMUKY0XU6dItKXlqLRn9Vyi67m2g.25Xf9Zya2Rlisb4K.AwJVcVvJltxYOsENFgsjJC0NQBh2sQnn3yxAt36ygkRxPiTzxJ8nUkEVyInJQDQZTENGpx7FhTX.Q2CwoilgfdW0miH8zaJM.laTSj7gIvdAzXS0inQOXyAbwLM3qJ9L.w54NEkbcL7QWjAkEH6rxfWl17OfOChcRzDf94aoxO9ydFGMhmNV9Ot7chYIwjtd+o9Opj8qjTxtUd2Usjj+XtTv4uq0nF52r2SNUJqf6lN.";
@@ -406,7 +427,7 @@ MainTopBar::MainTopBar(FloatingTile* parent) :
 	customWorkSpaceButton->setTooltip("Show Scripting Workspace");
 	customWorkSpaceButton->setCommandToTrigger(getRootWindow()->getBackendProcessor()->getCommandManager(), BackendCommandTarget::WorkspaceCustom, true);
 	
-	addAndMakeVisible(peakMeter = new ProcessorPeakMeter(getRootWindow()->getMainSynthChain()));
+	addAndMakeVisible(peakMeter = new ClickablePeakMeter(getRootWindow()->getMainSynthChain()));
 
 	addAndMakeVisible(settingsButton = new ShapeButton("Audio Settings", Colours::white.withAlpha(0.6f), Colours::white.withAlpha(0.8f), Colours::white));
 	settingsButton->setTooltip("Show Audio Settings");
@@ -419,16 +440,16 @@ MainTopBar::MainTopBar(FloatingTile* parent) :
 	Path layoutPath;
 	layoutPath.loadPathFromData(ColumnIcons::layoutIcon, sizeof(ColumnIcons::layoutIcon));
 	layoutButton->setShape(layoutPath, false, true, true);
-	
-	addAndMakeVisible(tooltipBar = new TooltipBar());
-	
-	tooltipBar->setColour(TooltipBar::ColourIds::backgroundColour, Colour(0));
-	tooltipBar->setColour(TooltipBar::ColourIds::textColour, Colours::white);
-	tooltipBar->setColour(TooltipBar::ColourIds::iconColour, Colours::white);
-	//tooltipBar->setShowInfoIcon(false);
+
+	addAndMakeVisible(quickPlayButton);
 
 	stop();
 
+	if(getRootWindow()->getBackendProcessor()->isSnippetBrowser())
+	{
+		settingsButton->setVisible(false);
+		layoutButton->setVisible(false);
+	}
 
 	//getRootWindow()->getBackendProcessor()->getCommandManager()->addListener(this);
 }
@@ -466,8 +487,12 @@ void MainTopBar::paint(Graphics& g)
 
 	String infoText;
 
+#if HISE_BACKEND_AS_FX
+    infoText << "FX Build";
+#endif
+    
 #if JUCE_DEBUG
-	infoText << "DEBUG Build";
+	infoText << " (DEBUG)";
 #endif
 
 #if HISE_INCLUDE_FAUST
@@ -478,6 +503,13 @@ void MainTopBar::paint(Graphics& g)
 
 	infoText << "Faust enabled";
 #endif
+
+#if PERFETTO
+    infoText << " + Perfetto";
+#endif
+
+	if(getRootWindow()->getBackendProcessor()->isSnippetBrowser())
+		infoText = "HISE Snippet Playground";
 
 	g.setFont(GLOBAL_BOLD_FONT());
 	g.setColour(Colours::white.withAlpha(0.2f));
@@ -556,14 +588,17 @@ void MainTopBar::resized()
     auto b = getLocalBounds();
     
     customPopupButton->setBounds(b.removeFromLeft(getHeight()).reduced(8));
-    tooltipBar->setBounds(b.removeFromLeft(macroButton->getX()).reduced(7));
                                  
     macroButton->setBounds(frontendArea.removeFromLeft(bWidth).reduced(7));
     pluginPreviewButton->setBounds(frontendArea.removeFromLeft(bWidth).reduced(7));
     presetBrowserButton->setBounds(frontendArea.removeFromLeft(bWidth).reduced(7));
-                                 
-    settingsButton->setBounds(b.removeFromRight(b.getHeight()).reduced(7));
+
+	if(settingsButton->isVisible())
+		settingsButton->setBounds(b.removeFromRight(b.getHeight()).reduced(7));
+
     peakMeter->setBounds(b.removeFromRight(180).reduced(8));
+
+	quickPlayButton.setBounds(b.removeFromRight(b.getHeight()).reduced(8));
     keyboardPopupButton->setBounds(b.removeFromRight(b.getHeight()).reduced(8));
 }
 
@@ -688,9 +723,9 @@ struct PopupFloatingTile: public Component,
 	Path createPath(const String& url) const override
 	{
 		Path p;
-		LOAD_PATH_IF_URL("clear", SampleMapIcons::newSampleMap);
-		LOAD_PATH_IF_URL("load", SampleMapIcons::loadSampleMap);
-		LOAD_PATH_IF_URL("save", SampleMapIcons::saveSampleMap);
+		LOAD_EPATH_IF_URL("clear", SampleMapIcons::newSampleMap);
+		LOAD_EPATH_IF_URL("load", SampleMapIcons::loadSampleMap);
+		LOAD_EPATH_IF_URL("save", SampleMapIcons::saveSampleMap);
 		LOAD_PATH_IF_URL("layout", ColumnIcons::customizeIcon);
 		return p;
 	}
@@ -719,7 +754,7 @@ struct PopupFloatingTile: public Component,
         auto w = GET_BACKEND_ROOT_WINDOW(c);
         auto mc = w->getBackendProcessor();
         var dataToLoad;
-        PeriodicScreenshotter::PopupGlassLookAndFeel plaf(*c);
+		PopupLookAndFeel plaf;
         PopupMenu m;
         m.setLookAndFeel(&plaf);
 
@@ -801,7 +836,7 @@ struct PopupFloatingTile: public Component,
 
 	static File getDirectory()
 	{
-		auto dir = ProjectHandler::getAppDataDirectory().getChildFile("custom_popups");
+		auto dir = ProjectHandler::getAppDataDirectory(nullptr).getChildFile("custom_popups");
 
 		if (!dir.isDirectory())
 			dir.createDirectory();
@@ -848,7 +883,6 @@ struct ToolkitPopup : public Component,
 					  public ControlledObject,
 					  public PooledUIUpdater::SimpleTimer,
 					  public ButtonListener,
-					  public SliderListener,
 					  public PathFactory
 {
 	ToolkitPopup(MainController* mc):
@@ -857,8 +891,10 @@ struct ToolkitPopup : public Component,
 		SimpleTimer(mc->getGlobalUIUpdater()),
 		panicButton("Panic", this, *this),
         sustainButton("pedal", this, *this),
+        octaveUpButton("octave_up", this, *this),
+        octaveDownButton("octave_down", this, *this),
 		keyboard(mc),
-		masterConnection(&masterVolume, mc, mc->getMainSynthChain()->getId()),
+        clockController(mc),
 		resizer(this, &constrainer, ResizableEdgeComponent::rightEdge)
 	{
 		constrainer.setMinimumWidth(550);
@@ -867,45 +903,21 @@ struct ToolkitPopup : public Component,
 
 		addAndMakeVisible(resizer);
 		addAndMakeVisible(panicButton);
-		addAndMakeVisible(tempoKnob);
-        addAndMakeVisible(sustainButton);
-		addAndMakeVisible(peakMeter);
-		addAndMakeVisible(masterVolume);
+		addAndMakeVisible(sustainButton);
 		addAndMakeVisible(keyboard);
+        addAndMakeVisible(octaveUpButton);
+        addAndMakeVisible(octaveDownButton);
 
-		tempoKnob.setSliderStyle(Slider::RotaryHorizontalVerticalDrag);
-		tempoKnob.setLookAndFeel(&slaf);
-		tempoKnob.setRange(30, 240, 1.0);
-		tempoKnob.addListener(this);
-		tempoKnob.setName("Tempo");
-
-		masterVolume.setSliderStyle(Slider::RotaryHorizontalVerticalDrag);
-		masterVolume.setLookAndFeel(&slaf);
-		masterVolume.setRange(0.0, 1.0, 0.01);
-		masterVolume.setName("Volume");
-
-        masterVolume.setSkewFactor(0.5);
-        
-        masterVolume.textFromValueFunction = [](double v)
-        {
-            v = Decibels::gainToDecibels(v);
-            
-            return String((int)v) + " dB";
-        };
-        
-		peakMeter.setType(VuMeter::Type::StereoHorizontal);
-		peakMeter.setOpaque(false);
-		peakMeter.setColour(VuMeter::backgroundColour, Colours::transparentBlack);
-		peakMeter.setColour(VuMeter::ledColour, Colours::white.withAlpha(0.5f));
-		peakMeter.setName("Output");
-
-        panicButton.setTooltip("Send All-Note-Off message.");
+		panicButton.setTooltip("Send All-Note-Off message.");
         sustainButton.setTooltip("Enable Toggle mode (sustain) for keyboard.");
         sustainButton.setToggleModeWithColourChange(true);
         
 		keyboard.setUseVectorGraphics(true);
+        keyboard.setRange(24, 127);
 
-		setSize(650, 72 + 48 + 35);
+        addAndMakeVisible(clockController);
+        
+		setSize(650, 83 + 72 + 10);
 	}
 
 	void buttonClicked(Button* b) override
@@ -919,6 +931,16 @@ struct ToolkitPopup : public Component,
         }
 		if (b == &panicButton)
 			getMainController()->allNotesOff(true);
+        if(b == &octaveUpButton || b == &octaveDownButton)
+        {
+            auto delta = b == &octaveUpButton ? 12 : -12;
+            
+            auto l = keyboard.getRangeStart() + delta;
+            auto h = jmin(127, keyboard.getRangeEnd() + delta);
+            
+            if(l > 0)
+                keyboard.setRange(l, h);
+        }
 	}
 
 	void paint(Graphics& g) override
@@ -927,12 +949,13 @@ struct ToolkitPopup : public Component,
 		g.setFont(GLOBAL_BOLD_FONT());
 
 		auto statBounds = getLocalBounds();
-		statBounds.removeFromTop(30);
-		statBounds.removeFromBottom(keyboard.getHeight());
-		statBounds.removeFromLeft(panicButton.getBounds().getRight() + 10);
-		statBounds.setRight(tempoKnob.getX());
-
-		g.drawText(getStatistics(), statBounds.toFloat(), Justification::centredLeft);
+        statBounds.removeFromRight(10);
+		statBounds = statBounds.removeFromTop(30);
+        statBounds = statBounds.removeFromRight(250);
+        
+		
+		
+		g.drawText(getStatistics(), statBounds.toFloat(), Justification::centredRight);
 
 		g.setColour(Colours::white.withAlpha(0.2f));
 		g.fillPath(midiPath);
@@ -942,68 +965,41 @@ struct ToolkitPopup : public Component,
 			g.setColour(Colour(SIGNAL_COLOUR).withAlpha(midiAlpha));
 			g.fillPath(midiPath);
 		}
-
-		paintName(g, peakMeter);
-		paintName(g, masterVolume);
-		paintName(g, tempoKnob);
-	}
-
-	void paintName(Graphics& g, Component& c)
-	{
-		auto b = c.getBoundsInParent().withY(0).withHeight(30).toFloat();
-		g.setColour(Colours::white.withAlpha(0.4f));
-		g.drawText(c.getName(), b, Justification::centred);
 	}
 
 	void resized() override
 	{
+        static constexpr int TopHeight = 28;
+        static constexpr int Margin = 2;
+        
 		auto b = getLocalBounds();
 		b.removeFromLeft(10);
 		resizer.setBounds(b.removeFromRight(10));
         
-        auto bottom = b.removeFromBottom(72);
+        clockController.setBounds(b.removeFromTop(83));
         
-        b.removeFromBottom(5);
+        b.removeFromTop(10);
         
-        auto r = bottom.removeFromLeft(32);
+        auto r = b.removeFromLeft(TopHeight);
         
-        sustainButton.setBounds(r.removeFromBottom(32));
-        panicButton.setBounds(r.removeFromTop(32));
+        b.removeFromLeft(10);
         
-        bottom.removeFromLeft(10);
-		keyboard.setBounds(bottom);
-
-		b.removeFromTop(30);
+        sustainButton.setBounds(r.removeFromBottom(TopHeight).reduced(Margin));
+        panicButton.setBounds(r.removeFromTop(TopHeight).reduced(Margin));
+        
+        auto oct = b.removeFromRight(TopHeight);
+        
+        octaveUpButton.setBounds(oct.removeFromTop(TopHeight).reduced(Margin));
+        octaveDownButton.setBounds(oct.removeFromBottom(TopHeight).reduced(Margin));
+        
+        keyboard.setBounds(b);
 
         midiPath = createPath("midi");
-        scalePath(midiPath, b.removeFromLeft(b.getHeight()).reduced(0, 10).toFloat().translated(-8.0f, 0.0f));
-        
-		masterVolume.setBounds(b.removeFromRight(b.getHeight()));
-		b.removeFromRight(10);
-		peakMeter.setBounds(b.removeFromRight(200).reduced(0, 13));
-
-		
-		b.removeFromRight(5);
-		tempoKnob.setBounds(b.removeFromRight(b.getHeight()));
-		
-
-		
-	}
-
-	void sliderValueChanged(Slider* s)
-	{
-		getMainController()->setHostBpm(s->getValue());
+        scalePath(midiPath, r.removeFromTop(TopHeight).reduced(Margin).toFloat());
 	}
 
 	void timerCallback() override
 	{
-		if(!tempoKnob.isMouseOverOrDragging())
-			tempoKnob.setValue(getMainController()->getBpm(), dontSendNotification);
-
-		const auto& dv = getMainController()->getMainSynthChain()->getDisplayValues();
-
-		peakMeter.setPeak(dv.outL, dv.outR);
-
 		if (getMainController()->checkAndResetMidiInputFlag())
 			midiAlpha = 1.0f;
 		else
@@ -1016,9 +1012,11 @@ struct ToolkitPopup : public Component,
 	{
 		Path p;
 
-		LOAD_PATH_IF_URL("Panic", HiBinaryData::FrontendBinaryData::panicButtonShape);
-		LOAD_PATH_IF_URL("midi", HiBinaryData::SpecialSymbols::midiData);
-        LOAD_PATH_IF_URL("pedal", BackendBinaryData::PopupSymbols::sustainIcon);
+		LOAD_EPATH_IF_URL("Panic", HiBinaryData::FrontendBinaryData::panicButtonShape);
+		LOAD_EPATH_IF_URL("midi", HiBinaryData::SpecialSymbols::midiData);
+        LOAD_EPATH_IF_URL("pedal", BackendBinaryData::PopupSymbols::sustainIcon);
+        LOAD_EPATH_IF_URL("octave_up", BackendBinaryData::PopupSymbols::octaveUpIcon);
+        LOAD_EPATH_IF_URL("octave_down", BackendBinaryData::PopupSymbols::octaveDownIcon);
 
 		return p;
 	}
@@ -1045,21 +1043,34 @@ struct ToolkitPopup : public Component,
 
 	Path midiPath;
 	float midiAlpha = 0.0f;
-    HiseShapeButton panicButton, sustainButton;
+    HiseShapeButton panicButton, sustainButton, octaveUpButton, octaveDownButton;
 	
-	MacroKnobLookAndFeel slaf;
-	Slider tempoKnob;
-	Slider masterVolume;
-	raw::UIConnection::Slider<ModulatorSynth::Parameters::Gain> masterConnection;
-
-	VuMeter peakMeter;
 	CustomKeyboard keyboard;
 
 	juce::ResizableEdgeComponent resizer;
 	ComponentBoundsConstrainer constrainer;
 	ScrollbarFader::Laf rlaf;
+    
+    hise::DAWClockController clockController;
 };
 
+
+void MainTopBar::timerCallback()
+{
+	auto newProgress = getMainController()->getSampleManager().getPreloadProgressConst();
+	auto m = getMainController()->getSampleManager().getPreloadMessage();
+	auto state = preloadState;
+
+	if (newProgress != preloadProgress ||
+		m != preloadMessage ||
+		state != preloadState)
+	{
+		preloadState = state;
+		preloadMessage = m;
+		preloadProgress = newProgress;
+		repaint();
+	}
+}
 
 void MainTopBar::popupChanged(Component* newComponent)
 {
@@ -1087,6 +1098,22 @@ void MainTopBar::popupChanged(Component* newComponent)
     keyboardPopupButton->setToggleState(keyboardShouldBeOn, dontSendNotification);
     customPopupButton->setToggleState(customShouldBeShown, dontSendNotification);
 }
+
+void MainTopBar::preloadStateChanged(bool isPreloading)
+{
+	preloadState = isPreloading;
+
+	if (isPreloading)
+		start();
+	else
+	{
+		timerCallback();
+		stop();
+	}
+        
+	repaint();
+}
+
 
 void MainTopBar::togglePopup(PopupType t, bool shouldShow)
 {
@@ -1123,6 +1150,12 @@ void MainTopBar::togglePopup(PopupType t, bool shouldShow)
 
 		break;
 
+	}
+	case MainTopBar::PopupType::PeakMeter:
+	{
+		c = new ClickablePeakMeter::PopupComponent(peakMeter);
+		button = peakMeter;
+		break;
 	}
 	case PopupType::Settings:
 	{
@@ -1223,8 +1256,8 @@ void MainTopBar::togglePopup(PopupType t, bool shouldShow)
 	auto popup = getParentShell()->showComponentInRootPopup(c, button, point);
 
     auto sb = dynamic_cast<ShapeButton*>(button);
-    
-    if(popup != nullptr)
+     
+    if(popup != nullptr && sb != nullptr)
     {
         popup->onDetach = [this, sb](bool isDetached)
         {
@@ -1233,6 +1266,190 @@ void MainTopBar::togglePopup(PopupType t, bool shouldShow)
         };
     }
 
+}
+
+void MainTopBar::applicationCommandInvoked(const ApplicationCommandTarget::InvocationInfo& info)
+{
+
+	switch (info.commandID)
+	{
+	case BackendCommandTarget::WorkspaceScript: 
+		mainWorkSpaceButton->setToggleStateAndUpdateIcon(false);
+		scriptingWorkSpaceButton->setToggleStateAndUpdateIcon(true);
+		samplerWorkSpaceButton->setToggleStateAndUpdateIcon(false);
+		customWorkSpaceButton->setToggleStateAndUpdateIcon(false);
+		break;
+	case BackendCommandTarget::WorkspaceSampler:
+		mainWorkSpaceButton->setToggleStateAndUpdateIcon(false);
+		scriptingWorkSpaceButton->setToggleStateAndUpdateIcon(false);
+		samplerWorkSpaceButton->setToggleStateAndUpdateIcon(true);
+		customWorkSpaceButton->setToggleStateAndUpdateIcon(false);
+		break;
+		
+	case BackendCommandTarget::WorkspaceCustom:
+		mainWorkSpaceButton->setToggleStateAndUpdateIcon(false);
+		scriptingWorkSpaceButton->setToggleStateAndUpdateIcon(false);
+		samplerWorkSpaceButton->setToggleStateAndUpdateIcon(false);
+		customWorkSpaceButton->setToggleStateAndUpdateIcon(true);
+		break;
+	}
+
+}
+
+MainTopBar::QuickPlayComponent::QuickPlayComponent(MainController* mc):
+	ControlledObject(mc),
+	SimpleTimer(mc->getGlobalUIUpdater())
+{
+	setTooltip("Play a note or start the transport with a single click. Right click to adjust the settings.");
+
+	play[0].loadPathFromData(MainToolbarIcons::quickplay, MainToolbarIcons::quickplay_Size);
+	note[0].loadPathFromData(MainToolbarIcons::quicknote, MainToolbarIcons::quicknote_Size);
+	play[1].loadPathFromData(MainToolbarIcons::quickplay, MainToolbarIcons::quickplay_Size);
+	note[1].loadPathFromData(MainToolbarIcons::quicknote, MainToolbarIcons::quicknote_Size);
+
+	setRepaintsOnMouseActivity(true);
+	stop();
+}
+
+void MainTopBar::QuickPlayComponent::setValue(bool shouldBeOn)
+{
+	currentValue = shouldBeOn;
+
+	if(playNote)
+	{
+		MidiMessage event;
+
+		if(shouldBeOn)
+			getMainController()->getKeyboardState().noteOn(1, noteToPlay, 1.0f);
+					
+		else
+			getMainController()->getKeyboardState().noteOff(1, noteToPlay, 0.0f);
+	}
+	else
+	{
+		auto& clockSim = dynamic_cast<BackendProcessor*>(getMainController())->externalClockSim;
+
+		if(shouldBeOn)
+			startPos = clockSim.ppqPos;
+		else
+			clockSim.ppqPos = startPos;
+				
+		clockSim.isPlaying = shouldBeOn;
+	}
+
+	repaint();
+}
+
+void MainTopBar::QuickPlayComponent::timerCallback()
+{
+	currentValue = dynamic_cast<BackendProcessor*>(getMainController())->externalClockSim.isPlaying;
+
+	if(currentValue)
+	{
+		playNote = false;
+		repaint();
+	}
+}
+
+void MainTopBar::QuickPlayComponent::paint(Graphics& g)
+{
+	auto alpha = currentValue ? 0.8f : 0.6f;
+
+	if(!currentValue && isMouseOver())
+		alpha += 0.2f;
+
+	if(isMouseButtonDown())
+		alpha += 0.2f;
+
+	auto c = Colour(currentValue ? SIGNAL_COLOUR : 0xFFFFFFFF).withAlpha(alpha);
+
+	g.setColour(c);
+	g.fillPath(playNote ? note[isMouseButtonDown()] : play[isMouseButtonDown()]);
+}
+
+void MainTopBar::QuickPlayComponent::mouseUp(const MouseEvent& e)
+{
+	if(e.mods.isRightButtonDown())
+		return;
+
+	if(!toggle)
+		setValue(false);
+}
+
+void MainTopBar::QuickPlayComponent::setShouldPlayNote(bool v)
+{
+	playNote = v;
+
+	if(v)
+		stop();
+	else
+		start();
+}
+
+void MainTopBar::QuickPlayComponent::mouseDown(const MouseEvent& e)
+{
+	if(e.mods.isRightButtonDown())
+	{
+		PopupMenu m;
+		PopupLookAndFeel plaf;
+		m.setLookAndFeel(&plaf);
+
+		m.addSectionHeader("Quickplay Settings");
+		m.addItem(1, "Play MIDI note", true, playNote);
+		m.addItem(2, "Control DAW playback simulator", true, !playNote);
+		m.addSeparator();
+		m.addItem(3, "Toggle Mode (Sustain)", true, toggle);
+
+		PopupMenu noteMenu;
+
+		int NoteOffset = 900;
+
+		for(int i = 0; i < 127; i++)
+		{
+			String n;
+			n << MidiMessage::getMidiNoteName(i, true, true, 3);
+			n << " (" << String(i) << ")";
+			noteMenu.addItem(i+NoteOffset, n, true, i == noteToPlay);
+		}
+
+		m.addSubMenu("Note to play", noteMenu);
+
+		auto result = m.show();
+
+		if(result == 1)
+			playNote = true;
+		else if(result == 2)
+			playNote = false;
+		else if(result == 3)
+			toggle = !toggle;
+		else if (result >= NoteOffset)
+		{
+			noteToPlay = result - NoteOffset;
+		}
+
+		repaint();
+
+		return;
+	}
+
+	if(toggle)
+	{
+		toggleState = !toggleState;
+		setValue(toggleState);
+	}
+	else
+	{
+		setValue(true);
+	}
+}
+
+void MainTopBar::QuickPlayComponent::resized()
+{
+	auto b = getLocalBounds().toFloat();
+	PathFactory::scalePath(play[0], b.reduced(4));
+	PathFactory::scalePath(play[1], b.reduced(5));
+	PathFactory::scalePath(note[0], b.reduced(1));
+	PathFactory::scalePath(note[1], b.reduced(2));
 }
 
 void BackendHelpers::callIfNotInRootContainer(std::function<void(void)> func, Component* c)

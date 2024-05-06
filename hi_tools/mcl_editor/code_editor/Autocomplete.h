@@ -27,109 +27,36 @@ SimpleDocumentTokenProvider class.
 
 */
 class TokenCollection : public Thread,
-						public AsyncUpdater
+						public AsyncUpdater,
+					    public ReferenceCountedObject
 {
 public:
+
+	using Ptr = ReferenceCountedObjectPtr<TokenCollection>;
 
 	/** A Token is the entry that is being used in the autocomplete popup (or any other IDE tools
 	    that might use that database. */
 	struct Token: public ReferenceCountedObject
 	{
-		Token(const String& text) :
-			tokenContent(text)
-		{};
+		Token(const String& text);;
 
-		virtual ~Token() {};
+		virtual ~Token();;
 
 		/** Override the method and check whether the currently written input matches the token. */
-		virtual bool matches(const String& input, const String& previousToken, int lineNumber) const
-		{
-			auto textMatches = matchesInput(input, tokenContent);
-			auto scopeMatches = tokenScope.isEmpty() || tokenScope.contains(lineNumber);
-			return textMatches && scopeMatches;
-		}
+		virtual bool matches(const String& input, const String& previousToken, int lineNumber) const;
 
-		static bool matchesInput(const String& input, const String& code)
-		{
-            auto inputLength = input.length();
-            
-			if (inputLength <= 2)
-				return code.toLowerCase().startsWith(input.toLowerCase());
-			else
-                return code.toLowerCase().contains(input.toLowerCase());
-		}
+		static bool matchesInput(const String& input, const String& code);
 
-		virtual bool equals(const Token* other) const
-		{
-			return other->tokenContent == tokenContent;
-		}
+		virtual bool equals(const Token* other) const;
 
-		bool operator==(const Token& other) const
-		{
-			return equals(&other) && other.equals(this);
-		}
+		bool operator==(const Token& other) const;
 
-		virtual Array<Range<int>> getSelectionRangeAfterInsert(const String& input) const
-		{
-			Array<Range<int>> parameterRanges;
+		virtual Array<Range<int>> getSelectionRangeAfterInsert(const String& input) const;
 
-			auto code = getCodeToInsert(input);
-
-			auto ptr = code.getCharPointer();
-			auto start = ptr;
-			auto end = start + code.length();
-
-			int thisRangeStart = 0;
-			const int delta = 0;
-
-			while (ptr != end)
-			{
-				auto c = *ptr;
-
-				switch (c)
-				{
-				case '(':
-				case '<':
-					thisRangeStart = (int)(ptr - start) + 1;
-					break;
-				case ',':
-				{
-					auto pos = (int)(ptr - start);
-
-					Range<int> r(thisRangeStart + delta, pos + delta);
-
-					if(r.getLength() > 0)
-						parameterRanges.add(r);
-
-					thisRangeStart = pos + 1;
-
-					if (ptr[1] == ' ')
-						thisRangeStart++;
-					break;
-				}
-				case ')':
-				case '>':
-				{
-					auto pos = (int)(ptr - start);
-
-					Range<int> r(thisRangeStart + delta, pos + delta);
-
-					if(r.getLength() > 0)
-						parameterRanges.add(r);
-					break;
-				}
-				}
-
-				ptr++;
-			}
-
-			return parameterRanges;
-		}
-
-		virtual MarkdownLink getLink() const { return MarkdownLink(); };
+		virtual MarkdownLink getLink() const;;
 
 		/** Override this method if you want to customize the code that is about to be inserted. */
-		virtual String getCodeToInsert(const String& input) const { return tokenContent; }
+		virtual String getCodeToInsert(const String& input) const;
 
 		String markdownDescription;
 		String tokenContent;
@@ -146,15 +73,19 @@ public:
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Token);
 	};
 
-	/** Make it iteratable. */
-	Token* const* begin() const { return tokens.begin(); }
-	Token* const* end() const { return tokens.end(); }
-	Token** begin() { return tokens.begin(); }
-	Token** end() { return tokens.end(); }
-
+	
 	using List = ReferenceCountedArray<Token>;
 	using TokenPtr = ReferenceCountedObjectPtr<Token>;
-	
+
+	TokenCollection::List getTokens() const
+	{
+		List l;
+
+		SimpleReadWriteLock::ScopedReadLock sl(buildLock);
+		l.addArray(tokens);
+		return l;
+	}
+
 	/** A provider is a class that adds its tokens to the given list. 
 	
 		In order to use it, subclass from this and override the addTokens() method.
@@ -164,25 +95,22 @@ public:
 	*/
 	struct Provider
 	{
-		virtual ~Provider() {}
+		virtual ~Provider();
 
 		/** Override this method and add all tokens to the given list. This method will be called on a background thread
 		    to keep the UI thread responsive, so make sure you do not interfere with the message thread for longer than necessary. 
 		*/
 		virtual void addTokens(List& tokens) = 0;
 
-		/** Call the TokenCollections rebuild method. This will not be executed synchronously, but on a dedicated thread. */
-		void signalRebuild()
-		{
-			if (assignedCollection != nullptr)
-				assignedCollection->signalRebuild();
-		}
-        
-        void signalClear(NotificationType n)
+        virtual bool shouldAbortTokenRebuild(Thread* t) const
         {
-            if(assignedCollection != nullptr)
-                assignedCollection->signalClear(n);
+            return t != nullptr && t->threadShouldExit();
         }
+
+		/** Call the TokenCollections rebuild method. This will not be executed synchronously, but on a dedicated thread. */
+		void signalRebuild();
+
+		void signalClear(NotificationType n);
 
 		WeakReference<TokenCollection> assignedCollection;
 	};
@@ -190,228 +118,107 @@ public:
 	/** A Listener interface that will be notified whenever the token list was rebuilt. */
 	struct Listener
 	{
-		virtual ~Listener() {};
+		virtual ~Listener();;
 
 		/** This method will be called on the message thread after the list was rebuilt. */
 		virtual void tokenListWasRebuild() = 0;
 
+		/** This method will be called synchronously indicating the state of the token rebuild process. */
+		virtual void threadStateChanged(bool isRunning) {};
+
 		JUCE_DECLARE_WEAK_REFERENCEABLE(Listener);
 	};
 
-	void setEnabled(bool shouldBeEnabled)
-	{
-		if (shouldBeEnabled != enabled)
-		{
-			enabled = shouldBeEnabled;
+	void setEnabled(bool shouldBeEnabled, bool isDirty);
 
-			if (enabled && !buildLock.writeAccessIsLocked())
-				signalRebuild();
+	void signalRebuild();
+
+	void signalClear(NotificationType n);
+
+	void run() override;
+
+	void clearTokenProviders();
+
+	void updateIfSync()
+	{
+		if(!useBackgroundThread)
+		{
+			dirty = true;
+			rebuild();
 		}
 	}
 
-	void signalRebuild()
+	void setUseBackgroundThread(bool shouldUseBackgroundThread)
 	{
-		if (!enabled)
-			return;
-
-		stopThread(1000);
-		startThread();
-	}
-
-    void signalClear(NotificationType n)
-    {
-        SimpleReadWriteLock::ScopedWriteLock sl(buildLock);
-        dirty = false;
-        tokens.clear();
-        cancelPendingUpdate();
-        
-        for(auto l: listeners)
-        {
-            if(l != nullptr)
-                l->tokenListWasRebuild();
-        }
-    }
-    
-	void run() override
-	{
-		dirty = true;
-		rebuild();
-	}
-
-	void clearTokenProviders()
-	{
-		tokenProviders.clear();
+		useBackgroundThread = shouldUseBackgroundThread;
 	}
 
 	/** Register a token provider to this instance. Be aware that you can't register a token provider to multiple instances,
 	    but this shouldn't be a problem. */
-	void addTokenProvider(Provider* ownedProvider)
-	{
-		if (tokenProviders.isEmpty())
-			startThread();
+	void addTokenProvider(Provider* ownedProvider);
 
-		tokenProviders.add(ownedProvider);
-		ownedProvider->assignedCollection = this;
-	}
+	TokenCollection(const Identifier& languageId);
 
-	TokenCollection():
-		Thread("TokenRebuildThread", HISE_DEFAULT_STACK_SIZE)
-	{
+	Identifier getLanguageId() const { return languageId;};
 
-	}
+	~TokenCollection();
+
+	bool hasEntries(const String& input, const String& previousToken, int lineNumber) const;
+
+	void addListener(Listener* l);
+
+	void removeListener(Listener* l);
+
+	void handleAsyncUpdate() override;
+
+	static int64 getHashFromTokens(const List& l);
+
+	void rebuild();
+
+	bool isEnabled() const;
 
 
-	~TokenCollection()
-	{
-		stopThread(1000);
-	}
-
-	bool hasEntries(const String& input, const String& previousToken, int lineNumber) const
-	{
-		if (CharacterFunctions::isDigit(previousToken[0]))
-			return false;
-
-		if (auto sl = SimpleReadWriteLock::ScopedTryReadLock(buildLock))
-		{
-			for (auto t : tokens)
-			{
-				if (dirty || isThreadRunning())
-					return false;
-
-				if (t->matches(input, previousToken, lineNumber))
-					return true;
-			}
-		}
-
-		return false;
-	}
-
-	void addListener(Listener* l)
-	{
-		listeners.addIfNotAlreadyThere(l);
-	}
-
-	void removeListener(Listener* l)
-	{
-		listeners.removeAllInstancesOf(l);
-	}
-
-	void handleAsyncUpdate() override
-	{
-		for (auto l : listeners)
-		{
-			if (l != nullptr)
-				l->tokenListWasRebuild();
-		}
-	}
-
-	static int64 getHashFromTokens(const List& l)
-	{
-		int64 hash = 0;
-
-		for (auto& t : l)
-		{
-			hash += t->tokenContent.hashCode();
-		}
-
-		return hash;
-	}
-
-	void rebuild()
-	{
-		if (dirty)
-		{
-			SimpleReadWriteLock::ScopedWriteLock sl(buildLock);
-
-			List newTokens;
-
-			for (auto tp : tokenProviders)
-				tp->addTokens(newTokens);
-
-			Sorter ts;
-			newTokens.sort(ts);
-
-			auto newHash = getHashFromTokens(newTokens);
-
-			if (newHash != currentHash)
-			{
-				tokens.swapWith(newTokens);
-				triggerAsyncUpdate();
-			}
-			
-			dirty = false;
-		}
-	}
-
-	bool isEnabled() const { return enabled; }
-
-    
-    
 	struct Sorter
 	{
-		static int compareElements(Token* first, Token* second)
-		{
-            if (first->priority > second->priority)
-				return -1;
-
-			if (first->priority < second->priority)
-				return 1;
-
-			return first->tokenContent.compareIgnoreCase(second->tokenContent);
-		}
+        struct AbortException: public std::exception
+        {};
         
+        Sorter(TokenCollection& t):
+          parent(t)
+        {};
+        
+		int compareElements(Token* first, Token* second) const;
+        
+        TokenCollection& parent;
 	};
 
     struct FuzzySorter
     {
-        FuzzySorter(const String& e):
-          exactSearchTerm(e)
-        {
-            
-        };
+        FuzzySorter(const String& e);;
         
-        int compareElements(Token* first, Token* second) const
-        {
-            auto s1 = first->tokenContent;
-            auto s2 = second->tokenContent;
-            
-            auto exactMatch1 = s1.contains(exactSearchTerm);
-            auto exactMatch2 = s2.contains(exactSearchTerm);
-            
-            if(exactMatch1 && !exactMatch2)
-                return -1;
-            
-            if(!exactMatch1 && exactMatch2)
-                return 1;
-            
-            auto startsWith1 = s1.startsWith(exactSearchTerm);
-            auto startsWith2 = s2.startsWith(exactSearchTerm);
-            
-            if(startsWith1 && !startsWith2)
-                return -1;
-            
-            if(!startsWith1 && startsWith2)
-                return 1;
-            
-            if(first->priority > second->priority)
-                return -1;
-            
-            if(second->priority > first->priority)
-                return 1;
-            
-            return first->tokenContent.compareIgnoreCase(second->tokenContent);
-        }
-        
+        int compareElements(Token* first, Token* second) const;
+
         String exactSearchTerm;
     };
 
-    void sortForInput(const String& input)
+    void sortForInput(const String& input);
+
+    bool shouldAbort() const
     {
-        FuzzySorter fs(input);
-        tokens.sort(fs);
+        for(auto p: tokenProviders)
+        {
+            if(p->shouldAbortTokenRebuild(const_cast<TokenCollection*>(this)))
+               return true;
+        }
+
+        return false;
     }
     
 private:
+
+	Identifier languageId;
+
+	bool rebuildPending = false;
 
 	bool enabled = true;
 	OwnedArray<Provider> tokenProviders;
@@ -422,6 +229,7 @@ private:
 
 	mutable SimpleReadWriteLock buildLock;
 
+	bool useBackgroundThread = true;
 
 	JUCE_DECLARE_WEAK_REFERENCEABLE(TokenCollection);
 };
@@ -431,60 +239,15 @@ struct SimpleDocumentTokenProvider : public TokenCollection::Provider,
 									 public CoallescatedCodeDocumentListener,
 							         public Timer
 {
-	SimpleDocumentTokenProvider(CodeDocument& doc) :
-		CoallescatedCodeDocumentListener(doc)
-	{}
+	SimpleDocumentTokenProvider(CodeDocument& doc);
 
-	void timerCallback() override
-	{
-		signalRebuild();
-		stopTimer();
-	}
+	void timerCallback() override;
 
-	void codeChanged(bool, int, int) override
-	{
-		startTimer(5000);
-	}
+	void codeChanged(bool, int, int) override;
 
-	void addTokens(TokenCollection::List& tokens) override
-	{
-		CodeDocument::Iterator it(lambdaDoc);
-		String currentString;
+	static void addTokensStatic(TokenCollection::List& tokens, const CodeDocument& doc);
 
-		while (!it.isEOF())
-		{
-			auto c = it.nextChar();
-
-			int numChars = 0;
-
-			if (CharacterFunctions::isLetter(c) || (c == '_') || (currentString.isNotEmpty() && CharacterFunctions::isLetterOrDigit(c)))
-			{
-				currentString << c;
-				numChars++;
-			}
-			else
-			{
-				if (numChars > 2 && numChars < 60)
-				{
-					bool found = false;
-
-					for (auto& t : tokens)
-					{
-						if (t->tokenContent == currentString)
-						{
-							found = true;
-							break;
-						}
-					}
-
-					if(!found)
-						tokens.add(new TokenCollection::Token(currentString));
-				}
-					
-				currentString = {};
-			}
-		}
-	}
+	void addTokens(TokenCollection::List& tokens) override;
 };
 
 
@@ -498,28 +261,12 @@ public:
 
 	struct ParameterSelection: public ReferenceCountedObject
 	{
-		
-
 		using Ptr = ReferenceCountedObjectPtr<ParameterSelection>;
 		using List = ReferenceCountedArray<ParameterSelection>;
 
-		
+		ParameterSelection(TextDocument& doc, int start, int end);
 
-		ParameterSelection(TextDocument& doc, int start, int end):
-			s(doc.getCodeDocument(), start),
-			e(doc.getCodeDocument(), end)
-		{
-			s.setPositionMaintained(true);
-			e.setPositionMaintained(true);
-
-			tooltip = doc.getCodeDocument().getTextBetween(s, e);
-		}
-
-		Selection getSelection() const
-		{
-			mcl::Selection sel(s.getLineNumber(), s.getIndexInLine(), e.getLineNumber(), e.getIndexInLine());
-			return sel;
-		}
+		Selection getSelection() const;
 
 		void rebuildPosition(TextDocument& doc, AffineTransform t);
 
@@ -537,56 +284,17 @@ public:
 					   public ComponentListener
 	{
 
-		HelpPopup(Autocomplete* p) :
-			ac(p),
-			corner(this, nullptr)
-		{
-			addAndMakeVisible(display);
-			p->addComponentListener(this);
-			addAndMakeVisible(corner);
-		}
+		HelpPopup(Autocomplete* p);
 
-		~HelpPopup()
-		{
-			if (ac != nullptr)
-				ac->removeComponentListener(this);
-		}
+		~HelpPopup();
 
-		void componentMovedOrResized(Component& component, bool , bool )
-		{
-			setTopLeftPosition(component.getBounds().getBottomLeft());
-			setSize(jmax(300, component.getWidth()), jmin<int>((int)display.totalHeight + 20, 250));
-		}
+		void componentMovedOrResized(Component& component, bool , bool );
 
-		void refreshText()
-		{
-			if (auto i = ac->items[ac->viewIndex])
-			{
-				auto t = i->token->markdownDescription;
+		void refreshText();
 
-				if (t.isEmpty())
-				{
-					setVisible(false);
-					return;
-				}
-					
-				setVisible(true);
-				display.setText(t);
-			}
-		}
+		void resized() override;
 
-		void resized() override
-		{
-			display.setBounds(getLocalBounds().reduced(10));
-			corner.setBounds(getLocalBounds().removeFromRight(10).removeFromBottom(10));
-		}
-
-		void paint(Graphics& g) override
-		{
-			g.fillAll(Colour(0xFF333333));
-			g.setColour(Colours::white.withAlpha(0.2f));
-			g.drawRect(getLocalBounds().toFloat(), 1.0f);
-		}
+		void paint(Graphics& g) override;
 
 		Autocomplete* ac;
 		SimpleMarkdownDisplay display;
@@ -595,12 +303,7 @@ public:
 
 	struct Item : public Component
 	{
-		Item(TokenCollection::TokenPtr t, const String& input_) :
-			token(t),
-			input(input_)
-		{
-			setRepaintsOnMouseActivity(true);
-		}
+		Item(TokenCollection::TokenPtr t, const String& input_);
 
 		void mouseUp(const MouseEvent& e) override;
 
@@ -608,26 +311,15 @@ public:
 
 		void paint(Graphics& g) override;
 
-		bool isSelected()
-		{
-			if (auto p = findParentComponentOfClass<Autocomplete>())
-			{
-				if (isPositiveAndBelow(p->viewIndex, p->items.size()))
-					return p->items[p->viewIndex] == this;
-			}
-
-			return false;
-		}
+		bool isSelected();
 
 		TokenCollection::TokenPtr token;
 		String input;
 	};
 
-	Autocomplete(TokenCollection& tokenCollection_, const String& input, const String& previousToken, int lineNumber, TextEditor* editor_);
+	Autocomplete(TokenCollection::Ptr tokenCollection_, const String& input, const String& previousToken, int lineNumber, TextEditor* editor_);
 
-	~Autocomplete()
-	{
-	}
+	~Autocomplete();
 
 
 	juce::DropShadower shadow;
@@ -636,174 +328,36 @@ public:
 
 	void cancel();
 
-	Array<Range<int>> getSelectionRange(const String& input) const
-	{
-		if (isPositiveAndBelow(viewIndex, items.size()))
-		{
-			return items[viewIndex]->token->getSelectionRangeAfterInsert(input);
-		}
+	Array<Range<int>> getSelectionRange(const String& input) const;
 
-		return {};
-	}
+	String getCurrentText() const;
 
-	String getCurrentText() const
-	{
-		if (isPositiveAndBelow(viewIndex, items.size()))
-		{
-			return items[viewIndex]->token->getCodeToInsert(currentInput);
-		}
+	void scrollBarMoved(ScrollBar* scrollBarThatHasMoved, double newRangeStart) override;
 
-		return {};
-	}
+	void selectNextItem(bool showNext, int delta = 1);
 
-	void scrollBarMoved(ScrollBar* scrollBarThatHasMoved, double newRangeStart) override
-	{
-		displayedRange = displayedRange.movedToStartAt((int)newRangeStart);
-		resized();
-	}
+	void mouseWheelMove(const MouseEvent& e, const MouseWheelDetails& wheel) override;
 
-	void selectNextItem(bool showNext, int delta = 1)
-	{
-		if (showNext)
-			viewIndex = jmin(viewIndex + delta, items.size() - 1);
-		else
-			viewIndex = jmax(0, viewIndex - delta);
+	void setDisplayedIndex(int index);
 
-		setDisplayedIndex(viewIndex);
+	Item* createItem(const TokenCollection::TokenPtr t, const String& input);
 
-	}
-
-	void mouseWheelMove(const MouseEvent& e, const MouseWheelDetails& wheel) override
-	{
-		auto start = displayedRange.getStart();
-
-		start -= (wheel.deltaY * 8);
-
-		displayedRange = displayedRange.movedToStartAt(start);
-
-		if (displayedRange.getEnd() >= items.size())
-			displayedRange = displayedRange.movedToEndAt(items.size() - 1);
-		if (displayedRange.getStart() < 0)
-			displayedRange = displayedRange.movedToStartAt(0);
-
-		scrollbar.setCurrentRange({ (double)displayedRange.getStart(), (double)displayedRange.getEnd() }, dontSendNotification);
-
-		resized();
-	}
-
-	void setDisplayedIndex(int index)
-	{
-		if (displayedRange.isEmpty())
-		{
-			helpPopup = nullptr;
-			return;
-		}
-
-		if (!displayedRange.contains(viewIndex))
-		{
-			if (viewIndex < displayedRange.getStart())
-				displayedRange = displayedRange.movedToStartAt(viewIndex);
-			else
-				displayedRange = displayedRange.movedToEndAt(viewIndex + 1);
-		}
-
-		if (displayedRange.getEnd() > items.size())
-			displayedRange = displayedRange.movedToEndAt(items.size() - 1);
-
-		if (displayedRange.getStart() < 0)
-			displayedRange = displayedRange.movedToStartAt(0);
-
-
-		scrollbar.setCurrentRange({ (double)displayedRange.getStart(), (double)displayedRange.getEnd() });
-
-		
-
-		if (allowPopup && helpPopup == nullptr && getParentComponent() != nullptr)
-		{
-			helpPopup = new HelpPopup(this);
-
-			getParentComponent()->addAndMakeVisible(helpPopup);
-			helpPopup->setTransform(getTransform());
-		}
-
-		if (helpPopup != nullptr)
-		{
-			helpPopup->componentMovedOrResized(*this, false, false);
-			helpPopup->refreshText();
-			helpPopup->componentMovedOrResized(*this, false, false);
-		}
-
-		resized();
-		repaint();
-	}
-
-	Item* createItem(const TokenCollection::TokenPtr t, const String& input)
-	{
-		return new Item(t, input);
-	}
-
-	bool isSingleMatch() const
-	{
-		if (items.size() == 1)
-		{
-			return items.getFirst()->token->tokenContent == currentInput;
-		}
-
-		return false;
-	}
+	bool isSingleMatch() const;
 
 	void setInput(const String& input, const String& previousToken, int lineNumber);
 
-	int getRowHeight() const
-	{
-		return roundToInt(28.0f * getScaleFactor());
-	}
+	int getRowHeight() const;
 
-	void paint(Graphics& g) override
-	{
-		g.fillAll(Colour(0xFF282828));
-    }
+	void paint(Graphics& g) override;
 
 
+	void paintOverChildren(Graphics& g) override;
 
-	void paintOverChildren(Graphics& g) override
-	{
-		auto b = getLocalBounds();
-		g.setColour(Colour(0xFF222222));
-		g.drawRect(b.toFloat(), 1.0f);
-	}
-
-	int getNumDisplayedRows() const
-	{
-		return displayedRange.getLength();
-	}
+	int getNumDisplayedRows() const;
 
 	float getScaleFactor() const;
 
-	void resized() override
-	{
-		auto scrollbarVisible = items.size() != displayedRange.getLength();
-
-		scrollbar.setVisible(scrollbarVisible);
-
-		auto b = getLocalBounds();
-
-		if (scrollbarVisible)
-		{
-
-			scrollbar.setBounds(b.removeFromRight(10));
-		}
-
-		auto h = getRowHeight();
-
-		Rectangle<int> itemBounds = { b.getX(), b.getY() - displayedRange.getStart() * h, b.getWidth(), h };
-
-		for (auto i : items)
-		{
-			i->setBounds(itemBounds);
-			itemBounds.translate(0, h);
-		}
-	}
+	void resized() override;
 
 	OwnedArray<Item> items;
 	int viewIndex = 0;
@@ -811,7 +365,9 @@ public:
 	Range<int> displayedRange;
 	String currentInput;
 
-	TokenCollection& tokenCollection;
+	TokenCollection::List currentList;
+
+	TokenCollection::Ptr tokenCollection;
 	ScrollBar scrollbar;
 	bool allowPopup = false;
 

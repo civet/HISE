@@ -78,6 +78,121 @@ FullEditor::FullEditor(TextDocument& d) :
 	codeMap.transformToUse = editor.transform;
 }
 
+void FullEditor::TemplateProvider::addTokens(TokenCollection::List& tokens)
+{
+	for (int i = 0; i < templateExpressions.size(); i++)
+	{
+
+	}
+}
+
+void FullEditor::addAutocompleteTemplate(const String& templateExpression, const String& classId)
+{
+
+}
+
+void FullEditor::loadSettings(const File& sFile)
+{
+	settingFile = sFile;
+
+	auto s = JSON::parse(settingFile);
+
+	editor.setLineBreakEnabled(s.getProperty(TextEditorSettings::LineBreaks, true));
+	mapWidth = s.getProperty(TextEditorSettings::MapWidth, 150);
+		
+	mapButton.setToggleStateAndUpdateIcon(s.getProperty(TextEditorSettings::EnableMap, false));
+
+	resized();
+
+	codeMap.allowHover = s.getProperty(TextEditorSettings::EnableHover, true);
+	editor.showAutocompleteAfterDelay = s.getProperty(TextEditorSettings::AutoAutocomplete, true);
+    
+    editor.showStickyLines = s.getProperty(TextEditorSettings::ShowStickyLines, true);
+}
+
+void FullEditor::saveSetting(Component* c, const Identifier& id, const var& newValue)
+{
+	auto pe = c->findParentComponentOfClass<FullEditor>();
+
+	if(pe == nullptr)
+		return;
+		
+	auto s = JSON::parse(pe->settingFile);
+
+	if (s.getDynamicObject() == nullptr)
+		s = var(new DynamicObject());
+
+	s.getDynamicObject()->setProperty(id, newValue);
+	pe->settingFile.replaceWithText(JSON::toString(s));
+
+	if (id == TextEditorSettings::MapWidth)
+	{
+		pe->mapWidth = (int)newValue;
+		pe->resized();
+	}
+	if (id == TextEditorSettings::EnableHover)
+	{
+		pe->codeMap.allowHover = (bool)newValue;
+	}
+	if (id == TextEditorSettings::AutoAutocomplete)
+	{
+		pe->editor.showAutocompleteAfterDelay = (bool)newValue;
+	}
+    if (id == TextEditorSettings::ShowStickyLines)
+    {
+        pe->editor.showStickyLines = (bool)newValue;
+    }
+	if (id == TextEditorSettings::LineBreaks)
+	{
+		pe->editor.setLineBreakEnabled((bool)newValue);
+	}
+	if (id == TextEditorSettings::EnableMap)
+	{
+		pe->mapButton.setToggleStateAndUpdateIcon((bool)newValue);
+		pe->resized();
+	}
+}
+
+void FullEditor::setReadOnly(bool shouldBeReadOnly)
+{
+	editor.setReadOnly(shouldBeReadOnly);
+}
+
+bool FullEditor::injectBreakpointCode(String& s)
+{
+	return editor.gutter.injectBreakPoints(s);
+}
+
+void FullEditor::setColourScheme(const juce::CodeEditorComponent::ColourScheme& s)
+{
+	editor.colourScheme = s;
+}
+
+void FullEditor::setCurrentBreakline(int n)
+{
+	editor.gutter.setCurrentBreakline(n);
+}
+
+void FullEditor::sendBlinkMessage(int n)
+{
+	editor.gutter.sendBlinkMessage(n);
+}
+
+void FullEditor::addBreakpointListener(GutterComponent::BreakpointListener* l)
+{
+	editor.gutter.addBreakpointListener(l);
+}
+
+void FullEditor::removeBreakpointListener(GutterComponent::BreakpointListener* l)
+{
+	editor.gutter.removeBreakpointListener(l);
+}
+
+void FullEditor::enableBreakpoints(bool shouldBeEnabled)
+{
+	editor.gutter.setBreakpointsEnabled(shouldBeEnabled);
+}
+
 void FullEditor::initKeyPresses(Component* root)
 {
 	String category = "Code Editor";
@@ -178,17 +293,48 @@ void FullEditor::paint(Graphics& g)
 
 void MarkdownPreviewSyncer::scrollBarMoved(ScrollBar* scrollBarThatHasMoved, double newRangeStart)
 {
-    synchroniseTabs(scrollBarThatHasMoved == &e.editor.getVerticalScrollBar());
+    if(e == nullptr || p == nullptr)
+        return;
+    
+    synchroniseTabs(scrollBarThatHasMoved == &e->editor.getVerticalScrollBar());
+}
+
+void MarkdownPreviewSyncer::codeDocumentTextInserted(const String& newText, int insertIndex)
+{
+	startTimer(500);
+}
+
+void MarkdownPreviewSyncer::codeDocumentTextDeleted(int startIndex, int endIndex)
+{
+	startTimer(500);
+}
+
+MarkdownPreviewSyncer::MarkdownPreviewSyncer(mcl::FullEditor& editor, MarkdownPreview& preview):
+	p(&preview),
+	e(&editor)
+{
+	e->editor.getTextDocument().getCodeDocument().addListener(this);
+}
+
+MarkdownPreviewSyncer::~MarkdownPreviewSyncer()
+{
+	setEnableScrollbarListening(false);
+    
+    if(e != nullptr)
+        e->editor.getTextDocument().getCodeDocument().removeListener(this);
 }
 
 void MarkdownPreviewSyncer::timerCallback()
 {
+    if(p == nullptr || e == nullptr)
+        return;
+    
 	{
-		MarkdownRenderer::ScopedScrollDisabler sds(p.renderer);
+		MarkdownRenderer::ScopedScrollDisabler sds(p->renderer);
 		ScopedValueSetter<bool> svs(recursiveScrollProtector, true);
 
-		if (p.isShowing())
-			p.setNewText(e.editor.getTextDocument().getCodeDocument().getAllContent(), {}, false);
+		if (p->isShowing())
+			p->setNewText(e->editor.getTextDocument().getCodeDocument().getAllContent(), {}, false);
 
 		stopTimer();
 	}
@@ -196,17 +342,48 @@ void MarkdownPreviewSyncer::timerCallback()
 	synchroniseTabs(true);
 }
 
+XmlEditor::XmlEditor(const File& xmlFile, const String& content):
+	tdoc(doc),
+	editor(tdoc),
+	resizer(this, nullptr)
+{
+	if (!content.isEmpty())
+		doc.replaceAllContent(content);
+	else
+	{
+		doc.replaceAllContent(xmlFile.loadFileAsString());
+		setName(xmlFile.getFileName());
+	}
+			
+	doc.clearUndoHistory();
+	addAndMakeVisible(editor);
+	editor.editor.setLanguageManager(new mcl::XmlLanguageManager());
+	addAndMakeVisible(resizer);
+	setSize(600, 400);
+}
+
+void XmlEditor::resized()
+{
+	auto b = getLocalBounds();
+	b.removeFromTop(24);
+	editor.setBounds(b);
+	resizer.setBounds(b.removeFromBottom(15).removeFromRight(15));
+}
+
 void MarkdownPreviewSyncer::setEnableScrollbarListening(bool shouldListenToScrollBars)
 {
+    if(e == nullptr || p == nullptr)
+        return;
+    
     if (shouldListenToScrollBars)
     {
-        p.viewport.getVerticalScrollBar().addListener(this);
-        e.editor.getVerticalScrollBar().addListener(this);
+        p->viewport.getVerticalScrollBar().addListener(this);
+        e->editor.getVerticalScrollBar().addListener(this);
     }
     else
     {
-        p.viewport.getVerticalScrollBar().removeListener(this);
-        e.editor.getVerticalScrollBar().removeListener(this);
+        p->viewport.getVerticalScrollBar().removeListener(this);
+        e->editor.getVerticalScrollBar().removeListener(this);
     }
 }
 
@@ -215,23 +392,26 @@ void MarkdownPreviewSyncer::synchroniseTabs(bool editorIsSource)
     if (recursiveScrollProtector)
         return;
     
-    if(!e.isVisible() || !p.isVisible())
+    if(e == nullptr || p == nullptr)
+        return;
+    
+    if(!e->isVisible() || !p->isVisible())
         return;
 
     ScopedValueSetter<bool> svs(recursiveScrollProtector, true);
 
     if (!editorIsSource)
     {
-        auto yPos = (float)p.viewport.getViewPositionY();
-        auto lineNumber = p.renderer.getLineNumberForY(yPos);
+        auto yPos = (float)p->viewport.getViewPositionY();
+        auto lineNumber = p->renderer.getLineNumberForY(yPos);
 
-        e.editor.setFirstLineOnScreen(lineNumber);
+        e->editor.setFirstLineOnScreen(lineNumber);
     }
     else
     {
-        auto currentLine = e.editor.getFirstLineOnScreen();
-        auto yPos = p.renderer.getYForLineNumber(currentLine);
-        p.viewport.setViewPosition(0, yPos);
+        auto currentLine = e->editor.getFirstLineOnScreen();
+        auto yPos = p->renderer.getYForLineNumber(currentLine);
+        p->viewport.setViewPosition(0, yPos);
     }
 }
 

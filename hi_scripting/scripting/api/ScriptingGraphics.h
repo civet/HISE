@@ -113,7 +113,7 @@ namespace ScriptingObjects
 
 		ScriptShader(ProcessorWithScriptingContent* sp);;
 
-		Identifier getObjectName() const override { RETURN_STATIC_IDENTIFIER("ScriptShader"); }
+		Identifier getObjectName() const override;
 
 		// =============================================================== API Methods
 
@@ -149,55 +149,23 @@ namespace ScriptingObjects
 
 		void makeStatistics();
 
-		void setEnableLineNumbers(bool shouldUseLineNumbers)
-		{
-			useLineNumbers = shouldUseLineNumbers;
-		}
+		void setEnableLineNumbers(bool shouldUseLineNumbers);
 
 		Component* createPopupComponent(const MouseEvent& e, Component *c) override;
 
-		bool compiledOk() const { return r.wasOk(); }
+		bool compiledOk() const;
 
 		String getErrorMessage(bool verbose) const;
 
-		void setCompileResult(Result compileResult)
-		{
-			r = processErrorMessage(compileResult);
+		void setCompileResult(Result compileResult);
 
-			for (auto f : includedFiles)
-				f->setRuntimeErrors(r);
-		}
+		void setGlobalBounds(Rectangle<int> b, float sf);
 
-		void setGlobalBounds(Rectangle<int> b, float sf)
-		{
-			globalRect = b.toFloat();
-			scaleFactor = sf;
-		}
+		bool shouldWriteToBuffer() const;
 
-		bool shouldWriteToBuffer() const
-		{
-			return enableCache || screenshotPending;
-		}
+		void renderWasFinished(ScreenshotListener::CachedImageBuffer::Ptr newData);
 
-		void renderWasFinished(ScreenshotListener::CachedImageBuffer::Ptr newData)
-		{
-			if (screenshotPending)
-			{
-				DBG("REPAINT DONE");
-				screenshotPending = false;
-				lastScreenshot = newData;
-			}
-			else
-				lastScreenshot = nullptr;
-		}
-
-		ScreenshotListener::CachedImageBuffer::Ptr getScreenshotBuffer()
-		{
-			if (isRenderingScreenshot())
-				return lastScreenshot;
-
-			return nullptr;
-		}
+		ScreenshotListener::CachedImageBuffer::Ptr getScreenshotBuffer();
 
 		struct Wrapper;
 
@@ -224,19 +192,13 @@ namespace ScriptingObjects
 		BlendMode src = BlendMode::_GL_SRC_ALPHA;
 		BlendMode dst = BlendMode::_GL_ONE_MINUS_SRC_ALPHA;
 
-		static bool isRenderingScreenshot() { return renderingScreenShot; }
+		static bool isRenderingScreenshot();
 
 		struct ScopedScreenshotRenderer
 		{
-			ScopedScreenshotRenderer()
-			{
-				renderingScreenShot = true;
-			}
+			ScopedScreenshotRenderer();
 
-			~ScopedScreenshotRenderer()
-			{
-				renderingScreenShot = false;
-			}
+			~ScopedScreenshotRenderer();
 		};
 
 	private:
@@ -291,6 +253,8 @@ namespace ScriptingObjects
         
         Rectangle<float> currentBounds;
         std::unique_ptr<Drawable> svg;
+
+		JUCE_DECLARE_WEAK_REFERENCEABLE(SVGObject);
     };
 
 	class PathObject : public ConstScriptingObject
@@ -335,11 +299,59 @@ namespace ScriptingObjects
 		/** Adds a quadratic bezier curve with the control point [cx,cy] and the end point [x,y]. */
 		void quadraticTo(var cx, var cy, var x, var y);
 
+		/** Adds a cubic bezier curve with two sets of control point arrays [cx1,cy1] and [cx2,cy2], and the end point [x,y]. */
+		void cubicTo(var cxy1, var cxy2, var x, var y);
+
+		/** Adds a addQuadrilateral to the path. */
+		void addQuadrilateral(var xy1, var xy2, var xy3, var xy4);
+
 		/** Adds an arc to the path. */
 		void addArc(var area, var fromRadians, var toRadians);
 
+		/** Adds an ellipse to the path. */
+		void addEllipse(var area);
+
+		/** Adds a rectangle to the path. */
+		void addRectangle(var area);
+
+		/** Adds a rounded rectangle to the path. */
+		void addRoundedRectangle(var area, var cornerSize);
+
+		/** Adds a fully customisable rounded rectangle to the path. area[x,y,w,h], cornerSizeXY[x,y], boolCurves[bool,bool,bool,bool]*/
+		void addRoundedRectangleCustomisable(var area, var cornerSizeXY, var boolCurves);
+
+		/** Adds a triangle to the path. */
+		void addTriangle(var xy1, var xy2, var xy3);
+
+		/** Adds a polygon to the path from the center [x, y]. */
+		void addPolygon(var center, var numSides, var radius, var angle);
+
+		/** Adds an arrow to the path from start [x, y] and end [x, y]. */
+		void addArrow(var start, var end, var thickness, var headWidth, var headLength);
+
+		/** Adds a star to the path from the center [x, y]. */
+		void addStar(var center, var numPoints, var innerRadius, var outerRadius, var angle);
+
+		/** Rescales the path to make it fit neatly into a given space. preserveProportions keeps the w/h ratio.*/
+		void scaleToFit(var x, var y, var width, var height, bool preserveProportions);
+
+		/** Creates a version of this path where all sharp corners have been replaced by curves.*/
+		void roundCorners(var radius);
+
+		/** Returns the point where a line ([x1, y1], [x2, y2]) intersects the path when appropriate. Returns false otherwise. */
+		var getIntersection(var start, var end, bool keepSectionOutsidePath);
+
+		/** Returns the point at a certain distance along the path. */
+		var getPointOnPath(var distanceFromStart);
+
+		/** Checks whether a point lies within the path. This is only relevant for closed paths. */
+		var contains(var point);
+
 		/** Returns the area ([x, y, width, height]) that the path is occupying with the scale factor applied. */
 		var getBounds(var scaleFactor);
+
+		/** Returns the length of the path. */
+		var getLength();
 
 		/** Creates a fillable path using the provided strokeData (with optional dot. */
 		var createStrokedPath(var strokeData, var dotData);
@@ -498,6 +510,9 @@ namespace ScriptingObjects
 		/** Draws the text of the given markdown renderer to its specified area. */
 		void drawMarkdownText(var markdownRenderer);
 
+		/** Draws the spectrum of the FFT object to the panel. */
+		void drawFFTSpectrum(var fftObject, var area);
+
 		/** Sets the current gradient via an array [Colour1, x1, y1, Colour2, x2, y2] */
 		void setGradientFill(var gradientData);
 
@@ -546,6 +561,9 @@ namespace ScriptingObjects
 		/** Adds a drop shadow based on the alpha values of the current image. */
 		void addDropShadowFromAlpha(var colour, int radius);
 
+		/** fills the entire component with a random colour to indicate a UI repaint. */
+		void drawRepaintMarker(const String& label);
+
 		/** Applies an OpenGL shader to the panel. Returns false if the shader could not be compiled. */
 		bool applyShader(var shader, var area);
 
@@ -578,6 +596,9 @@ namespace ScriptingObjects
 		Rectangle<int> getIntRectangleFromVar(const var &data);
 
 		Font currentFont;
+		String currentFontName = "";
+		float currentKerningFactor = 0.0f;
+		float currentFontHeight = 13.0f;
 
 		Result rectangleResult;
 
@@ -612,37 +633,26 @@ namespace ScriptingObjects
 			public SliderPack::LookAndFeelMethods,
 			public CustomKeyboardLookAndFeelBase,
 			public ScriptTableListModel::LookAndFeelMethods,
-            public MatrixPeakMeter::LookAndFeelMethods
+            public MatrixPeakMeter::LookAndFeelMethods,
+			public WaterfallComponent::LookAndFeelMethods
 		{
-			Laf(MainController* mc) :
-				ControlledObject(mc)
-			{}
+			Laf(MainController* mc);
 
-			virtual ~Laf() {};
+			virtual ~Laf();;
 
-			virtual ScriptedLookAndFeel* get()
-			{
-				return dynamic_cast<ScriptedLookAndFeel*>(getMainController()->getCurrentScriptLookAndFeel());
-			}
+			virtual ScriptedLookAndFeel* get();
 
-			Font getFont()
-			{
-				if (auto l = get())
-					return l->f;
-				else
-					return GLOBAL_BOLD_FONT();
-			}
+			Font getFont();
 
-			
 
 			void drawAlertBox(Graphics&, AlertWindow&, const Rectangle<int>& textArea, TextLayout&) override;
 
-			Font getAlertWindowMessageFont() override { return getFont(); }
-			Font getAlertWindowTitleFont() override { return getFont(); }
-			Font getTextButtonFont(TextButton &, int) override { return getFont(); }
-			Font getComboBoxFont(ComboBox&) override { return getFont(); }
-			Font getPopupMenuFont() override { return getFont(); };
-			Font getAlertWindowFont() override { return getFont(); };
+			Font getAlertWindowMessageFont() override;
+			Font getAlertWindowTitleFont() override;
+			Font getTextButtonFont(TextButton &, int) override;
+			Font getComboBoxFont(ComboBox&) override;
+			Font getPopupMenuFont() override;;
+			Font getAlertWindowFont() override;;
 
 			MarkdownLayout::StyleData getAlertWindowMarkdownStyleData() override;
 
@@ -655,6 +665,10 @@ namespace ScriptingObjects
 				const String& shortcutKeyText,
 				const Drawable* icon, const Colour* textColourToUse);
 
+            void drawPopupMenuSectionHeader (Graphics& g,
+                                             const Rectangle<int>& area,
+                                             const String& sectionName);
+            
 			void drawToggleButton(Graphics &g, ToggleButton &b, bool isMouseOverButton, bool /*isButtonDown*/) override;
 
 			void drawRotarySlider(Graphics &g, int /*x*/, int /*y*/, int width, int height, float /*sliderPosProportional*/, float /*rotaryStartAngle*/, float /*rotaryEndAngle*/, Slider &s) override;
@@ -672,7 +686,7 @@ namespace ScriptingObjects
 			void drawButtonBackground(Graphics& g, Button& button, const Colour& /*backgroundColour*/,
 				bool isMouseOverButton, bool isButtonDown) override;
 
-			void drawNumberTag(Graphics& g, Colour& c, Rectangle<int> area, int offset, int size, int number) override;
+			void drawNumberTag(Graphics& g, Component& comp, Colour& c, Rectangle<int> area, int offset, int size, int number) override;
 
 			Path createPresetBrowserIcons(const String& id) override;
 			void drawPresetBrowserBackground(Graphics& g, Component* p) override;
@@ -715,7 +729,7 @@ namespace ScriptingObjects
 			void drawSliderPackRightClickLine(Graphics& g, SliderPack& s, Line<float> lineToDraw) override;
 			void drawSliderPackTextPopup(Graphics& g, SliderPack& s, const String& textToDraw) override;
 
-			void drawTableRowBackground(Graphics& g, const ScriptTableListModel::LookAndFeelData& d, int rowNumber, int width, int height, bool rowIsSelected) override;
+			void drawTableRowBackground(Graphics& g, const ScriptTableListModel::LookAndFeelData& d, int rowNumber, int width, int height, bool rowIsSelected, bool rowIsHovered) override;
 
 			void drawTableCell(Graphics& g, const  ScriptTableListModel::LookAndFeelData& d, const String& text, int rowNumber, int columnId, int width, int height, bool rowIsSelected, bool cellIsClicked, bool cellIsHovered) override;
 
@@ -738,6 +752,9 @@ namespace ScriptingObjects
 
             void drawMatrixPeakMeter(Graphics& g, float* peakValues, float* maxPeaks, int numChannels, bool isVertical, float segmentSize, float paddingSize, Component* c) override;
             
+			void drawWavetableBackground(Graphics& g, WaterfallComponent& wc, bool isEmpty) override;
+			void drawWavetablePath(Graphics& g, WaterfallComponent& wc, const Path& p, int tableIndex, bool isStereo, int currentTableIndex, int numTables) override;
+
 			Image createIcon(PresetHandler::IconType type) override;
 
 			bool functionDefined(const String& s);
@@ -766,7 +783,7 @@ namespace ScriptingObjects
 
 		~ScriptedLookAndFeel();
 
-		Identifier getObjectName() const override { return "ScriptLookAndFeel"; }
+		Identifier getObjectName() const override;
 
 		// ========================================================================================
 
@@ -779,51 +796,23 @@ namespace ScriptingObjects
 		/** Loads an image that can be used by the look and feel functions. */
 		void loadImage(String imageFile, String prettyName);
 
+		/** Unload all images from the look and feel object. */
+		void unloadAllImages();
+
+		/** Checks if the image has been loaded into the look and feel obkect */
+		bool isImageLoaded(String prettyName);
+
 		// ========================================================================================
 
 		bool callWithGraphics(Graphics& g_, const Identifier& functionname, var argsObject, Component* c);
 
 		var callDefinedFunction(const Identifier& name, var* args, int numArgs);
 
-		int getNumChildElements() const override
-		{
-			if (auto dyn = functions.getDynamicObject())
-				return dyn->getProperties().size();
-            
-            return 0;
-		}
+		int getNumChildElements() const override;
 
 		Location getLocation() const override;
 
-		DebugInformationBase* getChildElement(int index) override
-		{
-			WeakReference<ScriptedLookAndFeel> safeThis(this);
-
-			auto vf = [safeThis, index]()
-			{
-				if (safeThis != nullptr)
-				{
-					if (auto dyn = safeThis->functions.getDynamicObject())
-					{
-						if(isPositiveAndBelow(index, dyn->getProperties().size()))
-							return dyn->getProperties().getValueAt(index);
-					}
-				}
-
-				return var();
-			};
-
-			String id = "%PARENT%.";
-
-			auto mid = functions.getDynamicObject()->getProperties().getName(index);
-
-			id << mid;
-
-			Location l = getLocation();
-
-
-			return new LambdaValueInformation(vf, id, {}, (DebugInformation::Type)getTypeNumber(), l);
-		}
+		DebugInformationBase* getChildElement(int index) override;
 
 		static Array<Identifier> getAllFunctionNames();
 
@@ -843,18 +832,7 @@ namespace ScriptingObjects
 
 		var functions;
 
-		Image getLoadedImage(const String& prettyName)
-		{
-			for (auto& img : loadedImages)
-			{
-				if (img.prettyName == prettyName)
-				{
-					return img.image ? *img.image.getData() : Image();
-				}
-			}
-
-			return Image();
-		}
+		Image getLoadedImage(const String& prettyName);
 
 		struct NamedImage
 		{

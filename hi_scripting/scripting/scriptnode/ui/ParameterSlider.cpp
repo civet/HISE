@@ -45,7 +45,7 @@ namespace RangeIcons
 
 
 
-struct ParameterSlider::RangeComponent : public Component,
+struct ParameterSlider::RangeComponent : public ComponentWithMiddleMouseDrag,
 	public Timer,
 	public TextEditor::Listener
 {
@@ -989,6 +989,15 @@ bool ParameterSlider::isInterestedInDragSource(const SourceDetails& details)
 
 	auto sourceNode = details.sourceComponent->findParentComponentOfClass<NodeComponent>()->node.get();
 
+    if(dynamic_cast<NodeContainer*>(node.get()) != nullptr)
+    {
+        if(valuetree::Helpers::isParent(sourceNode->getValueTree(), node->getValueTree()))
+        {
+            illegal = true;
+            return false;
+        }
+    }
+    
 	if (CloneNode::getCloneIndex(sourceNode) > 0)
 	{
 		illegal = true;
@@ -1196,6 +1205,8 @@ bool ParameterSlider::matchesConnection(ValueTree& c) const
 
 void ParameterSlider::mouseDown(const MouseEvent& e)
 {
+	CHECK_MIDDLE_MOUSE_DOWN(e);
+
     auto p = dynamic_cast<Processor*>(parameterToControl->getScriptProcessor());
     
     if (isLearnable() && p->getMainController()->getScriptComponentEditBroadcaster()->getCurrentlyLearnedComponent() != nullptr)
@@ -1248,7 +1259,17 @@ void ParameterSlider::mouseDown(const MouseEvent& e)
 	}
 }
 
+void ParameterSlider::mouseUp(const MouseEvent& e)
+{
+	CHECK_MIDDLE_MOUSE_UP(e);
+	Slider::mouseUp(e);
+}
 
+void ParameterSlider::mouseDrag(const MouseEvent& e)
+{
+	CHECK_MIDDLE_MOUSE_DRAG(e);
+	Slider::mouseDrag(e);
+}
 
 
 void ParameterSlider::mouseEnter(const MouseEvent& e)
@@ -1636,7 +1657,7 @@ Path MacroParameterSlider::createPath(const String& url) const
 {
     Path p;
     
-    LOAD_PATH_IF_URL("warning", EditorIcons::warningIcon);
+	LOAD_EPATH_IF_URL("warning", EditorIcons::warningIcon);
     
     return p;
 }
@@ -1649,9 +1670,9 @@ void MacroParameterSlider::resized()
     warningButton.setBounds(b.removeFromRight(18).removeFromTop(18));
 }
 
-void MacroParameterSlider::mouseDrag(const MouseEvent& )
+void MacroParameterSlider::mouseDrag(const MouseEvent& e)
 {
-    
+	CHECK_MIDDLE_MOUSE_DRAG(e);
     
 	if (editEnabled)
 	{
@@ -1668,6 +1689,8 @@ void MacroParameterSlider::mouseDrag(const MouseEvent& )
 
 void MacroParameterSlider::mouseUp(const MouseEvent& e)
 {
+	CHECK_MIDDLE_MOUSE_UP(e);
+
 	slider.repaintParentGraph();
 }
 

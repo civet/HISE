@@ -94,11 +94,14 @@ void UserPresetHelpers::saveUserPreset(ModulatorSynthChain *chain, const String&
 
 			if (notify)
 			{
-				chain->getMainController()->getUserPresetHandler().setCurrentlyLoadedFile(presetFile);
+
+				chain->getMainController()->getUserPresetHandler().currentlyLoadedFile = presetFile;
 				chain->getMainController()->getUserPresetHandler().sendRebuildMessage();
 			}
 		}
 	}
+
+	chain->getMainController()->getUserPresetHandler().postPresetSave();
 }
 
 juce::ValueTree UserPresetHelpers::createUserPreset(ModulatorSynthChain* chain)
@@ -115,8 +118,7 @@ juce::ValueTree UserPresetHelpers::createUserPreset(ModulatorSynthChain* chain)
 
 		if (chain->getMainController()->getUserPresetHandler().isUsingCustomDataModel())
 		{
-			auto v = chain->getMainController()->getUserPresetHandler().createCustomValueTree("Unused");
-			preset.addChild(v, -1, nullptr);
+			chain->getMainController()->getUserPresetHandler().saveStateManager(preset, UserPresetIds::CustomJSON);
 		}
 		else
 		{
@@ -126,27 +128,23 @@ juce::ValueTree UserPresetHelpers::createUserPreset(ModulatorSynthChain* chain)
 			preset.addChild(v, -1, nullptr);
 		}
 
-		auto modules = createModuleStateTree(chain);
+		chain->getMainController()->getUserPresetHandler().saveStateManager(preset, UserPresetIds::Modules);
 
-		if (modules.getNumChildren() != 0)
-		{
-			preset.addChild(modules, -1, nullptr);
-		}
 	}
 #endif
 
-	ValueTree autoData = chain->getMainController()->getMacroManager().getMidiControlAutomationHandler()->exportAsValueTree();
-	ValueTree mpeData = chain->getMainController()->getMacroManager().getMidiControlAutomationHandler()->getMPEData().exportAsValueTree();
+	chain->getMainController()->getUserPresetHandler().saveStateManager(preset, UserPresetIds::MidiAutomation);
+	chain->getMainController()->getUserPresetHandler().saveStateManager(preset, UserPresetIds::MPEData);
 
 	preset.setProperty("Version", getCurrentVersionNumber(chain), nullptr);
 
 	addRequiredExpansions(chain->getMainController(), preset);
 
-	preset.addChild(autoData, -1, nullptr);
-	preset.addChild(mpeData, -1, nullptr);
-
 	if(chain->getMainController()->getMacroManager().isMacroEnabledOnFrontend())
 		chain->saveMacrosToValueTree(preset);
+
+	// Store the rest...
+	chain->getMainController()->getUserPresetHandler().saveStateManager(preset, UserPresetIds::AdditionalStates);
 
 	return preset;
 }
@@ -190,109 +188,23 @@ StringArray UserPresetHelpers::checkRequiredExpansions(MainController* mc, Value
 	return missingExpansions;
 }
 
-juce::ValueTree UserPresetHelpers::createModuleStateTree(ModulatorSynthChain* chain)
-{
-	ValueTree modules("Modules");
 
-	if (auto sp = JavascriptMidiProcessor::getFirstInterfaceScriptProcessor(chain->getMainController()))
-	{
-		for (auto ms : sp->getListOfModuleIds())
-		{
-			auto id = ms->id;
-
-			if (auto p = ProcessorHelpers::getFirstProcessorWithName(chain, id))
-			{
-				auto mTree = p->exportAsValueTree();
-
-				mTree.removeChild(mTree.getChildWithName("EditorStates"), nullptr);
-
-				ms->stripValueTree(mTree);
-
-				modules.addChild(mTree, -1, nullptr);
-			}
-		}
-	}
-
-	return modules;
-}
 
 void UserPresetHelpers::loadUserPreset(ModulatorSynthChain *chain, const File &fileToLoad)
 {
-	auto xml = XmlDocument::parse(fileToLoad);
-    
-    if(xml != nullptr)
-    {
-		ValueTree parent = ValueTree::fromXml(*xml);
-        
-		chain->getMainController()->getDebugLogger().logMessage("### Loading user preset " + fileToLoad.getFileNameWithoutExtension() + "\n");
-
-        if (parent.isValid())
-        {
-			chain->getMainController()->getUserPresetHandler().setCurrentlyLoadedFile(fileToLoad);
-
-            loadUserPreset(chain, parent);
-        }
-    }
+	chain->getMainController()->getDebugLogger().logMessage("### Loading user preset " + fileToLoad.getFileNameWithoutExtension() + "\n");
+	chain->getMainController()->loadUserPresetAsync(fileToLoad);
 }
 
+#if 0
 void UserPresetHelpers::loadUserPreset(ModulatorSynthChain* chain, const ValueTree &parent)
 {
 	chain->getMainController()->loadUserPresetAsync(parent);
 
 }
+#endif
 
-void UserPresetHelpers::restoreModuleStates(ModulatorSynthChain* chain, const ValueTree& v)
-{
-	auto modules = v.getChildWithName("Modules");
 
-	if (modules.isValid())
-	{
-		auto& md = chain->getMainController()->getUserPresetHandler().getStoredModuleData();
-
-		bool didSomething = false;
-
-		for (auto m : modules)
-		{
-			didSomething = true;
-
-			auto id = m["ID"].toString();
-			auto p = ProcessorHelpers::getFirstProcessorWithName(chain, id);
-
-			if (p != nullptr)
-			{
-				auto mcopy = m.createCopy();
-
-				for (auto ms : md)
-				{
-					if (ms->id == id)
-					{
-						ms->restoreValueTree(mcopy);
-						break;
-					}
-				}
-
-				if (p->getType().toString() == mcopy["Type"].toString())
-				{
-					p->restoreFromValueTree(mcopy);
-					p->sendPooledChangeMessage();
-				}
-			}
-		}
-
-		auto& uph = chain->getMainController()->getUserPresetHandler();
-
-		if (didSomething && uph.isUsingCustomDataModel())
-		{
-			auto numDataObjects = uph.getNumCustomAutomationData();
-
-			// We might need to update the custom automation data values.
-			for (int i = 0; i < numDataObjects; i++)
-			{
-				uph.getCustomAutomationData(i)->updateFromConnectionValue(0);
-			}
-		}
-	}
-}
 
 #if !USE_MIDI_AUTOMATION_MIGRATION
 Identifier UserPresetHelpers::getAutomationIndexFromOldVersion(const String& /*oldVersion*/, int /*oldIndex*/)
@@ -471,12 +383,21 @@ void UserPresetHelpers::extractUserPresets(const char* userPresetData, size_t si
 #if USE_FRONTEND && !DONT_CREATE_USER_PRESET_FOLDER
 	auto userPresetDirectory = FrontendHandler::getUserPresetDirectory();
 
+#if !HISE_OVERWRITE_OLD_USER_PRESETS
 	if (userPresetDirectory.isDirectory())
 		return;
+#else
+	auto infoFile = userPresetDirectory.getChildFile("info.json");
+	auto infoObj = JSON::parse(infoFile);
+
+	if (infoObj.getProperty(ExpansionIds::Version, "").toString() == FrontendHandler::getVersionString())
+		return;
+#endif
 
 	LOG_START("Extracting user presets to AppData directory");
 
-	userPresetDirectory.createDirectory();
+	if(!userPresetDirectory.isDirectory())
+		userPresetDirectory.createDirectory();
 
 	zstd::ZCompressor<UserPresetDictionaryProvider> decompressor;
 
@@ -487,6 +408,16 @@ void UserPresetHelpers::extractUserPresets(const char* userPresetData, size_t si
 	decompressor.expand(mb, presetTree);
 
 	extractDirectory(presetTree, userPresetDirectory);
+
+#if HISE_OVERWRITE_OLD_USER_PRESETS
+	
+	infoObj = var(new DynamicObject());
+	infoObj.getDynamicObject()->setProperty(ExpansionIds::Name, FrontendHandler::getProjectName());
+	infoObj.getDynamicObject()->setProperty(ExpansionIds::Version, FrontendHandler::getVersionString());
+	infoObj.getDynamicObject()->setProperty("Date", Time::getCurrentTime().toISO8601(true));
+	infoFile.replaceWithText(JSON::toString(infoObj));
+
+#endif
 
 #else
 	ignoreUnused(userPresetData, size);
@@ -523,6 +454,22 @@ void UserPresetHelpers::extractDirectory(ValueTree directory, File parent)
 			extractPreset(category, parent);
 	}
 }
+
+ModuleStateManager::ModuleStateManager(MainController* mc):
+	ControlledObject(mc)
+{}
+
+ModuleStateManager::StoredModuleData** ModuleStateManager::begin()
+{ return modules.begin(); }
+
+ModuleStateManager::StoredModuleData** ModuleStateManager::end()
+{ return modules.end(); }
+
+Identifier ModuleStateManager::getUserPresetStateId() const
+{ return UserPresetIds::Modules; }
+
+void ModuleStateManager::resetUserPresetState()
+{}
 
 void PresetHandler::saveProcessorAsPreset(Processor *p, const String &directoryPath/*=String()*/)
 {
@@ -759,34 +706,24 @@ void ProjectHandler::createNewProject(File &workingDirectory, Component* )
 {
 	if (workingDirectory.exists() && workingDirectory.isDirectory())
 	{
-		while (workingDirectory.getNumberOfChildFiles(File::findFilesAndDirectories) != 0)
+		while (workingDirectory.getNumberOfChildFiles(File::findFilesAndDirectories) > 1)
 		{
 			PresetHandler::showMessageWindow("Directory already exists", "The directory is not empty. Try another one...", PresetHandler::IconType::Warning);
             
             FileChooser fc("Create new project directory");
             
             if (fc.browseForDirectory())
-            {
                 workingDirectory = fc.getResult();
-            }
             else
-            {
                 return;
-            }
 		}
 	}
 
 	for (int i = 0; i < (int)SubDirectories::numSubDirectories; i++)
 	{
 		File subDirectory = workingDirectory.getChildFile(getIdentifier((SubDirectories)i));
-
 		subDirectory.createDirectory();
-
-		
-
 	}
-
-	setWorkingProject(workingDirectory);
 }
 
 juce::Result ProjectHandler::setWorkingProject(const File &workingDirectory, bool checkDirectories)
@@ -840,7 +777,7 @@ juce::Result ProjectHandler::setWorkingProject(const File &workingDirectory, boo
 		xml->addChildElement(child);
 	}
 
-	getAppDataDirectory().getChildFile("projects.xml").replaceWithText(xml->createDocument(""));
+	getAppDataDirectory(nullptr).getChildFile("projects.xml").replaceWithText(xml->createDocument(""));
 
 	ScopedLock sl(listeners.getLock());
 
@@ -852,12 +789,14 @@ juce::Result ProjectHandler::setWorkingProject(const File &workingDirectory, boo
 			listeners.remove(i--);
 	}
 
+	getMainController()->setWebViewRoot(currentWorkDirectory);
+
 	return Result::ok();
 }
 
 void ProjectHandler::restoreWorkingProjects()
 {
-	auto xml = XmlDocument::parse(getAppDataDirectory().getChildFile("projects.xml"));
+	auto xml = XmlDocument::parse(getAppDataDirectory(nullptr).getChildFile("projects.xml"));
 
 	if (xml != nullptr)
 	{
@@ -874,7 +813,7 @@ void ProjectHandler::restoreWorkingProjects()
 
 		setWorkingProject(current, false);
 
-		jassert(currentWorkDirectory.exists() && currentWorkDirectory.isDirectory());
+		
 	}
 }
 
@@ -904,10 +843,15 @@ bool ProjectHandler::isValidProjectFolder(const File &file) const
 
 bool ProjectHandler::anySubdirectoryExists(const File& possibleProjectFolder) const
 {
-	return	possibleProjectFolder.getChildFile("Scripts").isDirectory() ||
-			possibleProjectFolder.getChildFile("SampleMaps").isDirectory() ||
-			possibleProjectFolder.getChildFile("XmlPresetBackups").isDirectory();
+    for(const auto& dir: getSubDirectoryIds())
+    {
+        auto id = getIdentifier(dir);
+        id.removeCharacters("/");
+        if(possibleProjectFolder.getChildFile(id).isDirectory())
+            return true;
+    }
 
+    return false;
 }
 
 File ProjectHandler::getWorkDirectory() const
@@ -920,6 +864,11 @@ File ProjectHandler::getWorkDirectory() const
 	else return currentWorkDirectory;
 }
 
+
+String ProjectHandler::getDefaultUserPreset() const
+{
+	return GET_HISE_SETTING(getMainController()->getMainSynthChain(), HiseSettings::Project::DefaultUserPreset);
+}
 
 juce::ValueTree ProjectHandler::getEmbeddedNetwork(const String& id)
 {
@@ -959,82 +908,104 @@ struct FileModificationComparator
 
 void ProjectHandler::createRSAKey() const
 {
-	RSAKey publicKey;
-	RSAKey privateKey;
-
-	Random r;
-
-	const int seeds[] = { r.nextInt(), r.nextInt(), r.nextInt(), r.nextInt(), r.nextInt(), r.nextInt() };
-
-	auto existingFile = getWorkDirectory().getChildFile("RSA.xml");
-
-	if (existingFile.existsAsFile())
-	{
-		publicKey = RSAKey(getPublicKeyFromFile(existingFile));
-		privateKey = RSAKey(getPrivateKeyFromFile(existingFile));
-	}
-	else
-		RSAKey::createKeyPair(publicKey, privateKey, 512, seeds, 6);
-
-	
-
 	AlertWindowLookAndFeel wlaf;
 
-	AlertWindow w("RSA Keys", "You can use this key pair for the copy protection", AlertWindow::InfoIcon);
+	AlertWindow aw("Create RSA Keys", "Generate an RSA key pair of the desired bit length\n(Higher bit length can take time)", AlertWindow::AlertIconType::NoIcon);
 
-	w.setLookAndFeel(&wlaf);
+	aw.setLookAndFeel(&wlaf);
+	
+	aw.addComboBox("keyLength", StringArray(), "Select bit length");
 
-	w.addTextEditor("publicKey", publicKey.toString(), "Public Key", false);
-	w.getTextEditor("publicKey")->setReadOnly(true);
+	ComboBox* b = aw.getComboBoxComponent("keyLength");
 
-	w.addTextEditor("privateKey", privateKey.toString(), "Private Key", false);
-	w.getTextEditor("privateKey")->setReadOnly(true);
+    StringArray bitLength = { "512", "1024", "2048" };
 
-	w.addButton("OK", 0, KeyPress(KeyPress::returnKey));
-	w.addButton("Copy to clipboard", 1);
-	w.addButton("Save to project folder", 2);
+	b->addItemList(bitLength, 1);
+	b->setSelectedItemIndex(0);
+	GlobalHiseLookAndFeel::setDefaultColours(*b);
 
-	const int result = w.runModalLoop();
+	aw.addButton("Create", 1, KeyPress(KeyPress::returnKey));
+	aw.addButton("Cancel", 0, KeyPress(KeyPress::escapeKey));
 
-	String text = "public: " + publicKey.toString() + "\n";
-	text << "private: " << privateKey.toString();
+	const int awResult = aw.runModalLoop();
 
-	if (result == 1)
+	if (awResult == 1)
 	{
-		SystemClipboard::copyTextToClipboard(text);
-		PresetHandler::showMessageWindow("RSA Keys copied to clipboard", "The RSA keys are copied to the clipboard.", PresetHandler::IconType::Info);
-	}
-	else if (result == 2)
-	{
-		ScopedPointer<XmlElement> xml = new XmlElement("KeyPair");
+        RSAKey publicKey;
+		RSAKey privateKey;
 
-		xml->addChildElement(new XmlElement("PublicKey"));
-		xml->addChildElement(new XmlElement("PrivateKey"));
+		Random r;
+        
+        const int l = bitLength[b->getSelectedItemIndex()].getIntValue();
+        
+		const int seeds[] = { r.nextInt(), r.nextInt(), r.nextInt(), r.nextInt(), r.nextInt(), r.nextInt() };
 
-		xml->getChildByName("PublicKey")->setAttribute("value", publicKey.toString());
-		xml->getChildByName("PrivateKey")->setAttribute("value", privateKey.toString());
+		auto existingFile = getWorkDirectory().getChildFile("RSA.xml");
 
-		auto key = privateKey.toString();
-		auto numbers = StringArray::fromTokens(key, ",", "");
+		if (existingFile.existsAsFile())
+		{
+			publicKey = RSAKey(getPublicKeyFromFile(existingFile));
+			privateKey = RSAKey(getPrivateKeyFromFile(existingFile));
+		}
+		else
+			RSAKey::createKeyPair(publicKey, privateKey, l, seeds, 6);
 
-		BigInteger b1, b2;
-		b1.parseString(numbers[0], 16);
-		b2.parseString(numbers[1], 16);
+		AlertWindow w("RSA Keys", "You can use this key pair for the copy protection", AlertWindow::InfoIcon);
 
-		auto n1 = b1.toString(10);
-		auto n2 = b2.toString(10);
+		w.setLookAndFeel(&wlaf);
 
-		xml->addChildElement(new XmlElement("ServerKey1"));
-		xml->addChildElement(new XmlElement("ServerKey2"));
+        w.addTextEditor("publicKey", publicKey.toString(), "Public Key", false);
+		w.getTextEditor("publicKey")->setReadOnly(true);
 
-		xml->getChildByName("ServerKey1")->setAttribute("value", n1);
-		xml->getChildByName("ServerKey2")->setAttribute("value", n2);
-		
-		File rsaFile = getWorkDirectory().getChildFile("RSA.xml");
+		w.addTextEditor("privateKey", privateKey.toString(), "Private Key", false);
+		w.getTextEditor("privateKey")->setReadOnly(true);
 
-		rsaFile.replaceWithText(xml->createDocument(""));
-		
-		PresetHandler::showMessageWindow("RSA keys exported to file", "The RSA Keys are written to the file " + rsaFile.getFullPathName(), PresetHandler::IconType::Info);
+		w.addButton("OK", 0, KeyPress(KeyPress::returnKey));
+		w.addButton("Copy to clipboard", 1);
+		w.addButton("Save to project folder", 2);
+
+		const int result = w.runModalLoop();
+
+		String text = "public: " + publicKey.toString() + "\n";
+		text << "private: " << privateKey.toString();
+
+		if (result == 1)
+		{
+			SystemClipboard::copyTextToClipboard(text);
+			PresetHandler::showMessageWindow("RSA Keys copied to clipboard", "The RSA keys are copied to the clipboard.", PresetHandler::IconType::Info);
+		}
+		else if (result == 2)
+		{
+			ScopedPointer<XmlElement> xml = new XmlElement("KeyPair");
+
+			xml->addChildElement(new XmlElement("PublicKey"));
+			xml->addChildElement(new XmlElement("PrivateKey"));
+
+			xml->getChildByName("PublicKey")->setAttribute("value", publicKey.toString());
+			xml->getChildByName("PrivateKey")->setAttribute("value", privateKey.toString());
+
+			auto key = privateKey.toString();
+			auto numbers = StringArray::fromTokens(key, ",", "");
+
+			BigInteger b1, b2;
+			b1.parseString(numbers[0], 16);
+			b2.parseString(numbers[1], 16);
+
+			auto n1 = b1.toString(10);
+			auto n2 = b2.toString(10);
+
+			xml->addChildElement(new XmlElement("ServerKey1"));
+			xml->addChildElement(new XmlElement("ServerKey2"));
+
+			xml->getChildByName("ServerKey1")->setAttribute("value", n1);
+			xml->getChildByName("ServerKey2")->setAttribute("value", n2);
+			
+			File rsaFile = getWorkDirectory().getChildFile("RSA.xml");
+
+			rsaFile.replaceWithText(xml->createDocument(""));
+			
+			PresetHandler::showMessageWindow("RSA keys exported to file", "The RSA Keys are written to the file " + rsaFile.getFullPathName(), PresetHandler::IconType::Info);
+		}
 	}
 }
 
@@ -1077,20 +1048,52 @@ void ProjectHandler::checkActiveProject()
 	
 }
 
-juce::File ProjectHandler::getAppDataRoot()
+juce::File ProjectHandler::getAppDataRoot(MainController* mc)
 {
+#if USE_BACKEND
+    
+    // Check this property dynamically
+    File::SpecialLocationType appDataDirectoryToUse;
+    
+    if(mc == nullptr)
+    {
+        // if we pass in nullptr here, it's supposed to return the HISE app data folder
+        // which is always local
+        appDataDirectoryToUse = File::userApplicationDataDirectory;
+    }
+    else
+    {
+#if JUCE_WINDOWS
+        auto idToUse = HiseSettings::Project::UseGlobalAppDataFolderWindows;
+#else
+        auto idToUse = HiseSettings::Project::UseGlobalAppDataFolderMacOS;
+#endif
+        
+        if(GET_HISE_SETTING(mc->getMainSynthChain(), idToUse))
+            appDataDirectoryToUse = File::commonApplicationDataDirectory;
+        else
+            appDataDirectoryToUse = File::userApplicationDataDirectory;
+    }
+#else
+    
+    // discard the mc pointer, we'll use a static property
+    ignoreUnused(mc);
+    
+    // Use the preprocessor to figure it out in the compiled plugin
 #if HISE_USE_SYSTEM_APP_DATA_FOLDER
     const File::SpecialLocationType appDataDirectoryToUse = File::commonApplicationDataDirectory;
 #else
-	const File::SpecialLocationType appDataDirectoryToUse = File::userApplicationDataDirectory;
+    const File::SpecialLocationType appDataDirectoryToUse = File::userApplicationDataDirectory;
 #endif
+#endif
+    
     
 #if JUCE_IOS
 	return File::getSpecialLocation(appDataDirectoryToUse).getChildFile("Application Support/");
 #elif JUCE_MAC
 
 
-#if ENABLE_APPLE_SANDBOX
+#if !USE_BACKEND && ENABLE_APPLE_SANDBOX
     ignoreUnused(appDataDirectoryToUse);
 	return File::getSpecialLocation(File::userMusicDirectory);
 #else
@@ -1104,27 +1107,22 @@ juce::File ProjectHandler::getAppDataRoot()
 
 }
 
-juce::File ProjectHandler::getAppDataDirectory()
+juce::File ProjectHandler::getAppDataDirectory(MainController* mc)
 {
-
-#if HISE_USE_SYSTEM_APP_DATA_FOLDER
-	const File::SpecialLocationType appDataDirectoryToUse = File::commonApplicationDataDirectory;
-#else
-	const File::SpecialLocationType appDataDirectoryToUse = File::userApplicationDataDirectory;
-#endif
+    auto appDataRoot = getAppDataRoot(mc);
 
 
 #if JUCE_WINDOWS
 	// Windows
-	File f = File::getSpecialLocation(appDataDirectoryToUse).getChildFile("HISE");
+	File f = appDataRoot.getChildFile("HISE");
 #elif JUCE_MAC
 
 #if HISE_IOS
 	// iOS
-	File f = File::getSpecialLocation(appDataDirectoryToUse);
+	File f = appDataRoot
 #else
 	// OS X
-	File f = File::getSpecialLocation(appDataDirectoryToUse).getChildFile("Application Support/HISE");
+	File f = appDataRoot.getChildFile("HISE");
 #endif
 
 #else
@@ -1132,9 +1130,10 @@ juce::File ProjectHandler::getAppDataDirectory()
 	File f = File::getSpecialLocation(File::SpecialLocationType::userHomeDirectory).getChildFile(".hise/");
 #endif
 
-	if (!f.isDirectory()) f.createDirectory();
+	if (!f.isDirectory())
+        f.createDirectory();
 
-	return f.getFullPathName();
+    return f;
 }
 
 juce::String FrontendHandler::checkSampleReferences(MainController* mc, bool returnTrueIfOneSampleFound)
@@ -1294,7 +1293,7 @@ File FrontendHandler::getSampleLocationForCompiledPlugin()
     
     
     
-	File appDataDir = getAppDataDirectory();
+	File appDataDir = getAppDataDirectory(nullptr);
 
 	// The installer should take care of creating the app data directory...
 	jassert(appDataDir.isDirectory());
@@ -1350,9 +1349,10 @@ File FrontendHandler::getSampleLocationForCompiledPlugin()
 #endif
 }
 
-juce::File FrontendHandler::getAppDataDirectory()
+juce::File FrontendHandler::getAppDataDirectory(MainController* /*unused*/)
 {
-	auto root = ProjectHandler::getAppDataRoot();
+    auto root = ProjectHandler::getAppDataRoot(nullptr);
+    
 	auto f = root.getChildFile(getCompanyName() + "/" + getProjectName());
 
 	if (!f.isDirectory())
@@ -1370,7 +1370,7 @@ juce::ValueTree FrontendHandler::getEmbeddedNetwork(const String& id)
 	}
 
 #if USE_FRONTEND
-	if (ScopedPointer<scriptnode::dll::FactoryBase> f = FrontendHostFactory::createStaticFactory())
+	if (ScopedPointer<scriptnode::dll::FactoryBase> f = scriptnode::DspNetwork::createStaticFactory())
 	{
 		// We need to look in the compiled networks and return a dummy ValueTree
 		int numNodes = f->getNumNodes();
@@ -1781,6 +1781,151 @@ PopupMenu PresetHandler::getAllSavedPresets(int minIndex, Processor *p)
 	return m;
 }
 
+void PresetHandler::stripViewsFromPreset(ValueTree& preset)
+{
+	preset.removeProperty("views", nullptr);
+	preset.removeProperty("currentView", nullptr);
+
+	preset.removeProperty("EditorState", nullptr);
+
+	for(int i = 0; i < preset.getNumChildren(); i++)
+	{
+		ValueTree child = preset.getChild(i);
+            
+		stripViewsFromPreset(child);
+	}
+}
+
+File PresetHandler::loadFile(const String& extension)
+{
+	jassert(extension.isEmpty() || extension.startsWith("*"));
+
+	FileChooser fc("Load File", File(), extension, true);
+        
+	if(fc.browseForFileToOpen())
+	{
+            
+		return fc.getResult();
+	}
+	return File();
+}
+
+void PresetHandler::saveFile(const String& dataToSave, const String& extension)
+{
+	jassert(extension.isEmpty() || extension.startsWith("*"));
+
+	FileChooser fc("Save File", File(), extension);
+        
+	if(fc.browseForFileToSave(true))
+	{
+		fc.getResult().deleteFile();
+		fc.getResult().create();
+		fc.getResult().appendText(dataToSave);
+	}
+        
+}
+
+File PresetHandler::getSampleFolder(const String& libraryName)
+{
+	const bool search = NativeMessageBox::showOkCancelBox(AlertWindow::WarningIcon, "Sample Folder can't be found", "The sample folder for " + libraryName + "can't be found. Press OK to search or Cancel to abort loading");
+
+	if(search)
+	{
+		FileChooser fc("Searching Sample Folder");
+
+		if(fc.browseForDirectory())
+		{
+			File sampleFolder = fc.getResult();
+
+				
+
+			return sampleFolder;
+		}
+	}
+		
+
+	return File();
+		
+		
+}
+
+ValueTree PresetHandler::loadValueTreeFromData(const void* data, size_t size, bool wasCompressed)
+{
+	if (wasCompressed)
+	{
+		return ValueTree::readFromGZIPData(data, size);
+	}
+	else
+	{
+		return ValueTree::readFromData(data, size);
+	}
+}
+
+void PresetHandler::writeValueTreeAsFile(const ValueTree& v, const String& fileName, bool compressData)
+{
+	File file(fileName);
+	file.deleteFile();
+	file.create();
+
+	if (compressData)
+	{
+		FileOutputStream fos(file);
+
+		GZIPCompressorOutputStream gzos(&fos, 9, false);
+
+		MemoryOutputStream mos;
+
+		v.writeToStream(mos);
+
+		gzos.write(mos.getData(), mos.getDataSize());
+		gzos.flush();
+	}
+	else
+	{
+		FileOutputStream fos(file);
+
+		v.writeToStream(fos);
+	}
+}
+
+var PresetHandler::writeValueTreeToMemoryBlock(const ValueTree& v, bool compressData)
+{
+
+	juce::MemoryBlock mb;
+
+	if (compressData)
+	{
+		MemoryOutputStream mos(mb, false);
+
+		GZIPCompressorOutputStream gzos(&mos, 9, false);
+
+		MemoryOutputStream internalMos;
+
+		v.writeToStream(internalMos);
+
+		gzos.write(internalMos.getData(), internalMos.getDataSize());
+		gzos.flush();
+	}
+	else
+	{
+		MemoryOutputStream mos(mb, false);
+
+		v.writeToStream(mos);
+	}
+
+	return var(mb.getData(), mb.getSize());
+}
+
+void PresetHandler::setCurrentMainController(void* mc)
+{
+	currentController = mc;
+}
+
+LookAndFeel* PresetHandler::createAlertWindowLookAndFeel()
+{
+	return HiseColourScheme::createAlertWindowLookAndFeel(currentController);
+}
+
 File PresetHandler::getPresetFileFromMenu(int menuIndexDelta, Processor *parent)
 {
 	File directory = getDirectory(parent);
@@ -2033,7 +2178,11 @@ void PresetHandler::buildProcessorDataBase(Processor *root)
 	ignoreUnused(root);
 
 #if USE_BACKEND
-	auto f = NativeFileHandler::getAppDataDirectory().getChildFile("moduleEnums.xml");
+
+	if (CompileExporter::isExportingFromCommandLine())
+		return;
+
+	auto f = NativeFileHandler::getAppDataDirectory(nullptr).getChildFile("moduleEnums.xml");
 
 	if (f.existsAsFile()) return;
 
@@ -2361,6 +2510,32 @@ void AboutPage::paint(Graphics &g)
 	infoData.draw(g, Rectangle<float>(40.0f, textOffset, (float)getWidth() - 80.0f, (float)getHeight() - textOffset));
 }
 
+UserPresetStateManager::~UserPresetStateManager()
+{}
+
+bool UserPresetStateManager::restoreUserPresetState(const ValueTree& root)
+{
+	auto r = root.getChildWithName(getUserPresetStateId());
+
+	if (r.isValid())
+		restoreFromValueTree(r);
+	else
+		resetUserPresetState();
+
+	return true;
+}
+
+void UserPresetStateManager::saveUserPresetState(ValueTree& presetRoot) const
+{
+	auto v = exportAsValueTree();
+
+	if (!v.isValid())
+		return;
+
+	jassert(v.getType() == getUserPresetStateId());
+	presetRoot.addChild(v, -1, nullptr);
+}
+
 
 void AboutPage::refreshText()
 {
@@ -2368,7 +2543,6 @@ void AboutPage::refreshText()
 
 	Font normal = GLOBAL_FONT().withHeight(15.0f);
 	Font bold = GLOBAL_BOLD_FONT().withHeight(15.0f);
-	
 
 #if USE_BACKEND
 
@@ -2378,7 +2552,7 @@ void AboutPage::refreshText()
 	infoData.append("Hart Instruments Sampler Engine\n", normal, bright);
 
 	infoData.append("\nVersion: ", bold, bright);
-	infoData.append(ProjectInfo::versionString, normal, bright);
+	infoData.append(PresetHandler::getVersionString(), normal, bright);
 	infoData.append("\nBuild time: ", bold, bright);
 	infoData.append(Time::getCompilationDate().toString(true, false, false, true), normal, bright);
 	infoData.append("\nBuild version: ", bold, bright);
@@ -2397,7 +2571,7 @@ void AboutPage::refreshText()
 	infoData.append("\nVersion: ", bold, bright);
     infoData.append(String(JucePlugin_VersionString), normal, bright);
     infoData.append("\nHISE build version: ", bold, bright);
-    infoData.append(String(BUILD_SUB_VERSION), normal, bright);
+    infoData.append(GlobalSettingManager::getHiseVersion(), normal, bright);
 	infoData.append("\nBuild date: ", bold, bright);
 	infoData.append(Time::getCompilationDate().toString(true, false, false, true), normal, bright);
 	infoData.append("\nCreated by: ", bold, bright);
@@ -2916,6 +3090,39 @@ juce::File FileHandlerBase::checkSubDirectory(SubDirectories dir)
 	}
 }
 
+ProjectHandler::ProjectHandler(MainController* mc_):
+	FileHandlerBase(mc_)
+{
+		
+}
+
+ProjectHandler::Listener::~Listener()
+{}
+
+const StringArray& ProjectHandler::getRecentWorkDirectories()
+{ return recentWorkDirectories; }
+
+File ProjectHandler::getRootFolder() const
+{ return getWorkDirectory(); }
+
+bool ProjectHandler::isRedirected(ProjectHandler::SubDirectories dir) const
+{
+	return subDirectories[(int)dir].isReference;
+}
+
+void ProjectHandler::addListener(Listener* newProjectListener, bool sendWithInitialValue)
+{
+	listeners.addIfNotAlreadyThere(newProjectListener);
+        
+	if(sendWithInitialValue && currentWorkDirectory.isDirectory())
+		newProjectListener->projectChanged(currentWorkDirectory);
+}
+
+void ProjectHandler::removeListener(Listener* listenerToRemove)
+{
+	listeners.removeAllInstancesOf(listenerToRemove);
+}
+
 void FileHandlerBase::exportAllPoolsToTemporaryDirectory(ModulatorSynthChain* chain, DialogWindowWithBackgroundThread::LogData* logData)
 {
 	ignoreUnused(chain, logData);
@@ -2938,10 +3145,10 @@ void FileHandlerBase::exportAllPoolsToTemporaryDirectory(ModulatorSynthChain* ch
 	if (Thread::currentThreadShouldExit())
 		return;
 
-	sampleOutputFile.deleteFile();
-	imageOutputFile.deleteFile();
-	samplemapFile.deleteFile();
-	midiOutputFile.deleteFile();
+	
+	
+	
+	
 
 	auto previousLogger = Logger::getCurrentLogger();
 
@@ -2952,19 +3159,36 @@ void FileHandlerBase::exportAllPoolsToTemporaryDirectory(ModulatorSynthChain* ch
 
 	auto* progress = logData != nullptr ? &logData->progress : nullptr;
 
+    sampleOutputFile.deleteFile();
+    
 	if (logData != nullptr) logData->logFunction("Export audio files");
 	chain->getMainController()->getCurrentAudioSampleBufferPool()->getDataProvider()->writePool(new FileOutputStream(sampleOutputFile), progress);
 
+    if (Thread::currentThreadShouldExit())
+        return;
+    
+    imageOutputFile.deleteFile();
+    
 	if (logData != nullptr) logData->logFunction("Export image files");
 	chain->getMainController()->getCurrentImagePool()->getDataProvider()->writePool(new FileOutputStream(imageOutputFile), progress);
 
+    if (Thread::currentThreadShouldExit())
+        return;
+    
+    samplemapFile.deleteFile();
+    
 	if (logData != nullptr) logData->logFunction("Export samplemap files");
 	chain->getMainController()->getCurrentSampleMapPool()->getDataProvider()->writePool(new FileOutputStream(samplemapFile), progress);
 
+    if (Thread::currentThreadShouldExit())
+        return;
+    
+    midiOutputFile.deleteFile();
+    
 	if (logData != nullptr) logData->logFunction("Export MIDI files");
 	chain->getMainController()->getCurrentMidiFilePool()->getDataProvider()->writePool(new FileOutputStream(midiOutputFile), progress);
 
-	Logger::setCurrentLogger(previousLogger);
+    Logger::setCurrentLogger(previousLogger);
 
 	outputLogger = nullptr;
 #else
@@ -3114,6 +3338,220 @@ juce::Image MessageWithIcon::LookAndFeelMethods::createIcon(PresetHandler::IconT
 		jassertfalse;
 		return Image(); 
 		
+	}
+}
+
+void removePropertyRecursive(NamedValueSet& removedProperties, String currentPath, ValueTree v, const Identifier& id)
+{
+	if (!currentPath.isEmpty())
+		currentPath << ":";
+
+	currentPath << v.getType();
+
+	if (v.hasProperty(id))
+	{
+		auto value = v.getProperty(id);
+		v.removeProperty(id, nullptr);
+		removedProperties.set(Identifier(currentPath + ":" + id.toString()), value);
+	}
+
+	for (auto c : v)
+		removePropertyRecursive(removedProperties, currentPath, c, id);
+}
+
+ModuleStateManager::StoredModuleData::StoredModuleData(var moduleId, Processor* pToRestore) :
+	p(pToRestore)
+{
+	if (moduleId.isString())
+		id = moduleId.toString();
+	else
+	{
+		id = moduleId["ID"].toString();
+
+		auto rp = moduleId["RemovedProperties"];
+		auto rc = moduleId["RemovedChildElements"];
+
+		if (rp.isArray() || rc.isArray())
+		{
+			auto v = p->exportAsValueTree();
+
+			if (rp.isArray())
+			{
+				for (auto propertyToRemove : *rp.getArray())
+				{
+					auto pid_ = propertyToRemove.toString();
+					if (pid_.isNotEmpty())
+					{
+						Identifier pid(pid_);
+						removePropertyRecursive(removedProperties, {}, v, pid);
+					}
+				}
+			}
+
+			if (rc.isArray())
+			{
+				for (auto childToRemove : *rc.getArray())
+				{
+					auto pid_ = childToRemove.toString();
+
+					if (pid_.isNotEmpty())
+					{
+						Identifier pid(pid_);
+						removedChildElements.add(v.getChildWithName(pid).createCopy());
+					}
+				}
+			}
+
+			removedProperties.remove(Identifier("Processor:ID"));
+		}
+	}
+}
+
+void restorePropertiesRecursive(ValueTree v, StringArray path, const var& value, bool restore)
+{
+	if (path.size() == 2)
+	{
+		if (Identifier(path[0]) == v.getType())
+		{
+			auto id = Identifier(path[1]);
+
+			if (restore)
+				v.setProperty(id, value, nullptr);
+			else
+				v.removeProperty(id, nullptr);
+		}
+	}
+	else
+	{
+		path.remove(0);
+
+		for (auto c : v)
+			restorePropertiesRecursive(c, path, value, restore);
+	}
+}
+
+void ModuleStateManager::StoredModuleData::stripValueTree(ValueTree& v)
+{
+	for (const auto& rp : removedProperties)
+	{
+		auto path = StringArray::fromTokens(rp.name.toString(), ":", "\"");
+
+		restorePropertiesRecursive(v, path, {}, false);
+	}
+
+
+	for (const auto& rc : removedChildElements)
+	{
+		auto cToRemove = v.getChildWithName(rc.getType());
+
+		if (cToRemove.isValid())
+			v.removeChild(cToRemove, nullptr);
+	}
+}
+
+void ModuleStateManager::StoredModuleData::restoreValueTree(ValueTree& v)
+{
+	stripValueTree(v);
+
+	for (const auto& rp : removedProperties)
+	{
+		auto path = StringArray::fromTokens(rp.name.toString(), ":", "\"");
+		auto value = rp.value;
+		restorePropertiesRecursive(v, path, value, true);
+	}
+
+
+	for (const auto& rc : removedChildElements)
+		v.addChild(rc.createCopy(), -1, nullptr);
+}
+
+
+juce::ValueTree ModuleStateManager::exportAsValueTree() const
+{
+	if (modules.isEmpty())
+		return {};
+
+	ValueTree v(getUserPresetStateId());
+
+	for (auto ms : modules)
+	{
+		auto id = ms->id;
+
+		if (auto p = ProcessorHelpers::getFirstProcessorWithName(getMainController()->getMainSynthChain(), id))
+		{
+			auto mTree = p->exportAsValueTree();
+
+			mTree.removeChild(mTree.getChildWithName("EditorStates"), nullptr);
+
+			ms->stripValueTree(mTree);
+
+			v.addChild(mTree, -1, nullptr);
+		}
+	}
+
+	return v;
+}
+
+void ModuleStateManager::restoreFromValueTree(const ValueTree &v)
+{
+	auto chain = getMainController()->getMainSynthChain();
+	
+	bool didSomething = false;
+
+	for (auto m : v)
+	{
+		auto id = m["ID"].toString();
+
+		bool isModuleState = false;
+
+		for(auto ms: modules)
+		{
+			if(ms->id == id)
+			{
+				didSomething = true;
+				isModuleState = true;
+				break;
+			}
+				
+		}
+
+		if(!isModuleState)
+			continue;
+		
+		auto p = ProcessorHelpers::getFirstProcessorWithName(chain, id);
+
+		if (p != nullptr)
+		{
+			auto mcopy = m.createCopy();
+			
+			for (auto ms : modules)
+			{
+				if (ms->id == id)
+				{
+					ms->restoreValueTree(mcopy);
+					break;
+				}
+			}
+
+			if (p->getType().toString() == mcopy["Type"].toString())
+			{
+				p->restoreFromValueTree(mcopy);
+				p->sendOtherChangeMessage(dispatch::library::ProcessorChangeEvent::Preset, dispatch::sendNotificationAsync);
+			}
+		}
+	}
+
+	auto& uph = chain->getMainController()->getUserPresetHandler();
+
+	if (didSomething && uph.isUsingCustomDataModel())
+	{
+		auto numDataObjects = uph.getNumCustomAutomationData();
+
+		// We might need to update the custom automation data values.
+		for (int i = 0; i < numDataObjects; i++)
+		{
+			uph.getCustomAutomationData(i)->updateFromConnectionValue(0);
+		}
 	}
 }
 

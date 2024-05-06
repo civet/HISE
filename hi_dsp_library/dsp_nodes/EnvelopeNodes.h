@@ -46,13 +46,13 @@ namespace envelope
 
 namespace pimpl
 {
-template <typename ParameterType> struct envelope_base: public control::pimpl::parameter_node_base<ParameterType>
+template <typename ParameterType> struct envelope_base: public control::pimpl::parameter_node_base<ParameterType>,
+														public polyphonic_base
 {
-    envelope_base(const Identifier& id): control::pimpl::parameter_node_base<ParameterType>(id)
-	{
-		cppgen::CustomNodeProperties::addNodeIdManually(id, PropertyIds::IsPolyphonic);
-		cppgen::CustomNodeProperties::addNodeIdManually(id, PropertyIds::IsProcessingHiseEvent);
-	}
+    envelope_base(const Identifier& id):
+	  control::pimpl::parameter_node_base<ParameterType>(id),
+	  polyphonic_base(id, true)
+	{}
 
 	virtual ~envelope_base() {};
 
@@ -563,12 +563,12 @@ template <int NV, typename ParameterType> struct simple_ar: public pimpl::envelo
 		auto& s = states.get();
 
 		auto thisActive = s.active;
-		auto thisValue = s.lastValue;
+		auto& thisValue = s.lastValue;
 
-		auto modValue = s.tick();
+        thisValue = s.tick();
 
 		for (auto& v : d)
-			v *= modValue;
+			v *= thisValue;
 
 		this->postProcess(*this, thisActive, thisValue);
 	}
@@ -578,12 +578,16 @@ template <int NV, typename ParameterType> struct simple_ar: public pimpl::envelo
 		auto& s = states.get();
 
 		auto thisActive = s.active;
-		auto thisValue = s.lastValue;
+		auto& thisValue = s.lastValue;
 
 		if (d.getNumChannels() == 1)
 		{
 			for (auto& v : d[0])
-				v *= s.tick();
+            {
+                thisValue = s.tick();
+                v *= thisValue;
+            }
+
 		}
 		else
 		{
@@ -591,9 +595,9 @@ template <int NV, typename ParameterType> struct simple_ar: public pimpl::envelo
 
 			while (fd.next())
 			{
-				auto modValue = s.tick();
+				auto thisValue = s.tick();
 				for (auto& v : fd)
-					v *= modValue;
+					v *= thisValue;
 			}
 		}
 
@@ -1069,7 +1073,8 @@ struct voice_manager_base : public mothernode
 	PolyHandler* p = nullptr;
 };
 
-template <int NV> struct silent_killer_impl: public voice_manager_base
+template <int NV> struct silent_killer: public voice_manager_base,
+                                        public polyphonic_base
 {
 	enum Parameters
 	{
@@ -1080,7 +1085,7 @@ template <int NV> struct silent_killer_impl: public voice_manager_base
 	static constexpr int NumVoices = NV;
 
 	SN_POLY_NODE_ID("silent_killer");
-	SN_GET_SELF_AS_OBJECT(silent_killer_impl);
+	SN_GET_SELF_AS_OBJECT(silent_killer);
 	SN_DESCRIPTION("Send a voice reset message as soon when silence is detected");
 
 	SN_EMPTY_INITIALISE;
@@ -1089,11 +1094,15 @@ template <int NV> struct silent_killer_impl: public voice_manager_base
 	
 	DEFINE_PARAMETERS
 	{
-		DEF_PARAMETER(Threshold, silent_killer_impl);
-		DEF_PARAMETER(Active, silent_killer_impl);
+		DEF_PARAMETER(Threshold, silent_killer);
+		DEF_PARAMETER(Active, silent_killer);
 	}
 	SN_PARAMETER_MEMBER_FUNCTION;
 
+    silent_killer():
+      polyphonic_base(getStaticId(), false)
+    {};
+    
 	void prepare(PrepareSpecs ps) override
 	{
 		p = ps.voiceIndex;
@@ -1105,33 +1114,24 @@ template <int NV> struct silent_killer_impl: public voice_manager_base
 		
 	}
 
+	
+
 	template <typename ProcessDataType> void process(ProcessDataType& d)
 	{
 		auto& s = state.get();
 
-		if (active && s && activeEvents.isEmpty())
+		if (active && !s && d.isSilent())
 		{
-			auto bToLook = d[0];
-			auto max = FloatVectorOperations::findMaximum(bToLook.begin(), bToLook.size());
-			auto isEmpty = max < threshold;
-
-			if (isEmpty)
-			{
-				s = false;
-				p->sendVoiceResetMessage(false);
-			}
+			p->sendVoiceResetMessage(false);
 		}
 	}
 
 	void handleHiseEvent(HiseEvent& e)
 	{
 		if (e.isNoteOn())
-		{
-			activeEvents.insertWithoutSearch(e.getEventId());
 			state.get() = true;
-		}
 		if (e.isNoteOff())
-			activeEvents.remove(e.getEventId());
+			state.get() = false;
 	}
 	
 	void setThreshold(double gainDb)
@@ -1147,29 +1147,26 @@ template <int NV> struct silent_killer_impl: public voice_manager_base
 	void createParameters(ParameterDataList& data)
 	{
 		{
-			DEFINE_PARAMETERDATA(silent_killer_impl, Active);
+			DEFINE_PARAMETERDATA(silent_killer, Active);
 			p.setRange({ 0.0, 1.0, 1.0 });
 			p.setDefaultValue(1.0);
 			data.add(std::move(p));
 		}
 
 		{
-			DEFINE_PARAMETERDATA(silent_killer_impl, Threshold);
+			DEFINE_PARAMETERDATA(silent_killer, Threshold);
 			p.setRange({ -120.0, -60, 1.0 });
 			p.setDefaultValue(-100.0);
 			data.add(std::move(p));
 		}
 	}
 
-	hise::UnorderedStack<int16, NUM_POLYPHONIC_VOICES> activeEvents;
 	PolyData<bool, NumVoices> state;
 	bool isEmpty = false;
 	bool active = false;
 	double threshold;
 };
 
-using silent_killer = silent_killer_impl<1>;
-using silent_killer_poly = silent_killer_impl<NUM_POLYPHONIC_VOICES>;
 
 struct voice_manager: public voice_manager_base
 {

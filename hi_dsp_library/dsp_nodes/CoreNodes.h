@@ -90,7 +90,9 @@ struct table: public scriptnode::data::base
 			{
 				for (auto& s : data.toChannelData(ch))
 				{
-					processFloat(s);
+					ignoreUnused(s);
+                    v = hmath::abs(v);
+					processFloat(v);
 				}
 			}
 
@@ -100,7 +102,7 @@ struct table: public scriptnode::data::base
 
 	void processFloat(float& s)
 	{
-		InterpolatorType ip(hmath::abs(s));
+		InterpolatorType ip(s);
 		s *= tableData[ip];
 	}
 
@@ -114,10 +116,17 @@ struct table: public scriptnode::data::base
 	{
 		DataReadLock l(this);
 
+        float v = 0.0f;
+        
 		if (!tableData.isEmpty())
 		{
 			for(auto& s: data)
-				processFloat(s);
+            {
+                v = hmath::abs(s);
+                processFloat(v);
+            }
+            
+            externalData.setDisplayedValue(v);
 		}
 	}
 
@@ -143,6 +152,14 @@ public:
 	SN_EMPTY_HANDLE_EVENT;
 	SN_EMPTY_INITIALISE;
 
+	void prepare(PrepareSpecs ps)
+	{
+		handler = ps.voiceIndex;
+
+		if(handler != nullptr && !handler->isEnabled())
+			handler = nullptr;
+	}
+
 	bool isPolyphonic() const { return false; }
 
 	bool handleModulation(double& value)
@@ -165,7 +182,8 @@ public:
 			max = jmax<float>(max, Math.abs(range.getStart()), Math.abs(range.getEnd()));
 		}
 
-		updateBuffer(max, data.getNumSamples());
+		if(handler == nullptr || handler->getVoiceIndex() == 0)
+			updateBuffer(max, data.getNumSamples());
 	}
 
 	template <typename FrameDataType> void processFrame(FrameDataType& data)
@@ -175,11 +193,16 @@ public:
 		for (auto& s : data)
 			max = Math.max(max, Math.abs((double)s));
 
-		updateBuffer(max, 1);
+		if(handler == nullptr || handler->getVoiceIndex() == 0)
+			updateBuffer(max, 1);
 	}
 
 	// This is no state variable, so we don't need it to be polyphonic...
 	double max = 0.0;
+
+	// This is used to figure out whether to send the value
+	PolyHandler* handler = nullptr;
+	
 };
 
 class recorder: public data::base
@@ -230,6 +253,11 @@ public:
 				updater = new InternalUpdater(*this, gu);
 		}
 
+        if (auto af = dynamic_cast<MultiChannelAudioBuffer*>(externalData.obj))
+        {
+            af->setDisabledXYZProviders({ Identifier("SampleMap"), Identifier("SFZ") });
+        }
+        
 		base::setExternalData(d, index);
 	}
 
@@ -252,12 +280,15 @@ public:
 		}
 	}
 
-	void setRecordingLength(double lengthInMilliseconds)
+	void setRecordingLength(double newLength)
 	{
-		bufferSize = lengthInMilliseconds / 1000.0 * lastSpecs.sampleRate;
-
-		if (updater != nullptr)
-			updater->resizeFlag.store(true);
+        if(newLength != lengthInMilliseconds)
+        {
+            lengthInMilliseconds = newLength;
+            
+            if (updater != nullptr)
+                updater->resizeFlag.store(true);
+        }
 	}
 
 	void createParameters(ParameterDataList& data)
@@ -289,50 +320,81 @@ public:
 
 	void rebuildBuffer()
 	{
-		AudioSampleBuffer newBuffer(lastSpecs.numChannels, bufferSize);
-		newBuffer.clear();
+        auto bufferSize = lengthInMilliseconds / 1000.0 * lastSpecs.sampleRate;
+        
+        if(recordingBuffer.getNumSamples() != bufferSize)
+        {
+            AudioSampleBuffer newBuffer(lastSpecs.numChannels, bufferSize);
+            newBuffer.clear();
 
-		{
-			SimpleReadWriteLock::ScopedWriteLock l(bufferLock);
-			std::swap(newBuffer, recordingBuffer);
-			recordingIndex = 0;
-		}
+            {
+                SimpleReadWriteLock::ScopedWriteLock l(bufferLock);
+                std::swap(newBuffer, recordingBuffer);
+                recordingIndex = 0;
+            }
+        }
 	}
 
+    template <typename FD> void processFrameInternal(FD& data)
+    {
+        int numSamplesInBuffer = recordingBuffer.getNumSamples();
+
+        if (currentState == RecordingState::Recording && isPositiveAndBelow(recordingIndex, numSamplesInBuffer))
+        {
+            for (int i = 0; i < data.size(); i++)
+                recordingBuffer.setSample(i, recordingIndex, data[i]);
+
+            recordingIndex++;
+        }
+
+        if (recordingIndex >= numSamplesInBuffer)
+        {
+            recordingIndex = 0;
+            currentState = RecordingState::WaitingForStop;
+
+            if (updater != nullptr)
+                updater->flushFlag.store(true);
+        }
+    }
+    
+    template <typename PD, int C> void processFix(PD& data)
+    {
+        if (currentState == RecordingState::Recording)
+        {
+            SimpleReadWriteLock::ScopedReadLock l(bufferLock);
+
+            auto fd = data.template as<ProcessData<C>>().toFrameData();
+            
+            while(fd.next())
+                processFrameInternal(fd.toSpan());
+        }
+    }
+    
 	template <typename ProcessDataType> void process(ProcessDataType& d)
 	{
-		if (currentState == RecordingState::Recording)
-		{
-			SimpleReadWriteLock::ScopedReadLock l(bufferLock);
-
-			if (d.getNumChannels() == 2)
-				FrameConverters::forwardToFrameStereo(this, d);
-			if (d.getNumChannels() == 1)
-				FrameConverters::forwardToFrameMono(this, d);
-		}
+        if constexpr (ProcessDataType::hasCompileTimeSize())
+        {
+            static constexpr int NumChannels = ProcessDataType::getNumChannels();
+            processFix<ProcessDataType, NumChannels>(d);
+        }
+        else
+        {
+            switch(d.getNumChannels())
+            {
+                case 1: processFix<ProcessDataType, 1>(d); break;
+                case 2: processFix<ProcessDataType, 2>(d); break;
+            }
+        }
+		
 	}
 
 	template <typename FrameDataType> void processFrame(FrameDataType& data)
 	{
-		int numSamplesInBuffer = recordingBuffer.getNumSamples();
-
-		if (currentState == RecordingState::Recording && isPositiveAndBelow(recordingIndex, numSamplesInBuffer))
-		{
-			for (int i = 0; i < data.size(); i++)
-				recordingBuffer.setSample(i, recordingIndex, data[i]);
-
-			recordingIndex++;
-		}
-
-
-		if (recordingIndex++ >= numSamplesInBuffer)
-		{
-			recordingIndex = 0;
-			currentState = RecordingState::WaitingForStop;
-
-			if (updater != nullptr)
-				updater->flushFlag.store(true);
-		}
+        if (currentState == RecordingState::Recording)
+        {
+            SimpleReadWriteLock::ScopedReadLock l(bufferLock);
+            processFrameInternal(data);
+        }
 	}
 
 private:
@@ -374,7 +436,9 @@ private:
 	ScopedPointer<InternalUpdater> updater;
 
 	int recordingIndex = 0;
-	int bufferSize = 0;
+	
+    double lengthInMilliseconds = 0.0;
+    
 	RecordingState currentState = RecordingState::Idle;
 	PrepareSpecs lastSpecs;
 	SimpleReadWriteLock bufferLock;
@@ -400,7 +464,7 @@ public:
 		if (data.getNumChannels() >= 2)
         {
             auto dst = data[1];
-            Math.vcopy(dst, data[0]);
+            Math.vmov(dst, data[0]);
         }
 			
 	}
@@ -536,7 +600,8 @@ template <class ShaperType> struct snex_shaper
 	SN_EMPTY_CREATE_PARAM;
 };
 
-template <int NV, bool UseRingBuffer=false> class ramp : public data::display_buffer_base<UseRingBuffer>
+template <int NV, bool UseRingBuffer=false> class ramp : public data::display_buffer_base<UseRingBuffer>,
+														 public polyphonic_base
 {
 public:
 
@@ -554,11 +619,11 @@ public:
 	SN_GET_SELF_AS_OBJECT(ramp);
 	SN_DESCRIPTION("Creates a ramp signal that can be used as modulation source");
 
-	ramp()
+	ramp():
+	  polyphonic_base(getStaticId(), false)
 	{
 		setPeriodTime(100.0);
 
-		cppgen::CustomNodeProperties::setPropertyForObject(*this, PropertyIds::IsPolyphonic);
 		cppgen::CustomNodeProperties::setPropertyForObject(*this, PropertyIds::UseRingBuffer);
 	}
 
@@ -757,7 +822,7 @@ public:
 
 	SN_POLY_NODE_ID("clock_ramp");
 	SN_GET_SELF_AS_OBJECT(clock_ramp);
-	SN_DESCRIPTION("Creates a (monophonic) ramp signal that is synced to the HISE clock");
+	SN_DESCRIPTION("Creates a ramp signal that is synced to the HISE clock");
 
 	static constexpr bool isNormalisedModulation() { return true; };
 
@@ -766,10 +831,6 @@ public:
 	{
 		cppgen::CustomNodeProperties::setPropertyForObject(*this, PropertyIds::IsPolyphonic);
 		cppgen::CustomNodeProperties::setPropertyForObject(*this, PropertyIds::UseRingBuffer);
-        
-        valueToUse[(int)InactiveMode::Zero] = 0.0;
-        valueToUse[(int)InactiveMode::One] = 1.0;
-        valueToUse[(int)InactiveMode::LastValue] = 0.0;
 	}
 
 	~clock_ramp()
@@ -791,40 +852,41 @@ public:
 	}
 
 	SN_EMPTY_INITIALISE;
-
 	SN_EMPTY_HANDLE_EVENT;
 	
     void reset()
     {
-        valueToUse[(int)InactiveMode::LastValue] = 0.0;
+        
+        clockState.inactive[(int)InactiveMode::LastValue] = 0.0;
     }
     
 	void onTransportChange(bool isPlaying_, double ppqPosition) override
 	{
-		isPlaying = isPlaying_;
-
-		if (isPlaying)
+		clockState.isPlaying = isPlaying_;
+        
+		if (clockState.isPlaying)
 		{
-			if (isContinuous)
-			{
-				startOffset = ppqPosition / (startMultiplier * startFactor);
-			}
-			else
-				startOffset = ppqPosition;
-
-			for (auto& s : state)
-				s.ppqPos = 0.0;
+            onResync(ppqPosition);
+            clockState.uptime = 0.0;
 		}
 	}
 
+    void onResync(double ppqPosition) override
+    {
+        clockState.offset = ppqPosition;
+        clockState.uptime = 0.0;
+    }
+    
 	void tempoChanged(double newTempo) override
 	{
 		bpm = newTempo;
+        clockState.recalculate(bpm, sr);
 	}
 
 	bool handleModulation(double& v)
 	{
-		return state.get().modValue.getChangedValue(v);
+        v = clockState.getModValue();
+        return true;
 	}
 
 	double getPPQDelta(int numSamples) const
@@ -837,127 +899,47 @@ public:
 
 	template <typename ProcessDataType> void process(ProcessDataType& d)
 	{
-		auto& s = state.get();
-
-		if (isPlaying)
-		{
-			auto ppqDelta = getPPQDelta(d.getNumSamples());
-			auto tf = s.tempoFactor * s.multiplier;
-
-			double tfDelta;
-			double start;
-
-			if (isContinuous)
-			{
-				tfDelta = ppqDelta / tf;
-				start = std::fmod(s.ppqPos + startOffset, 1.0);
-				s.ppqPos += tfDelta;
-			}
-				
-			else
-			{
-				tfDelta = ppqDelta * tf;
-				start = std::fmod(s.ppqPos + startOffset, tf) / tf;
-				s.ppqPos += ppqDelta;
-			}
-
-			double lastValue = 0.0;
-
-			if (addToSignal)
-			{
-				auto data = d.getRawChannelPointers()[0];
-				auto inc = tfDelta / (double)d.getNumSamples();
-
-				for (int i = 0; i < d.getNumSamples(); i++)
-				{
-					lastValue = hmath::fmod(start + (double)inc, 1.0);
-					data[i] = (float)lastValue;
-				}
-			}
-			else
-			{
-				// use the mid point to reduce rounding errors
-				lastValue = hmath::fmod(start + tfDelta / 2.0, 1.0);
-			}
-
-            valueToUse[(int)InactiveMode::LastValue] = lastValue;
-			s.modValue.setModValue(lastValue);	
-		}
-		else
-		{
-            auto mv = valueToUse[(int)inactiveMode];
-            
-            s.modValue.setModValue(mv);
-            
-			if(addToSignal)
-                FloatVectorOperations::fill(d.getRawChannelPointers()[0], (float)mv, d.getNumSamples());
-		}
-
-		this->updateBuffer((float)s.modValue.getModValue(), d.getNumSamples());
+        auto ptr = d[0].begin();
+        
+        for(int i = 0; i < d.getNumSamples(); i++)
+        {
+            ptr[i] += clockState.tick() * addToSignalGain;
+        }
+    
+        this->updateBuffer(clockState.getModValue(), d.getNumSamples());
 	}
 
 	template <typename FrameType> void processFrame(FrameType& d)
 	{
-		auto& s = state.get();
-
-		if (isPlaying)
-		{
-			auto ppqDelta = getPPQDelta(1);
-			auto tf = s.tempoFactor * s.multiplier;
-			auto start = hmath::fmod(s.ppqPos + startOffset, tf) / tf;
-			auto modValue = hmath::fmod(start + ppqDelta * tf, 1.0);
-
-			if (addToSignal)
-				d[0] = (float)modValue;
-
-			s.ppqPos += ppqDelta;
-			s.modValue.setModValue(modValue);
-            valueToUse[(int)InactiveMode::LastValue] = modValue;
-		}
-		else
-		{
-            auto mv = valueToUse[(int)inactiveMode];
-            
-            s.modValue.setModValue(mv);
-            
-            if(addToSignal)
-               d[0] = (float)mv;
-		}
-
-		this->updateBuffer(s.modValue.getModValue(), 1);
+        d[0] += clockState.tick() * addToSignalGain;
+        this->updateBuffer(clockState.getModValue(), 1);
 	}
 
 	void setTempo(double newTempo)
 	{
-		auto newFactor = TempoSyncer::getTempoFactor((TempoSyncer::Tempo)(int)newTempo);
-
-		startFactor = newFactor;
-
-		for (auto& s : state)
-			s.tempoFactor = newFactor;
+        clockState.t = (TempoSyncer::Tempo)(int)newTempo;
+        clockState.recalculate(bpm, sr);
 	}
 
 	void setMultiplier(double newMultiplier)
 	{
-		startMultiplier = newMultiplier;
-
-		for (auto& s : state)
-			s.multiplier = newMultiplier;
+		clockState.multiplier = newMultiplier;
+        clockState.recalculate(bpm, sr);
 	}
 
 	void setAddToSignal(double newValue)
 	{
-		addToSignal = newValue > 0.5;
+		addToSignalGain = newValue > 0.5 ? 1.0f : 0.0f;
 	}
 
 	void setUpdateMode(double newBehaviour)
 	{
-		isContinuous = newBehaviour < 0.5;
+		clockState.continuous = newBehaviour < 0.5;
 	}
 
 	void setInactive(double newInactiveMode)
 	{
-		inactiveMode = (InactiveMode)jlimit<int>(0, 2, (int)newInactiveMode);
+		clockState.inactiveIndex = jlimit<int>(0, 2, (int)newInactiveMode);
 	}
 
 	DEFINE_PARAMETERS
@@ -1011,31 +993,282 @@ public:
 		}
 	}
 
-	double startOffset = 0.0;
 	double bpm = 120.0;
 	double sr = 44100.0;
-	bool addToSignal = false;
-	bool isPlaying = false;
-	double startFactor = 1.0f;
-	double startMultiplier = 1.0f;
-	bool isContinuous = false;
-	InactiveMode inactiveMode = InactiveMode::LastValue;
-
-	struct State
-	{
-		double tempoFactor = 1.0;
-		double multiplier = 1.0;
-		double ppqPos = 0.0;
-		ModValue modValue;
-	};
-
-	PolyData<State, NV> state;
+	float addToSignalGain = 0.0f;
 	
-    double valueToUse[(int)InactiveMode::numInactiveModes];
-
 	DllBoundaryTempoSyncer* syncer = nullptr;
+    
+    struct State
+    {
+        State()
+        {
+            inactive[(int)InactiveMode::LastValue] = 0.0f;
+            inactive[(int)InactiveMode::Zero] = 0.0f;
+            inactive[(int)InactiveMode::One] = 1.0f;
+        }
+        
+        double getModValue() const
+        {
+            return (double)inactive[inactiveIndex * (1 - (int)isPlaying)];
+        }
+        
+        float tick()
+        {
+            if(!isPlaying)
+                return inactive[inactiveIndex];
+                
+            if(continuous)
+            {
+                uptime += deltaPerSample * factor;
+                
+                inactive[(int)InactiveMode::LastValue] = hmath::fmod((float)(uptime + offset*factor), 1.0f);
+                return inactive[(int)InactiveMode::LastValue];
+            }
+            else
+            {
+                uptime += deltaPerSample;
+                
+                auto v = (float)(offset + uptime);
+                v *= (float)factor;
+                inactive[(int)InactiveMode::LastValue] = hmath::fmod(v, 1.0f);
+                return inactive[(int)InactiveMode::LastValue];
+            }
+        }
+        
+        float inactive[3];
+        
+        bool isPlaying = false;
+        bool continuous = false;
+        double deltaPerSample = 0.0;
+        double uptime = 0.0;
+        double offset = 0.0;
+        TempoSyncer::Tempo t = TempoSyncer::Whole;
+        double multiplier = 1.0;
+        int inactiveIndex = 0;
+        
+        double factor = 1.0;
+
+        void recalculateFactor()
+        {
+            factor = 1.0 / ((double)TempoSyncer::getTempoFactor(t) * multiplier);
+        }
+        
+        void recalculate(double bpm, double sr)
+        {
+            auto quarterInSamples = (double)TempoSyncer::getTempoInSamples(bpm, sr, TempoSyncer::Quarter);
+            deltaPerSample = 1.0 / quarterInSamples;
+            recalculateFactor();
+        }
+    };
+    
+    State clockState;
 };
 
+
+template <int NV, bool useFM> class phasor_base: public polyphonic_base
+{
+public:
+
+	static constexpr int NumVoices = NV;
+
+	SN_REGISTER_CALLBACK(phasor_base);;
+
+	enum class Parameters
+	{
+		Gate,
+		Frequency,
+		FreqRatio,
+		Phase,
+		numParameters
+	};
+
+	SN_EMPTY_INITIALISE;
+
+	phasor_base(const Identifier& id): polyphonic_base(id) {}
+
+	constexpr bool isProcessingHiseEvent() const { return true; }
+
+	void reset()
+	{
+		for (auto& s : voiceData)
+			s.reset();
+	}
+
+	void prepare(PrepareSpecs ps)
+	{
+		sr = ps.sampleRate;
+		voiceData.prepare(ps);
+		sr = ps.sampleRate;
+		setFrequency(freqValue);
+		setFreqRatio(multiplier);
+	}
+	
+	template <typename ProcessDataType> void process(ProcessDataType& data)
+	{
+		currentVoiceData = &voiceData.get();
+
+		if(!currentVoiceData->enabled)
+			return;
+
+		for (auto& s : data[0])
+		{
+			auto asSpan = reinterpret_cast<span<float, 1>*>(&s);
+			processFrameInternal(*asSpan);
+		}
+		
+		currentVoiceData = nullptr;
+	}
+
+	int64_t bitwiseOrZero(const double &t) {
+		return static_cast<int64_t>(t) | 0;
+	}
+
+	template <typename FrameDataType> void processFrameInternal(FrameDataType& data)
+	{
+		jassert(currentVoiceData != nullptr);
+
+		auto phase =  currentVoiceData->tick();
+
+		if constexpr (useFM)
+		{
+			double delta = currentVoiceData->uptimeDelta * currentVoiceData->multiplier;
+			delta *= (double)data[0];
+			currentVoiceData->uptime += delta;
+		}
+			
+
+		phase -= bitwiseOrZero(phase);
+		data[0] = (float)phase;
+	}
+
+	template <typename FrameDataType> void processFrame(FrameDataType& data)
+	{
+		currentVoiceData = &voiceData.get();
+		processFrameInternal(data);
+		currentVoiceData = nullptr;
+	}
+
+	void handleHiseEvent(HiseEvent& e)
+	{
+		if (e.isNoteOn())
+			setFrequency(e.getFrequency());
+	}
+
+	void createParameters(ParameterDataList& data)
+	{
+		{
+			DEFINE_PARAMETERDATA(phasor_base, Gate);
+			p.setRange({ 0.0, 1.0, 1.0 });
+			p.setDefaultValue(1.0);
+			data.add(std::move(p));
+		}
+		{
+			DEFINE_PARAMETERDATA(phasor_base, Frequency);
+			p.setRange({ 20.0, 20000.0, 0.1 });
+			p.setDefaultValue(220.0);
+			p.setSkewForCentre(1000.0);
+			data.add(std::move(p));
+		}
+		{
+			parameter::data p("Freq Ratio");
+			p.setRange({ 1.0, 16.0, 1.0 });
+			p.setDefaultValue(1.0);
+			registerCallback<(int)Parameters::FreqRatio>(p);
+			data.add(std::move(p));
+		}
+		{
+			DEFINE_PARAMETERDATA(phasor_base, Phase);
+			p.setRange({ 0.0, 1.0 });
+			p.setDefaultValue(0.0);
+			data.add(std::move(p));
+		}
+	}
+
+	void setFrequency(double newFrequency)
+	{
+		freqValue = newFrequency;
+
+		if (sr > 0.0)
+		{
+			auto newUptimeDelta = (double)(newFrequency / sr);
+
+			for (auto& d : voiceData)
+				d.uptimeDelta = newUptimeDelta;
+		}
+	}
+
+	void setGate(double v)
+	{
+		auto shouldBeOn = (int)(v > 0.5);
+
+		for (auto& d : voiceData)
+		{
+			auto shouldReset = shouldBeOn && !d.enabled;
+
+			if (shouldReset)
+				d.uptime = 0.0;
+
+			d.enabled = shouldBeOn;
+		}
+	}
+
+	void setPhase(double v)
+	{
+		for (auto& s : voiceData)
+			s.phase = v;
+	}
+
+	void setFreqRatio(double newMultiplier)
+	{
+		multiplier = jlimit(0.001, 100.0, newMultiplier);
+
+		for (auto& d : voiceData)
+			d.multiplier = multiplier;
+	}
+
+	DEFINE_PARAMETERS
+	{
+		DEF_PARAMETER(Gate, phasor_base);
+		DEF_PARAMETER(Frequency, phasor_base);
+		DEF_PARAMETER(FreqRatio, phasor_base);
+		DEF_PARAMETER(Phase, phasor_base);
+	}
+	SN_PARAMETER_MEMBER_FUNCTION;
+
+	double sr = 44100.0;
+	PolyData<OscData, NumVoices> voiceData;
+	OscData* currentVoiceData = nullptr;
+
+	double freqValue = 220.0;
+	double multiplier = 1.0;
+};
+
+template <int NV> class phasor: public phasor_base<NV, false>
+{
+public:
+
+	phasor(): phasor_base<NV, false>(getStaticId()) {};
+
+	constexpr static int NumVoices = NV;
+
+	SN_POLY_NODE_ID("phasor");
+	SN_GET_SELF_AS_OBJECT(phasor);
+	SN_DESCRIPTION("A oscillator that creates a naive ramp from 0...1");
+};
+
+template <int NV> class phasor_fm: public phasor_base<NV, true>
+{
+public:
+
+	constexpr static int NumVoices = NV;
+
+	phasor_fm(): phasor_base<NV, true>(getStaticId()) {};
+
+	SN_POLY_NODE_ID("phasor_fm");
+	SN_GET_SELF_AS_OBJECT(phasor_fm);
+	SN_DESCRIPTION("A ramp oscillator with FM modulation from the input signal");
+};
 
 template <int NV> class oscillator: public OscillatorDisplayProvider,
 								    public polyphonic_base
@@ -1096,6 +1329,8 @@ public:
 				processFrameInternal(*asSpan);
 			}
 		}
+
+		currentVoiceData = nullptr;
 	}
 
 	template <typename FrameDataType> void processFrameInternal(FrameDataType& data)
@@ -1122,16 +1357,15 @@ public:
 
 	template <typename FrameDataType> void processFrame(FrameDataType& data)
 	{
-		if (currentVoiceData == nullptr)
-		{
-			currentVoiceData = &voiceData.get();
-			currentNyquistGain = currentVoiceData->getNyquistAttenuationGain();
-		}
+		currentVoiceData = &voiceData.get();
+		currentNyquistGain = currentVoiceData->getNyquistAttenuationGain();
 
 		if (currentVoiceData->enabled == 0)
 			return;
 
 		processFrameInternal(data);
+
+		currentVoiceData = nullptr;
 	}
 
 	void handleHiseEvent(HiseEvent& e)
@@ -1691,7 +1925,8 @@ private:
 	SharedResourcePointer<SineLookupTable<2048>> sinTable;
 };
 
-template <int V> class gain_impl : public HiseDspBase
+template <int V> class gain : public HiseDspBase,
+								   public polyphonic_base
 {
 public:
 
@@ -1704,17 +1939,21 @@ public:
 
 	DEFINE_PARAMETERS
 	{
-		DEF_PARAMETER(Gain, gain_impl);
-		DEF_PARAMETER(Smoothing, gain_impl);
-		DEF_PARAMETER(ResetValue, gain_impl);
+		DEF_PARAMETER(Gain, gain);
+		DEF_PARAMETER(Smoothing, gain);
+		DEF_PARAMETER(ResetValue, gain);
 	}
 	SN_PARAMETER_MEMBER_FUNCTION;
 
 	static constexpr int NumVoices = V;
 
 	SN_POLY_NODE_ID("gain");
-	SN_GET_SELF_AS_OBJECT(gain_impl);
+	SN_GET_SELF_AS_OBJECT(gain);
 	SN_DESCRIPTION("A gain module with decibel range and parameter smoothing");
+
+	gain():
+	  polyphonic_base(getStaticId(), false)
+	{};
 
 	void prepare(PrepareSpecs ps)
 	{
@@ -1824,11 +2063,8 @@ public:
 	PolyData<sfloat, NumVoices> gainer;
 };
 
-DEFINE_EXTERN_NODE_TEMPLATE(gain, gain_poly, gain_impl);
-
-
-
-template <int NV> class smoother: public mothernode
+template <int NV> class smoother: public mothernode,
+                                  public polyphonic_base
 {
 public:
 
@@ -1851,9 +2087,12 @@ public:
 	SN_GET_SELF_AS_OBJECT(smoother);
 	SN_DESCRIPTION("Smoothes the input signal using a low pass filter");
 
-	smoother() {};
-
+	smoother():
+      polyphonic_base(getStaticId(), false)
+    {};
+    
 	SN_EMPTY_INITIALISE;
+    
 	SN_EMPTY_MOD;
     
 	void createParameters(ParameterDataList& data)

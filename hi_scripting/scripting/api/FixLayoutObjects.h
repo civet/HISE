@@ -40,50 +40,19 @@ struct Allocator : public ReferenceCountedObject
 {
 	using Ptr = ReferenceCountedObjectPtr<Allocator>;
 
-	uint8* allocate(int numBytesToAllocate)
-	{
-		jassert(numBytesToAllocate % 4 == 0);
+	uint8* allocate(int numBytesToAllocate);
 
-		auto b = new Block(numBytesToAllocate);
-
-		allocatedBlocks.add(b);
-
-		return b->getData();
-	}
-
-	bool validMemoryAccess(uint8* ptr)
-	{
-		bool found = false;
-
-		for (auto b : allocatedBlocks)
-			found |= b->contains(ptr);
-		
-		return found;
-	}
+	bool validMemoryAccess(uint8* ptr);
 
 private:
 
 	struct Block
 	{
-		Block(size_t numBytes_) :
-			numBytes(numBytes_)
-		{
-			data.allocate(numBytes + 16, true);
-			offset = 16 - reinterpret_cast<uint64>(data.get()) % 16;
-		};
+		Block(size_t numBytes_);;
 
-		uint8* getData() const
-		{
-			return data.get() + offset;
-		}
+		uint8* getData() const;
 
-		bool contains(uint8* ptr)
-		{
-			auto s = reinterpret_cast<uint64>(getData());
-			auto e = s + numBytes;
-			auto p = reinterpret_cast<uint64>(ptr);
-			return Range<uint64>(s, e).contains(p);
-		}
+		bool contains(uint8* ptr);
 
 		HeapBlock<uint8> data;
 		size_t numBytes;
@@ -134,22 +103,17 @@ struct LayoutBase
 		static DataType getTypeFromVar(const var& value, Result* r);
 		static int getElementSizeFromVar(const var& value, Result* r);
 		static uint32 getTypeSize(DataType type);
+		static int createHash(MemoryLayoutItem::List list);
 	};
 
-	virtual ~LayoutBase() {};
+	virtual ~LayoutBase();;
 
-	size_t getElementSizeInBytes() const
-	{
-		size_t bytes = 0;
-
-		for (auto l : layout)
-			bytes += l->getByteSize();
-
-		return bytes;
-	}
+	size_t getElementSizeInBytes() const;
 
 	Allocator::Ptr allocator;
 	MemoryLayoutItem::List layout;
+
+	int typeHash = 0;
 
 protected:
 
@@ -168,13 +132,108 @@ protected:
 };
 
 class ObjectReference : public LayoutBase,
-	public ReferenceCountedObject,
-	public DebugableObjectBase
+						public ReferenceCountedObject,
+						public DebugableObjectBase,
+						public ObjectWithJSONConverter
 {
 public:
 
+	
+
 	using Ptr = ReferenceCountedObjectPtr<ObjectReference>;
 	using CompareFunction = std::function<int(Ptr, Ptr)>;
+
+	template <typename T, bool IsArray> struct NumberComparator
+	{
+		NumberComparator(size_t offset_, int elementSize_=1):
+		  offset(offset_),
+		  elementSize(elementSize_)
+		{};
+
+		int operator()(Ptr p1, Ptr p2) const
+		{
+			auto t1 = reinterpret_cast<T*>(p1->data + offset);
+			auto t2 = reinterpret_cast<T*>(p2->data + offset);
+
+			if(*t1 < *t2)
+				return -1;
+			if(*t1 > *t2)
+				return 1;
+
+			if constexpr (IsArray)
+			{
+				for(int i = 1; i < elementSize; i++)
+				{
+					if(t1[i] < t2[i])
+						return -1;
+					if(t1[i] > t2[i])
+						return 1;
+				}
+			}
+
+			return 0;
+		}
+
+		size_t offset = 0;
+		int elementSize = 1;
+	};
+
+	template <int NumItems> struct MultiComparator
+	{
+		struct Item
+		{
+			Item() = default;
+
+			Item(MemoryLayoutItem* p):
+			  offset(p->offset),
+			  t((uint8)p->type),
+			  elementSize(p->elementSize)
+			{};
+			
+			uint16 offset = 0;
+			uint8 t = 0;
+			uint8 elementSize = 0;
+		};
+
+		MultiComparator(const void* data)
+		{
+			memcpy(items.data(), data, sizeof(items));
+		}
+
+		int operator()(Ptr p1, Ptr p2) const
+		{
+			int result = 0;
+
+			for(auto& d: items)
+			{
+				auto dt = (DataType)d.t;
+				auto isArray = d.elementSize > 1;
+
+				switch(dt)
+				{
+				case DataType::Boolean:
+					result = isArray ? ObjectReference::NumberComparator<bool, true>(d.offset, d.elementSize)(p1, p2) :
+									   ObjectReference::NumberComparator<bool, false>(d.offset)(p1, p2);
+					break;
+				case DataType::Integer:
+					result = isArray ? ObjectReference::NumberComparator<int, true>(d.offset, d.elementSize)(p1, p2) :
+									   ObjectReference::NumberComparator<int, false>(d.offset)(p1, p2);
+					break;
+				case DataType::Float:
+					result = isArray ? ObjectReference::NumberComparator<float, true>(d.offset, d.elementSize)(p1, p2) :
+									   ObjectReference::NumberComparator<float, false>(d.offset)(p1, p2);
+					break;
+				}
+
+				if(result != 0)
+					return result;
+			}
+
+			return result;
+		}
+
+		std::array<Item, NumItems> items;
+	};
 
 	ObjectReference();
 	ObjectReference& operator=(const ObjectReference& other);
@@ -188,14 +247,10 @@ public:
 
 	bool isValid() const;
 
-	Identifier getObjectName() const override { RETURN_STATIC_IDENTIFIER("FixObject"); }
+	Identifier getObjectName() const override;
 
 
-	
-	int getNumChildElements() const override
-	{ 
-		return memberReferences.size();
-	};
+	int getNumChildElements() const override;;
 
 	DebugInformationBase* getChildElement(int index);
 
@@ -205,52 +260,24 @@ public:
 	{
 		using Ptr = ReferenceCountedObjectPtr<MemberReference>;
 
-		Identifier getObjectName() const override { RETURN_STATIC_IDENTIFIER("FixObjectMember"); }
+		Identifier getObjectName() const override;
 
 		/** This will be shown as value of the object. */
 		String getDebugValue() const override;;
 
 		/** This will be shown as name of the object. */
-		String getDebugName() const 
-		{   
-			String s;
-			s << "%PARENT%.";
-			s << memberProperties->id.toString(); 
-			return s;
-		};
+		String getDebugName() const;;
 
-		String getDebugDataType() const override
-		{ 
-			String s;
+		String getDebugDataType() const override;
 
-			switch (memberProperties->type)
-			{
-			case LayoutBase::DataType::Integer: s << "int"; break;
-			case LayoutBase::DataType::Float:   s << "float"; break;
-			case LayoutBase::DataType::Boolean: s << "bool"; break;
-            default:                            break;
-			}
-
-			if (!arrayMembers.isEmpty())
-				s << "[" << String(arrayMembers.size()) << "]";
-
-			return s;
-		}
-
-		int getNumChildElements() const override
-		{
-			return arrayMembers.size();
-		}
+		int getNumChildElements() const override;
 
 		DebugInformationBase* getChildElement(int index) override;
 
 
 		MemberReference(MemoryLayoutItem::Ptr p, uint8* data_, int indexInArray_);
 		MemberReference& operator=(var newValue);
-		MemberReference::Ptr operator[](int index) const
-		{
-			return arrayMembers[index];
-		}
+		MemberReference::Ptr operator[](int index) const;
 
 		bool isValid() const;
 
@@ -277,13 +304,12 @@ public:
 		JUCE_DECLARE_WEAK_REFERENCEABLE(MemberReference);
 	};
 
-	MemberReference::Ptr operator[](const Identifier& id) const
-	{
-		return dynamic_cast<MemberReference*>(memberReferences[id].getObject());
-	}
+	void writeAsJSON (OutputStream& out, const int indentLevel, const bool allOnOneLine, int maximumDecimalPlaces) override;
+
+	MemberReference::Ptr operator[](const Identifier& id) const;
 
 	void init(LayoutBase* referencedLayout, uint8* preallocatedData, bool resetToDefault);
-
+	
 	size_t elementSize = 0;
 	uint8* data = nullptr;
 
@@ -291,104 +317,32 @@ public:
 	NamedValueSet memberReferences;
 };
 
-#if 0
-struct Stack : public LayoutBase,
-	public hise::UnorderedStack<ObjectReference, 128>,
-	public ReferenceCountedObject
-{
-	Stack(const var& description)
-	{
-		layout = createLayout(allocator, description, &initResult);
-
-		if (initResult.wasOk())
-		{
-			auto ptr = begin();
-
-			for (auto l : layout)
-				elementSize += l->getByteSize();
-
-			numAllocated = elementSize * 128;
-
-			if (numAllocated > 0)
-			{
-				allocatedData.allocate(numAllocated, true);
-				auto dataPtr = allocatedData.get();
-
-				for (int i = 0; i < 128; i++)
-				{
-					ptr[i].init(this, dataPtr, true);
-					dataPtr += elementSize;
-				}
-			}
-		}
-	}
-
-private:
-
-	int numAllocated = 0;
-	int elementSize = 0;
-	HeapBlock<uint8> allocatedData;
-};
-#endif
 
 struct Array : public LayoutBase,
 	public AssignableObject,
+	public ObjectWithJSONConverter,
 	public ConstScriptingObject
 {
 	ObjectReference::CompareFunction compareFunction;
 
-	struct Wrapper
-	{
-		API_METHOD_WRAPPER_1(Array, indexOf);
-		API_VOID_METHOD_WRAPPER_1(Array, fill);
-		API_VOID_METHOD_WRAPPER_0(Array, clear);
-		API_METHOD_WRAPPER_2(Array, copy);
-	};
+	struct Wrapper;
+	
 
-	Identifier getObjectName() const override
-	{
-		RETURN_STATIC_IDENTIFIER("FixObjectArray");
-	}
+	Identifier getObjectName() const override;
 
-	int getNumChildElements() const override { return items.size(); }
+	int getNumChildElements() const override;
 
 	DebugInformationBase* getChildElement(int index) override;
 
-	Array(ProcessorWithScriptingContent* s, int numElements):
-		ConstScriptingObject(s, 1)
-	{
-		addConstant("length", numElements);
-
-		ADD_API_METHOD_1(indexOf);
-		ADD_API_METHOD_1(fill);
-		ADD_API_METHOD_0(clear);
-		ADD_API_METHOD_2(copy);
-	};
+	Array(ProcessorWithScriptingContent* s, int numElements);;
 
 	void init(LayoutBase* parentLayout);
 
-	void assign(const int index, var newValue) override
-	{
-		if (auto fo = dynamic_cast<ObjectReference*>(newValue.getObject()))
-		{
-			if (auto i = items[index])
-			{
-				*i = *fo;
-			}
-		}
-	}
+	void assign(const int index, var newValue) override;
 
-	var getAssignedValue(int index) const override
-	{
-		if (isPositiveAndBelow(index, items.size()))
-		{
-			return var(items[index].get());
-		}
+	var getAssignedValue(int index) const override;
 
-		return var();
-	}
-
-	int getCachedIndex(const var &indexExpression) const override { return (int)indexExpression; }
+	int getCachedIndex(const var &indexExpression) const override;
 
 	// =======================================================================================================
 
@@ -401,16 +355,28 @@ struct Array : public LayoutBase,
 	/** Returns the index of the first element that matches the given object. */
 	int indexOf(var obj) const;
 
+	/** checks if the array contains the object. */
+	bool contains(var obj) const;
+
 	/** Copies the property from each element into a buffer (or array). */
 	bool copy(String propertyName, var target);
+
+	/** Exports the memory region of the entire array as Base64 encoded string. */
+	String toBase64() const;
+
+	/** Restores an array from a previously exported state. */
+	bool fromBase64(const String& b64);
 
 	/** Returns the size of the array. */
 	virtual int size() const;
 
-	/** checks if the array contains the object. */
-	bool contains(var obj) const;
+	/** Sorts the array with the given compare function. */
+	void sort();
 
 	// =======================================================================================================
+
+	void writeAsJSON(OutputStream& out, const int indentLevel, const bool allOnOneLine,
+	                 int maximumDecimalPlaces) override;
 
 protected:
 
@@ -427,30 +393,15 @@ protected:
 
 struct Stack : public Array
 {
-	struct Wrapper
-	{
-		API_METHOD_WRAPPER_1(Stack, insert);
-		API_METHOD_WRAPPER_1(Stack, remove);
-		API_METHOD_WRAPPER_1(Stack, removeElement);
-		API_METHOD_WRAPPER_0(Stack, size);
-		API_METHOD_WRAPPER_1(Stack, indexOf);
-		API_METHOD_WRAPPER_1(Stack, contains);
-		API_METHOD_WRAPPER_0(Stack, isEmpty);
-	};
+	struct Viewer;
 
-	Stack(ProcessorWithScriptingContent* s, int numElements) :
-		Array(s, numElements)
-	{
-		ADD_API_METHOD_1(insert);
-		ADD_API_METHOD_1(remove);
-		ADD_API_METHOD_1(removeElement);
-		ADD_API_METHOD_0(size);
-		ADD_API_METHOD_1(indexOf);
-		ADD_API_METHOD_1(contains);
-		ADD_API_METHOD_0(isEmpty);
-	};
+	struct Wrapper;
 
-	Identifier getObjectName() { RETURN_STATIC_IDENTIFIER("FixObjectStack"); }
+	Stack(ProcessorWithScriptingContent* s, int numElements);;
+
+	Identifier getObjectName() const override;
+
+	Component* createPopupComponent(const MouseEvent& e, Component* parent) override;
 
 	// =======================================================================================================
 
@@ -475,15 +426,15 @@ struct Stack : public Array
 	/** Checks whether the stack is empty. */
 	bool isEmpty() const;
 
+	/** Replaces the object if it exists or inserts it at the end. */
+	bool set(var obj);
+
 	// =======================================================================================================
 
 private:
 
-	ObjectReference* getRef(const var& obj)
-	{
-		return dynamic_cast<ObjectReference*>(obj.getObject());
-	}
-	
+	ObjectReference* getRef(const var& obj);
+
 	int position = 0;
 };
 
@@ -505,8 +456,14 @@ struct Factory : public LayoutBase,
 	/** Creates an unordered stack. */
 	var createStack(int numElements);
 
-	/** Registers a function that will be used for comparison. */
+	/** Registers a function that will be used for comparison. If you pass in a string it will only compare the given property. */
 	void setCompareFunction(var newCompareFunction);
+
+	/** Returns the hash code for the memory layout which factors in member IDs, order and type. */
+	int getTypeHash() const
+	{
+		return typeHash;
+	}
 
 	// ============================================================================================================
 
@@ -514,13 +471,8 @@ struct Factory : public LayoutBase,
 
 private:
 
-	struct Wrapper
-	{
-		API_METHOD_WRAPPER_0(Factory, create);
-		API_METHOD_WRAPPER_1(Factory, createArray);
-		API_METHOD_WRAPPER_1(Factory, createStack);
-		API_VOID_METHOD_WRAPPER_1(Factory, setCompareFunction);
-	};
+	struct Wrapper;
+	
 
 	WeakCallbackHolder customCompareFunction;
 

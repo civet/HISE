@@ -46,6 +46,7 @@ public:
 	virtual ~ScriptParameterHandler() {}
 
 	virtual Identifier getParameterId(int index) const = 0;
+	virtual int getParameterIndexForIdentifier(const Identifier& id) const = 0;
 	virtual int getNumParameters() const = 0;
 	virtual void setParameter(int index, float newValue) = 0;
 	virtual float getParameter(int index) const = 0;
@@ -119,53 +120,29 @@ class ConstScriptingObject : public ScriptingObject,
 {
 public:
 
-	ConstScriptingObject(ProcessorWithScriptingContent* p, int numConstants):
-		ScriptingObject(p),
-		ApiClass(numConstants)
-	{
-
-	}
+	ConstScriptingObject(ProcessorWithScriptingContent* p, int numConstants);
 
 	virtual Identifier getObjectName() const = 0;
-	Identifier getInstanceName() const override { return name.isValid() ? name : getObjectName(); }
+	Identifier getInstanceName() const override;
 
 	/** \internal Overwrite this method and check if the object got deleted. Best thing is to use a WeakReference and check if it's nullptr. */
-	virtual bool objectDeleted() const { return false; }
+	virtual bool objectDeleted() const;
 
 	/** \internal Overwrite this method and check if the object exists. Best thing is to initialize the pointer to nullptr and check that. */
-	virtual bool objectExists() const { return false; }
+	virtual bool objectExists() const;
 
-	
+
 	/** Return all attached functions and callbacks of this object so that the compiler can run its optimisations. */
 	//virtual var getOptimizableFunctions() const { return {}; }
 
 	/** The parser will call this function with every function call and its location so you can use it to track down calls. 
 		Note: this will only work with objects that are defined as const variables. */
-	virtual bool addLocationForFunctionCall(const Identifier& id, const DebugableObjectBase::Location& location) 
-	{
-		ignoreUnused(id, location);
-		return false;
-	};
+	virtual bool addLocationForFunctionCall(const Identifier& id, const DebugableObjectBase::Location& location);;
 
 	/** \internal This method combines the calls to objectDeleted() and objectExists() and creates a nice error message. */
-	bool checkValidObject() const
-	{
-		if (!objectExists())
-		{
-			reportScriptError(getObjectName().toString() + " " + getInstanceName() + " does not exist.");
-			RETURN_IF_NO_THROW(false)
-		}
+	bool checkValidObject() const;
 
-		if (objectDeleted())
-		{
-			reportScriptError(getObjectName().toString() + " " + getInstanceName() + " was deleted");
-			RETURN_IF_NO_THROW(false)
-		}
-
-		return true;
-	}
-
-	void setName(const Identifier &name_) noexcept{ name = name_; };
+	void setName(const Identifier &name_) noexcept;;
 
 	void gotoLocationWithDatabaseLookup();
 
@@ -191,19 +168,14 @@ class DynamicScriptingObject: public ScriptingObject,
 {
 public:
 
-	DynamicScriptingObject(ProcessorWithScriptingContent *p):
-		ScriptingObject(p)
-	{
-		setMethod("exists", Wrappers::checkExists);
-		
-	};
+	DynamicScriptingObject(ProcessorWithScriptingContent *p);;
 
-	virtual ~DynamicScriptingObject() {};
+	virtual ~DynamicScriptingObject();;
 
 	/** \internal Overwrite this method and return the class name of the object which will be used in the script context. */
 	virtual Identifier getObjectName() const = 0;
 
-	String getInstanceName() const { return name; }
+	String getInstanceName() const;
 
 protected:
 
@@ -214,24 +186,9 @@ protected:
 	virtual bool objectExists() const = 0;
 
 	/** \internal This method combines the calls to objectDeleted() and objectExists() and creates a nice error message. */
-	bool checkValidObject() const
-	{
-		if(!objectExists())
-		{
-			reportScriptError(getObjectName().toString() + " " + getInstanceName() + " does not exist.");
-			RETURN_IF_NO_THROW(false)
-		}
+	bool checkValidObject() const;
 
-		if(objectDeleted())
-		{
-			reportScriptError(getObjectName().toString() + " " + getInstanceName() + " was deleted");	
-			RETURN_IF_NO_THROW(false)
-		}
-
-		return true;
-	}
-
-	void setName(const String &name_) noexcept { name = name_; };
+	void setName(const String &name_) noexcept;;
 
 private:
 
@@ -414,9 +371,19 @@ struct WeakCallbackHolder : private ScriptingObject
 
 	bool matches(const var& f) const;
 
+	void reportError(const Result& r);
+
+	void setTrackIndex(uint64_t trackIndexToUse)
+	{
+		trackIndex = trackIndexToUse;
+	}
+
 private:
 
 	var getThisObject();
+
+	Identifier cid;
+	uint64_t trackIndex = 0;
 
 	bool highPriority = false;
 	int numExpectedArgs;
@@ -495,14 +462,9 @@ public:
 	JUCE_DECLARE_WEAK_REFERENCEABLE(AssignableObject);
 };
 
-
-struct JSONConversionHelpers
+struct JSONConversionHelpers: public valuetree::Helpers
 {
 	static bool isPluginState(const ValueTree& v) { return v.getType() == Identifier("ControlData"); };
-
-	static var valueTreeToJSON(const ValueTree& v);
-
-	static ValueTree jsonToValueTree(var data, const Identifier& typeId, bool isParentData = true);
 
 	static var convertBase64Data(const String& d, const ValueTree& cTree);
 

@@ -50,136 +50,46 @@ public:
 	class ScopedDelayer
 	{
 	public:
-
-		ScopedDelayer(ValueTreeUpdateWatcher* watcher_) :
-			watcher(watcher_)
-		{
-			if(watcher != nullptr)
-				watcher->delayCalls = true;
-		};
-
-		~ScopedDelayer()
-		{
-			if (watcher != nullptr)
-			{
-				watcher->delayCalls = false;
-
-				if (watcher->shouldCallAfterDelay)
-					watcher->callListener();
-			}
-		}
-
+		ScopedDelayer(ValueTreeUpdateWatcher* watcher_);;
+		~ScopedDelayer();
 	private:
-
 		WeakReference<ValueTreeUpdateWatcher> watcher;
-			
 	};
 
 	class ScopedSuspender
 	{
 	public:
-		
-		ScopedSuspender(ValueTreeUpdateWatcher* watcher_) :
-			watcher(watcher_)
-		{
-			if (watcher.get() != nullptr)
-			{
-				watcher->isSuspended = true;
-			}
-		};
-
-		~ScopedSuspender()
-		{
-			if (watcher.get() != nullptr)
-			{
-				watcher->isSuspended = false;
-			}
-		};
-	
+		ScopedSuspender(ValueTreeUpdateWatcher* watcher_);;
+		~ScopedSuspender();;
 	private:
-
 		WeakReference<ValueTreeUpdateWatcher> watcher;
 	};
 
 	struct Listener
 	{
-		virtual ~Listener() {};
-
+		virtual ~Listener();;
 		virtual void valueTreeNeedsUpdate() = 0;
 
 	private:
-
 		JUCE_DECLARE_WEAK_REFERENCEABLE(Listener);
 	};
 
-	ValueTreeUpdateWatcher(ValueTree& v, Listener* l) :
-		state(v),
-		listener(l)
-	{
-		state.addListener(this);
-	};
+	ValueTreeUpdateWatcher(ValueTree& v, Listener* l);;
 
-	void valueTreePropertyChanged(ValueTree& /*treeWhosePropertyHasChanged*/, const Identifier& property) override
-	{
-		if (isCurrentlyUpdating)
-			return;
-
-		static const Identifier id("id");
-		static const Identifier parentComponent("parentComponent");
-
-		if (property == id || property == parentComponent)
-			callListener();
-	}
-
-	void valueTreeChildAdded(ValueTree& /*parentTree*/, ValueTree& /*childWhichHasBeenAdded*/) override
-	{
-		callListener();
-	}
-
-	void valueTreeChildRemoved(ValueTree& /*parentTree*/, ValueTree& /*childWhichHasBeenRemoved*/, int /*indexFromWhichChildWasRemoved*/) override
-	{
-		callListener();
-	}
-
-	void valueTreeChildOrderChanged(ValueTree& /*parentTreeWhoseChildrenHaveMoved*/, int /*oldIndex*/, int /*newIndex*/) override
-	{
-		callListener();
-	}
-
-	void valueTreeParentChanged(ValueTree& /*treeWhoseParentHasChanged*/) override {};
+	void valueTreePropertyChanged(ValueTree& /*treeWhosePropertyHasChanged*/, const Identifier& property) override;
+	void valueTreeChildAdded(ValueTree& /*parentTree*/, ValueTree& /*childWhichHasBeenAdded*/) override;
+	void valueTreeChildRemoved(ValueTree& /*parentTree*/, ValueTree& /*childWhichHasBeenRemoved*/, int /*indexFromWhichChildWasRemoved*/) override;
+	void valueTreeChildOrderChanged(ValueTree& /*parentTreeWhoseChildrenHaveMoved*/, int /*oldIndex*/, int /*newIndex*/) override;
+	void valueTreeParentChanged(ValueTree& /*treeWhoseParentHasChanged*/) override;;
 
 private:
 
 	bool delayCalls = false;
-
 	bool shouldCallAfterDelay = false;
 
-	void callListener()
-	{
-		if (isSuspended)
-			return;
-
-		if (delayCalls)
-		{
-			shouldCallAfterDelay = true;
-			return;
-		}
-		
-		if (isCurrentlyUpdating)
-			return;
-
-		isCurrentlyUpdating = true;
-
-		
-
-        if(listener.get() != nullptr)
-            listener->valueTreeNeedsUpdate();
-        
-		isCurrentlyUpdating = false;
-	}
+	void callListener();
 
 	bool isCurrentlyUpdating = false;
-
 	bool isSuspended = false;
 
 	ValueTree state;
@@ -243,11 +153,22 @@ class ScriptingApi::Content : public ScriptingObject,
 {
 public:
 
+	struct ScriptComponent;
+
 	// ================================================================================================================
 
 	class RebuildListener
 	{
 	public:
+
+		enum class DragAction
+		{
+			Start,
+			End,
+			Repaint,
+			Query,
+			Drag
+		};
 
 		virtual ~RebuildListener()
 		{
@@ -257,6 +178,10 @@ public:
 		virtual void contentWasRebuilt() = 0;
         
         virtual void contentRebuildStateChanged(bool /*isRebuilding*/) {};
+
+		virtual bool onDragAction(DragAction a, ScriptComponent* source, var& data) { return false; }
+
+		virtual void suspendStateChanged(bool isSuspended) {};
 
 	private:
 
@@ -287,6 +212,7 @@ public:
 		public ConstScriptingObject,
 		public AssignableObject,
 		public SafeChangeBroadcaster,
+		NEW_AUTOMATION_WITH_COMMA(dispatch::ListenerOwner)
 		public UpdateDispatcher::Listener
 	{
 		using Ptr = ReferenceCountedObjectPtr<ScriptComponent>;
@@ -306,8 +232,9 @@ public:
 			WeakReference<WeakCallbackHolder::CallableObject> listener;
 			MouseCallbackComponent::CallbackLevel mouseCallbackLevel = MouseCallbackComponent::CallbackLevel::NoCallbacks;
 			StateFunction tickedFunction, enabledFunction, textFunction;
-			StringArray popupMenuItems;
-
+			std::function<StringArray()> popupMenuItemFunction = {};
+			ModifierKeys popupModifier = ModifierKeys::rightButtonModifier;
+			int delayMilliseconds = 0;
 		};
 
 		// ============================================================================================================
@@ -455,8 +382,11 @@ public:
 		var getNonDefaultScriptObjectProperties() const;
 
 		String getScriptObjectPropertiesAsJSON() const;
-		
-		
+
+		void updateAutomation(int, float newValue)
+		{
+			setValue(newValue);
+		}
 
 		bool isPropertyDeactivated(Identifier &id) const;
 		bool hasProperty(const Identifier& id) const;
@@ -529,17 +459,7 @@ public:
 		void set(String propertyName, var value);;
 
 		/** Returns the current value. */
-		virtual var getValue() const
-        {
-			var rv;
-			{
-				SimpleReadWriteLock::ScopedReadLock sl(valueLock);
-				rv = value;
-			}
-			
-            jassert(!value.isString());
-            return rv;
-        }
+		virtual var getValue() const;
 
 		/** Sets the current value
 		*
@@ -637,24 +557,11 @@ public:
 
 		var getLookAndFeelObject();
 
-		void attachValueListener(WeakCallbackHolder::CallableObject* obj)
-		{
-			valueListener = obj;
-			sendValueListenerMessage();
-		}
+		void attachValueListener(WeakCallbackHolder::CallableObject* obj);
 
-		void attachMouseListener(WeakCallbackHolder::CallableObject* obj, MouseCallbackComponent::CallbackLevel cl, const MouseListenerData::StateFunction& sf = {}, const MouseListenerData::StateFunction& ef = {}, const MouseListenerData::StateFunction& tf = {}, const StringArray& popupItems = {})
-		{
-			for (int i = 0; i < mouseListeners.size(); i++)
-			{
-				if (mouseListeners[i].listener == nullptr)
-					mouseListeners.remove(i--);
-			}
+		void removeMouseListener(WeakCallbackHolder::CallableObject* obj);
 
-			mouseListeners.add({ obj, cl, sf, ef, tf, popupItems });
-		}
-
-		
+		void attachMouseListener(WeakCallbackHolder::CallableObject* obj, MouseCallbackComponent::CallbackLevel cl, const MouseListenerData::StateFunction& sf = {}, const MouseListenerData::StateFunction& ef = {}, const MouseListenerData::StateFunction& tf = {}, const std::function<StringArray()>& popupItemFunction = {}, ModifierKeys pm = ModifierKeys::rightButtonModifier, int delayMs=0);
 
 		const Array<MouseListenerData>& getMouseListeners() const { return mouseListeners; }
 
@@ -664,15 +571,9 @@ public:
 
 		bool wantsKeyboardFocus() const { return (bool)keyboardCallback; }
 
-		void addSubComponentListener(SubComponentListener* l)
-		{
-			subComponentListeners.addIfNotAlreadyThere(l);
-		}
+		void addSubComponentListener(SubComponentListener* l);
 
-		void removeSubComponentListener(SubComponentListener* l)
-		{
-			subComponentListeners.removeAllInstancesOf(l);
-		}
+		void removeSubComponentListener(SubComponentListener* l);
 
 		void sendSubComponentChangeMessage(ScriptComponent* s, bool wasAdded, NotificationType notify=sendNotificationAsync);
 		
@@ -718,18 +619,8 @@ public:
 
 		struct ScopedPropertyEnabler
 		{
-			ScopedPropertyEnabler(ScriptComponent* c_) :
-				c(c_)
-			{
-				c->countJsonSetProperties = false;
-			};
-
-			~ScopedPropertyEnabler()
-			{
-				c->countJsonSetProperties = true;
-				c = nullptr;
-			}
-
+			ScopedPropertyEnabler(ScriptComponent* c_);;
+			~ScopedPropertyEnabler();
 			ScriptComponent::Ptr c;
 		};
 
@@ -753,20 +644,7 @@ public:
 			searchedProperty = id;
 		}
 
-		void handleScriptPropertyChange(const Identifier& id)
-		{
-			if (countJsonSetProperties)
-			{
-				if (searchedProperty.isNull())
-				{
-					scriptChangedProperties.addIfNotAlreadyThere(id);
-				}
-				if (searchedProperty == id)
-				{
-					throw String("Here...");
-				}
-			}
-		}
+		void handleScriptPropertyChange(const Identifier& id);
 
 		/** Returns a local look and feel if it was registered before. */
 		LookAndFeel* createLocalLookAndFeel();
@@ -797,6 +675,13 @@ public:
 		LambdaBroadcaster<bool> repaintBroadcaster;
 
 		LambdaBroadcaster<bool, int> fadeListener;
+
+		void setModulationData(MacroControlledObject::ModulationPopupData::Ptr newMod)
+		{
+			modulationData = newMod;
+		}
+
+		MacroControlledObject::ModulationPopupData::Ptr getModulationData() const { return modulationData; }
 
 	protected:
 
@@ -850,6 +735,8 @@ public:
 
 		var localLookAndFeel;
 
+		MacroControlledObject::ModulationPopupData::Ptr modulationData;
+
 		WeakCallbackHolder keyboardCallback;
 
 		struct AsyncControlCallbackSender : private UpdateDispatcher::Listener
@@ -872,17 +759,30 @@ public:
             ProcessorWithScriptingContent* p;
         };
         
+		struct AsyncValueUpdater : public AsyncUpdater
+		{
+			AsyncValueUpdater(ScriptComponent& p) :
+				parent(p)
+			{};
+
+			void handleAsyncUpdate() override;
+
+			ScriptComponent& parent;
+		};
         
         
 		struct GlobalCableConnection;
 
 		AsyncControlCallbackSender controlSender;
+		AsyncValueUpdater asyncValueUpdater;
 
 		bool isPositionProperty(Identifier id) const;
 
 		ValueTree propertyTree;
 
 		Array<Identifier> scriptChangedProperties;
+
+		IF_NEW_AUTOMATION_DISPATCH(dispatch::library::CustomAutomationSource::Listener automationListener);
 
         struct SubComponentNotifier: public AsyncUpdater
         {
@@ -962,9 +862,47 @@ public:
 			showTextBox,
 			scrollWheel,
 			enableMidiLearn,
+			sendValueOnDrag,
 			numProperties,
 		};
 
+        struct ModifierObject: public ConstScriptingObject
+        {
+            ModifierObject(ProcessorWithScriptingContent* sp):
+               ConstScriptingObject(sp, 12)
+            {
+                using Action = SliderWithShiftTextBox::ModifierObject::Action;
+                using Flags = ModifierKeys::Flags;
+                
+                addConstant("TextInput", "TextInput");
+                addConstant("FineTune", "FineTune");
+                addConstant("ResetToDefault", "ResetToDefault");
+                addConstant("ContextMenu", "ContextMenu");
+                
+                static const String doubleClick("doubleClick");
+                static const String rightClick("rightClick");
+                static const String shiftDown("shiftDown");
+                static const String cmdDown("cmdDown");
+                static const String altDown("altDown");
+                static const String ctrlDown("ctrlDown");
+                static const String disabled("disabled");
+                static const String noModKey("noKeyModifier");
+                
+                addConstant(disabled, 0);
+                addConstant(noModKey, SliderWithShiftTextBox::ModifierObject::noKeyModifier);
+                addConstant(shiftDown, Flags::shiftModifier);
+                addConstant(rightClick, Flags::rightButtonModifier);
+                addConstant(cmdDown, Flags::commandModifier);
+                addConstant(altDown, Flags::altModifier);
+                addConstant(ctrlDown, Flags::ctrlModifier);
+                addConstant(doubleClick, SliderWithShiftTextBox::ModifierObject::doubleClickModifier);
+            };
+            
+            static Identifier getStaticObjectName() { RETURN_STATIC_IDENTIFIER("Modifiers"); }
+            
+            Identifier getObjectName() const override { return getStaticObjectName(); }
+        };
+        
 		ScriptSlider(ProcessorWithScriptingContent *base, Content *parentContent, Identifier name_, int x, int y, int, int);
 		~ScriptSlider();
 
@@ -978,12 +916,7 @@ public:
 		ValueTree exportAsValueTree() const override;
 		void restoreFromValueTree(const ValueTree &v) override;
 
-		void resetValueToDefault() override
-		{
-			auto f = (float)getScriptObjectProperty(ScriptComponent::defaultValue);
-			FloatSanitizers::sanitizeFloatNumber(f);
-			setValue(f);
-		}
+		void resetValueToDefault() override;
 
 		void handleDefaultDeactivatedProperties() override;
 
@@ -1018,6 +951,12 @@ public:
 		/** Sets the upper range end to the given value. */
 		void setMaxValue(double max) noexcept;
 
+        /** Creates a object with constants for setModifiers(). */
+        var createModifiers();
+        
+        /** Sets the modifiers for different actions using a JSON object. */
+        void setModifiers(String action, var modifiers);
+        
 		/** Returns the lower range end. */
 		double getMinValue() const;
 
@@ -1035,9 +974,13 @@ public:
 		Slider::SliderStyle styleId;
 		Image getImage() const { return image ? *image.getData() : Image(); };
 		var sliderValueFunction;
+        var modObject;
 
+        
 	private:
 
+        
+        
 		double minimum, maximum;
 		PooledImage image;
 
@@ -1126,6 +1069,8 @@ public:
 			FontSize,
 			FontStyle,
 			enableMidiLearn,
+            popupAlignment,
+            useCustomPopup,
 			numProperties
 		};
 
@@ -1182,76 +1127,39 @@ public:
 			Alignment,
 			Editable,
 			Multiline,
+            SendValueEachKeyPress,
 			numProperties
 		};
 
 
 		ScriptLabel(ProcessorWithScriptingContent *base, Content *parentContent, Identifier name, int x, int y, int width, int);
-		~ScriptLabel() {};
+		~ScriptLabel();;
 		
 		// ========================================================================================================
 
-		static Identifier getStaticObjectName() { RETURN_STATIC_IDENTIFIER("ScriptLabel"); }
+		static Identifier getStaticObjectName();
 
-		virtual Identifier 	getObjectName() const override { return getStaticObjectName(); }
+		virtual Identifier 	getObjectName() const override;
 		ScriptCreatedComponentWrapper *createComponentWrapper(ScriptContentComponent *content, int index) override;
 		StringArray getOptionsFor(const Identifier &id) override;
 		Justification getJustification();
 
-		void restoreFromValueTree(const ValueTree &v) override
-		{
-			setValue(v.getProperty("value", ""));
-		}
+		void restoreFromValueTree(const ValueTree &v) override;
 
-		ValueTree exportAsValueTree() const override
-		{
-			ValueTree v = ScriptComponent::exportAsValueTree();
-
-			v.setProperty("value", getValue(), nullptr);
-			
-			return v;
-		}
+		ValueTree exportAsValueTree() const override;
 
 		/** Returns the current value. */
-		virtual var getValue() const override
-		{
-			return getScriptObjectProperty(ScriptComponent::Properties::text);
-		}
+		virtual var getValue() const override;
 
-		void setValue(var newValue) override
-		{
-			jassert(newValue != "internal");
+		void setValue(var newValue) override;
 
-			if (newValue.isString())
-			{
-				setScriptObjectProperty(ScriptComponent::Properties::text, newValue);
-				triggerAsyncUpdate();
-			}
-		}
+		void resetValueToDefault() override;
 
-		void resetValueToDefault() override
-		{
-			setValue("");
-		}
-
-		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor = sendNotification)
-		{
-			if (id == getIdFor((int)ScriptComponent::Properties::text))
-			{
-				jassert(isCorrectlyInitialised(ScriptComponent::Properties::text));
-				setValue(newValue.toString());
-			}
-			
-			ScriptComponent::setScriptObjectPropertyWithChangeMessage(id, newValue, notifyEditor);
-
-		}
+		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor = sendNotification);
 
 		void handleDefaultDeactivatedProperties() override;
 
-		bool isClickable() const override
-		{
-			return getScriptObjectProperty(Editable) && ScriptComponent::isClickable();
-		}
+		bool isClickable() const override;
 
 		// ======================================================================================================== API Methods
 
@@ -1272,60 +1180,26 @@ public:
 	{
 		ComplexDataScriptComponent(ProcessorWithScriptingContent* base, Identifier name, snex::ExternalData::DataType type_);;
 			
-		Table* getTable(int) override
-		{
-			return static_cast<Table*>(getUsedData(snex::ExternalData::DataType::Table));
-		}
+		Table* getTable(int) override;
 
-		SliderPackData* getSliderPack(int) override
-		{
-			return static_cast<SliderPackData*>(getUsedData(snex::ExternalData::DataType::SliderPack));
-		}
+		SliderPackData* getSliderPack(int) override;
 
-		MultiChannelAudioBuffer* getAudioFile(int) override
-		{
-			return static_cast<MultiChannelAudioBuffer*>(getUsedData(snex::ExternalData::DataType::AudioFile));
-		}
+		MultiChannelAudioBuffer* getAudioFile(int) override;
 
-		FilterDataObject* getFilterData(int index) override
-		{
-			jassertfalse;
-			return nullptr; // soon;
-		}
+		FilterDataObject* getFilterData(int index) override;
 
-		SimpleRingBuffer* getDisplayBuffer(int index) override
-		{
-			jassertfalse;
-			return nullptr; // soon
-		}
+		SimpleRingBuffer* getDisplayBuffer(int index) override;
 
-		int getNumDataObjects(ExternalData::DataType t) const override
-		{
-			return t == type ? 1 : 0;
-		}
+		int getNumDataObjects(ExternalData::DataType t) const override;
 
-		bool removeDataObject(ExternalData::DataType t, int index) override { return true; }
+		bool removeDataObject(ExternalData::DataType t, int index) override;
 
 		// override this and return the property id used for the index
 		virtual int getIndexPropertyId() const = 0;
 
 		StringArray getOptionsFor(const Identifier &id) override;
 
-		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor = sendNotification) override
-		{
-			ScriptComponent::setScriptObjectPropertyWithChangeMessage(id, newValue, notifyEditor);
-
-			if (getIdFor(processorId) == id || getIdFor(getIndexPropertyId()) == id)
-			{
-				updateCachedObjectReference();
-			}
-
-			if (getIdFor(parameterId) == id)
-			{
-				// don't do anything if you try to connect a table to a parameter...
-				return;
-			}
-		}
+		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor = sendNotification) override;
 
 		ValueTree exportAsValueTree() const override;
 
@@ -1333,59 +1207,19 @@ public:
 
 		void handleDefaultDeactivatedProperties();
 
-		void referToDataBase(var newData)
-		{
-			if (auto td = dynamic_cast<ScriptingObjects::ScriptComplexDataReferenceBase*>(newData.getObject()))
-			{
-				if (td->getDataType() != type)
-					reportScriptError("Data Type mismatch");
+		void referToDataBase(var newData);
 
-				otherHolder = td->getHolder();
-
-				setScriptObjectPropertyWithChangeMessage(getIdFor(getIndexPropertyId()), td->getIndex(), sendNotification);
-				updateCachedObjectReference();
-			}
-			else if (auto cd = dynamic_cast<ComplexDataScriptComponent*>(newData.getObject()))
-			{
-				if (cd->type != type)
-					reportScriptError("Data Type mismatch");
-
-				otherHolder = cd;
-				updateCachedObjectReference();
-			}
-			else if ((newData.isInt() || newData.isInt64()) && (int)newData == -1)
-			{
-				// just go back to its own data object
-				otherHolder = nullptr;
-				updateCachedObjectReference();
-			}
-		}
-
-		ComplexDataUIBase* getCachedDataObject() const { return cachedObjectReference.get(); };
+		ComplexDataUIBase* getCachedDataObject() const;;
 
 		var registerComplexDataObjectAtParent(int index = -1);
 
-		void onComplexDataEvent(ComplexDataUIUpdaterBase::EventType t, var data) override
-		{
-			
-		}
+		void onComplexDataEvent(ComplexDataUIUpdaterBase::EventType t, var data) override;
 
-		ComplexDataUIBase::SourceWatcher& getSourceWatcher() { return sourceWatcher; }
+		ComplexDataUIBase::SourceWatcher& getSourceWatcher();
 
 	protected:
 
-		void updateCachedObjectReference()
-		{
-			if (cachedObjectReference != nullptr)
-				cachedObjectReference->getUpdater().removeEventListener(this);
-
-			cachedObjectReference = getComplexBaseType(type, 0);
-
-			if (cachedObjectReference != nullptr)
-				cachedObjectReference->getUpdater().addEventListener(this);
-
-			sourceWatcher.setNewSource(cachedObjectReference);
-		}
+		void updateCachedObjectReference();
 
 	private:
 
@@ -1435,11 +1269,7 @@ public:
 		/** Pass a function that takes a double and returns a String in order to override the popup display text. */
 		void setTablePopupFunction(var newFunction);
 
-		void connectToOtherTable(String processorId, int index)
-		{
-			setScriptObjectProperty(ScriptingApi::Content::ScriptComponent::processorId, processorId, dontSendNotification);
-			setScriptObjectProperty(getIndexPropertyId(), index, sendNotification);
-		}
+		void connectToOtherTable(String processorId, int index);
 
 		/** Returns the table value from 0.0 to 1.0 according to the input value from 0.0 to 1.0. */
 		float getTableValue(float inputValue);
@@ -1482,6 +1312,7 @@ public:
 			ShowValueOverlay,
 			SliderPackIndex,
 			CallbackOnMouseUpOnly,
+			StepSequencerMode,
 			numProperties
 		};
 
@@ -1500,12 +1331,7 @@ public:
 		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor = sendNotification) override;
 		void setValue(var newValue) override;
 
-		void resetValueToDefault() override
-		{
-			auto f = (float)getScriptObjectProperty(defaultValue);
-			FloatSanitizers::sanitizeFloatNumber(f);
-			setAllValues((double)f);
-		}
+		void resetValueToDefault() override;
 
 		var getValue() const override;
 
@@ -1525,6 +1351,9 @@ public:
 
 		/** Sets all slider values to the given value. If value is a number it will be filled with the number. If it's a buffer (or array) it will set the values accordingly (without resizing the slider packs). */
 		void setAllValues(var value);
+
+		/** Like setAllValues, but with undo support (if useUndoManager is enabled). */
+		void setAllValuesWithUndo(var value);
 
 		/** Returns the number of sliders. */
 		int getNumSliders() const;
@@ -1576,6 +1405,7 @@ public:
 			showFileName,
 			sampleIndex,
 			enableRange,
+			loadWithLeftClick,
 			numProperties
 		};
 
@@ -1608,6 +1438,9 @@ public:
 
 		/** Set the folder to be used when opening the file browser. */
 		void setDefaultFolder(var newDefaultFolder);
+
+		/** Sets the playback position. */
+		void setPlaybackPosition(double normalisedPosition);
 
 		// ========================================================================================================
 
@@ -1713,17 +1546,11 @@ public:
 
 		struct MouseCursorInfo
 		{
-			MouseCursorInfo() = default;
+			MouseCursorInfo();
 
-			MouseCursorInfo(MouseCursor::StandardCursorType t) :
-				defaultCursorType(t)
-			{};
+			MouseCursorInfo(MouseCursor::StandardCursorType t);;
 
-			MouseCursorInfo(const Path& p, Colour c_, Point<float> hp) :
-				path(p),
-				c(c_),
-				hitPoint(hp)
-			{};
+			MouseCursorInfo(const Path& p, Colour c_, Point<float> hp);;
 
 			MouseCursor::StandardCursorType defaultCursorType = MouseCursor::NormalCursor;
 			Path path;
@@ -1733,7 +1560,7 @@ public:
 
 		struct AnimationListener
 		{
-			virtual ~AnimationListener() {};
+			virtual ~AnimationListener();;
 
 			virtual void animationChanged() = 0;
 
@@ -1783,31 +1610,19 @@ public:
 
 		// ========================================================================================================
 
-		static Identifier getStaticObjectName() { RETURN_STATIC_IDENTIFIER("ScriptPanel"); }
-		virtual Identifier 	getObjectName() const override { return getStaticObjectName(); }
-		
+		static Identifier getStaticObjectName();
+		virtual Identifier 	getObjectName() const override;
+
 		StringArray getOptionsFor(const Identifier &id) override;
 		StringArray getItemList() const;
 
 		ScriptCreatedComponentWrapper *createComponentWrapper(ScriptContentComponent *content, int index) override;
 
-		bool isAutomatable() const override { return true; }
+		bool isAutomatable() const override;
 
 		void preloadStateChanged(bool isPreloading) override;
 
-		void preRecompileCallback() override
-		{
-			cachedList.clear();
-
-			ScriptComponent::preRecompileCallback();
-
-            
-			timerRoutine.clear();
-			loadRoutine.clear();
-			mouseRoutine.clear();
-
-			stopTimer();
-		}
+		void preRecompileCallback() override;
 
 		bool updateCyclicReferenceList(ThreadData& data, const Identifier& id) override;
 
@@ -1821,11 +1636,7 @@ public:
 
 		DebugInformationBase::Ptr createChildElement(DebugWatchIndex index) const;
 
-		void sendRepaintMessage() override
-		{
-			ScriptComponent::sendRepaintMessage();
-			repaint();
-		}
+		void sendRepaintMessage() override;
 
 		// ======================================================================================================== API Methods
 
@@ -1868,6 +1679,9 @@ public:
 		/** Starts dragging an external file (or a number of files). */
 		bool startExternalFileDrag(var fileOrFilesToDrag, bool moveOriginalFiles, var finishCallback);
 
+		/** Starts dragging something inside the UI. */
+		bool startInternalDrag(var dragData);
+
 		/** Loads a image which can be drawn with the paint function later on. */
 		void loadImage(String imageName, String prettyName);
 
@@ -1896,10 +1710,7 @@ public:
 		bool isVisibleAsPopup();
 
 		/** If this is set to true, the popup will be modal with a dark background that can be clicked to close. */
-		void setIsModalPopup(bool shouldBeModal)
-		{
-			isModalPopup = shouldBeModal;
-		}
+		void setIsModalPopup(bool shouldBeModal);
 
 		/** Adds a child panel to this panel. */
 		var addChildPanel();
@@ -1913,66 +1724,39 @@ public:
 		/** Returns the panel that this panel has been added to with addChildPanel. */
 		var getParentPanel();
 
-		int getNumSubPanels() const { return childPanels.size(); }
+		int getNumSubPanels() const;
 
-		ScriptPanel* getSubPanel(int index)
-		{
-			return childPanels[index].get();
-		}
+		ScriptPanel* getSubPanel(int index);
 
 		// ========================================================================================================
 
 #if HISE_INCLUDE_RLOTTIE
-		bool isAnimationActive() const { return animation != nullptr && animation->isValid(); }
-		RLottieAnimation::Ptr getAnimation() { return animation.get(); }
+		bool isAnimationActive() const;
+		RLottieAnimation::Ptr getAnimation();
 #endif
 
 		void showAsModalPopup();
 
-		void forcedRepaint()
-		{
-		};
+		void forcedRepaint();;
 
-		MouseCursorInfo getMouseCursorPath() const
-		{
-			return mouseCursorPath;
-		}
+		MouseCursorInfo getMouseCursorPath() const;
 
-		LambdaBroadcaster<MouseCursorInfo>& getCursorUpdater() { return cursorUpdater; }
+		LambdaBroadcaster<MouseCursorInfo>& getCursorUpdater();
 
 		LambdaBroadcaster<MouseCursorInfo> cursorUpdater;
 
-		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor=sendNotification) override
-		{
-			
-
-			ScriptComponent::setScriptObjectPropertyWithChangeMessage(id, newValue, notifyEditor);
-
-#if HISE_INCLUDE_RLOTTIE
-			if (id == getIdFor((int)ScriptComponent::height) ||
-				id == getIdFor((int)ScriptComponent::width))
-			{
-				if (animation != nullptr)
-				{
-					auto pos = getPosition();
-					animation->setSize(pos.getWidth(), pos.getHeight());
-				}
-			}
-#endif
-		}
+		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor=sendNotification) override;
 
 		struct Wrapper;
 
-		bool isModal() const
-		{
-			return isModalPopup;
-		}
+		bool isModal() const;
 
-		bool isUsingCustomPaintRoutine() const { return HiseJavascriptEngine::isJavascriptFunction(paintRoutine); }
+		bool isUsingCustomPaintRoutine() const;
 
-		bool isUsingClippedFixedImage() const { return usesClippedFixedImage; };
+		bool isUsingClippedFixedImage() const;;
 
-		void scaleFactorChanged(float /*newScaleFactor*/) override {} // Do nothing until fixed...
+		void scaleFactorChanged(float /*newScaleFactor*/) override;
+		// Do nothing until fixed...
 
 		void fileDropCallback(var fileInformation);
 
@@ -1980,60 +1764,27 @@ public:
 
 		void mouseCallbackInternal(const var& mouseInformation, Result& r);
 
-		var getJSONPopupData() const { return jsonPopupData; }
+		var getJSONPopupData() const;
 
-		void cancelPendingFunctions() override
-		{
-			stopTimer();
-		}
+		void cancelPendingFunctions() override;
 
-		void resetValueToDefault() override
-		{
-			auto f = (float)getScriptObjectProperty(defaultValue);
-			FloatSanitizers::sanitizeFloatNumber(f);
-			setValue(f);
-			repaint();
-		}
+		void resetValueToDefault() override;
 
-		Rectangle<int> getPopupSize() const { return popupBounds; }
+		Rectangle<int> getPopupSize() const;
 
 		void timerCallback() override;
 
 		bool timerCallbackInternal(MainController * mc, Result &r);
 
-		Image getLoadedImage(const String &prettyName) const
-		{
-			for (const auto& img : loadedImages)
-			{
-				if (img.prettyName == prettyName)
-					return img.image ? *img.image.getData() : Image();
-			}
-
-			return Image();
-		};
+		Image getLoadedImage(const String &prettyName) const;;
 
 		Rectangle<int> getDragBounds() const;
 
-		bool isShowing(bool checkParentComponentVisibility=true) const override
-		{
-			if (!ScriptComponent::isShowing(checkParentComponentVisibility))
-				return false;
-
-			if (!getScriptObjectProperty(isPopupPanel))
-				return true;
-
-			return shownAsPopup;
-		}
+		bool isShowing(bool checkParentComponentVisibility=true) const override;
 
 		void repaintWrapped();
 
-		DrawActions::Handler* getDrawActionHandler()
-		{
-			if (graphics != nullptr)
-				return &graphics->getDrawHandler();
-
-			return nullptr;
-		}
+		DrawActions::Handler* getDrawActionHandler();
 
 		void addAnimationListener(AnimationListener* l);
 
@@ -2041,6 +1792,8 @@ public:
 
 		String fileDropExtension;
 		String fileDropLevel;
+
+		dispatch::AccumulatedFlowManager flowManager;
 
 	private:
 
@@ -2160,6 +1913,12 @@ public:
 		/** Set a function that is notified for all user interaction with the table. */
 		void setTableCallback(var callbackFunction);
 
+		/** Returns the index of the original data passed into setTableRowData. */
+		int getOriginalRowIndex(int rowIndex);
+
+		/** Sets a custom function that can be used in order to sort the table if the user clicks on a column header. */
+		void setTableSortFunction(var sortFunction);
+
 		/** Specify the event types that should trigger a setValue() callback. */
 		void setEventTypesForValueCallback(var eventTypeList);
 
@@ -2182,7 +1941,78 @@ public:
 		JUCE_DECLARE_WEAK_REFERENCEABLE(ScriptedViewport);
 	};
 
-	
+	struct ScriptWebView : public ScriptComponent
+	{
+		enum Properties
+		{
+			enableCache = ScriptComponent::numProperties,
+			enablePersistence,
+			scaleFactorToZoom,
+            enableDebugMode
+		};
+
+		ScriptWebView(ProcessorWithScriptingContent* base, Content* parentContent, Identifier webViewName, int x, int y, int width, int height);
+
+		~ScriptWebView();
+
+		static Identifier getStaticObjectName() { RETURN_STATIC_IDENTIFIER("ScriptWebView"); }
+
+		virtual Identifier 	getObjectName() const override { return getStaticObjectName(); }
+		ScriptCreatedComponentWrapper *createComponentWrapper(ScriptContentComponent *content, int index) override;
+
+		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor /* = sendNotification */) override;
+
+		void handleDefaultDeactivatedProperties() override;
+
+		hise::WebViewData::Ptr getData() const { return data; }
+
+		// ========================================================================================================= API Methods
+
+		/** Binds a HiseScript function to a Javascript callback id. */
+		void bindCallback(const String& callbackId, const var& functionToCall);
+
+		/** Calls the JS function (in the global scope) with the given arguments. */
+		void callFunction(const String& javascriptFunction, const var& args);
+
+		/** Evaluates the code in the web view. You need to pass in an unique identifier so that it will initialise new web views correctly. */
+		void evaluate(const String& identifier, const String& jsCode);
+
+        /** Sets the file to be displayed by the WebView. */
+        void setIndexFile(var indexFile);
+        
+		/** Resets the entire webview. */
+		void reset();
+
+		// =========================================================================================================
+
+	private:
+
+		struct HiseScriptCallback
+		{
+			HiseScriptCallback(ScriptWebView* wv, const String& callback, const var& function) :
+				f(wv->getScriptProcessor(), nullptr, function, 1),
+				callbackId(callback)
+			{
+				f.incRefCount();
+				f.setHighPriority();
+				f.setThisObject(wv);
+			};
+
+			var operator()(const var& args);
+
+			const String& callbackId;
+			WeakCallbackHolder f;
+		};
+
+		OwnedArray<HiseScriptCallback> callbacks;
+
+		struct Wrapper;
+
+		hise::WebViewData::Ptr data;
+
+		JUCE_DECLARE_WEAK_REFERENCEABLE(ScriptWebView);
+	};
+						
 
 	struct ScriptFloatingTile : public ScriptComponent,
 								public Dispatchable
@@ -2201,30 +2031,19 @@ public:
 		// ========================================================================================================
 
 		ScriptFloatingTile(ProcessorWithScriptingContent *base, Content *parentContent, Identifier panelName, int x, int y, int width, int height);
-		~ScriptFloatingTile() {};
+		~ScriptFloatingTile();;
 
 		// ========================================================================================================
 
 		void setScriptObjectPropertyWithChangeMessage(const Identifier &id, var newValue, NotificationType notifyEditor /* = sendNotification */) override;
 
-		DynamicObject* createOrGetJSONData()
-		{
-			auto obj = jsonData.getDynamicObject();
-
-			if (obj == nullptr)
-			{
-				obj = new DynamicObject();
-				jsonData = var(obj);
-			}
-
-			return obj;
-		}
+		DynamicObject* createOrGetJSONData();
 
 		bool fillScriptPropertiesWithFloatingTile(FloatingTile* ft);
 
 
-		static Identifier getStaticObjectName() { RETURN_STATIC_IDENTIFIER("ScriptFloatingTile"); }
-		virtual Identifier 	getObjectName() const override { return getStaticObjectName(); };
+		static Identifier getStaticObjectName();
+		virtual Identifier 	getObjectName() const override;;
 		ScriptCreatedComponentWrapper *createComponentWrapper(ScriptContentComponent *content, int index) override;
 
 		StringArray getOptionsFor(const Identifier &id) override;
@@ -2234,38 +2053,16 @@ public:
 		
 		void handleDefaultDeactivatedProperties() override;
 
-		void setValue(var newValue) override
-		{
-			value = newValue;
-		}
+		void setValue(var newValue) override;
 
-		var getValue() const override
-		{
-			return value;
-		}
+		var getValue() const override;
 
-		var getContentData() { return jsonData; }
+		var getContentData();
 
 		// ========================================================================================================
 
 		/** Sets the JSON object for the given floating tile. */
-		void setContentData(var data)
-		{
-			jsonData = data;
-
-			if (auto obj = jsonData.getDynamicObject())
-			{
-				auto id = obj->getProperty("Type");
-
-				// We need to make sure that the content type is changed so that the floating tile
-				// receives an update message
-				setScriptObjectProperty(Properties::ContentType, "", dontSendNotification);
-
-				setScriptObjectProperty(Properties::ContentType, id, sendNotification);
-			}
-			
-			//triggerAsyncUpdate();
-		}
+		void setContentData(var data);
 
 		// ========================================================================================================
 
@@ -2297,6 +2094,27 @@ public:
 		Type t;
 	};
 
+    struct TextInputDataBase: public ReferenceCountedObject
+    {
+        using Ptr = ReferenceCountedObjectPtr<TextInputDataBase>;
+        
+        TextInputDataBase(const String& parentId_):
+          parentId(parentId_)
+        {};
+        
+        virtual ~TextInputDataBase() {};
+        
+        virtual void show(Component* parentComponent) = 0;
+        
+        bool done = false;
+        String parentId;
+        
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TextInputDataBase);
+    };
+    
+    LambdaBroadcaster<TextInputDataBase::Ptr> textInputBroadcaster;
+    
+    
 	// ================================================================================================================
 
 	Content(ProcessorWithScriptingContent *p);;
@@ -2346,6 +2164,9 @@ public:
 	/** Adds a viewport. */
 	ScriptedViewport* addViewport(Identifier viewportName, int x, int y);
 
+	/** Adds a web view. */
+	ScriptWebView* addWebView(Identifier webviewName, int x, int y);
+
 	/** Adds a floating layout component. */
 	ScriptFloatingTile* addFloatingTile(Identifier floatingTileName, int x, int y);
 
@@ -2391,6 +2212,9 @@ public:
 	/** Creates either a line or rectangle with the given colour. */
 	void addVisualGuide(var guideData, var colour);
 
+    /** Opens a text input box with the given properties and executes the callback when finished. */
+    void showModalTextInput(var properties, var callback);
+    
     /** Sets this script as main interface with the given size. */
     void makeFrontInterface(int width, int height);
     
@@ -2417,6 +2241,9 @@ public:
 
 	/** Set this to true to render all script panels with double resolution for retina or rescaling. */
 	void setUseHighResolutionForPanels(bool shouldUseDoubleResolution);
+	
+	/** Checks whether the CTRL key's flag is set. */
+	bool isCtrlDown();
 
 	/** Creates a look and feel that you can attach manually to certain components. */
 	var createLocalLookAndFeel();
@@ -2430,7 +2257,47 @@ public:
 	/** Calls a function after a delay. This is not accurate and only useful for UI purposes!. */
 	void callAfterDelay(int milliSeconds, var function, var thisObject);
 
+	/** Calls the paint function of the drag operation again to refresh the image. */
+	bool refreshDragImage();
+
+	/** Returns the ID of the component under the mouse. */
+	String getComponentUnderDrag();
+
+	/** Sets a callback that will be notified whenever the UI timers are suspended. */
+	void setSuspendTimerCallback(var suspendFunction);
+
+	/** Adds a callback that will be performed asynchronously when the key is pressed. */
+	void setKeyPressCallback(const var& keyPress, var keyPressCallback);
+
 	// ================================================================================================================
+
+	static var createKeyboardCallbackObject(const KeyPress& k)
+	{
+		auto obj = new DynamicObject();
+		var args(obj);
+
+		obj->setProperty("isFocusChange", false);
+
+		auto c = k.getTextCharacter();
+
+		auto printable    = CharacterFunctions::isPrintable(c);
+		auto isWhitespace = CharacterFunctions::isWhitespace(c);
+		auto isLetter     = CharacterFunctions::isLetter(c);
+		auto isDigit      = CharacterFunctions::isDigit(c);
+		
+		obj->setProperty("character", printable ? String::charToString(c) : "");
+		obj->setProperty("specialKey", !printable);
+		obj->setProperty("isWhitespace", isWhitespace);
+		obj->setProperty("isLetter", isLetter);
+		obj->setProperty("isDigit", isDigit);
+		obj->setProperty("keyCode", k.getKeyCode());
+		obj->setProperty("description", k.getTextDescription());
+		obj->setProperty("shift", k.getModifiers().isShiftDown());
+		obj->setProperty("cmd", k.getModifiers().isCommandDown() || k.getModifiers().isCtrlDown());
+		obj->setProperty("alt", k.getModifiers().isAltDown());
+
+		return args;
+	}
 
 	// Restores the content and sets the attributes so that the macros and the control callbacks gets executed.
 	void restoreAllControlsFromPreset(const ValueTree &preset);
@@ -2440,8 +2307,6 @@ public:
 
 	void beginInitialization();
 
-    
-    
 	ValueTree exportAsValueTree() const override;
 	void restoreFromValueTree(const ValueTree &v) override;
 
@@ -2571,6 +2436,8 @@ public:
 
 		static String createCustomCallbackDefinition(ReferenceCountedArray<ScriptComponent> selection);
 
+        static String createLocalLookAndFeelForComponents(ReferenceCountedArray<ScriptComponent> selection);
+        
 		static void recompileAndSearchForPropertyChange(ScriptComponent * sc, const Identifier& id);
 		static ScriptComponent * createComponentFromValueTree(Content* c, const ValueTree& v);
 		static bool hasLocation(ScriptComponent* sc);
@@ -2594,7 +2461,7 @@ public:
 		//newData.setProperty(hId, h, nullptr);
 
 #if JUCE_WINDOWS && USE_BACKEND
-		auto undoManager = &getScriptProcessor()->getMainController_()->getScriptComponentEditBroadcaster()->getUndoManager();
+		auto undoManager = nullptr; //&getScriptProcessor()->getMainController_()->getScriptComponentEditBroadcaster()->getUndoManager();
 #else
 		UndoManager* undoManager = nullptr;
 #endif
@@ -2612,85 +2479,77 @@ public:
 
 		asyncRebuildBroadcaster.notify();
 
+		updateParameterSlots();
+
 		return newComponent;
 	}
 
 	
 
-	bool interfaceCreationAllowed() const
-	{
-		return allowGuiCreation;
-	}
+	bool interfaceCreationAllowed() const;
 
 	bool asyncFunctionsAllowed() const
 	{
 		return allowAsyncFunctions;
 	}
 
-	void addPanelPopup(ScriptPanel* panel, bool closeOther)
-	{
-		if (closeOther)
-		{
-			for (auto p : popupPanels)
-			{
-				if (p == panel)
-					continue;
+	void addPanelPopup(ScriptPanel* panel, bool closeOther);
 
-				p->closeAsPopup();
-			}
-				
+	void setIsRebuilding(bool isCurrentlyRebuilding);
 
-			popupPanels.clear();
-		}
+	void sendDragAction(RebuildListener::DragAction a, ScriptComponent* sc, var& data);
 
-		popupPanels.add(panel);
-	}
-
-    void setIsRebuilding(bool isCurrentlyRebuilding)
-    {
-        for(auto rl: rebuildListeners)
-        {
-            if(rl.get() != nullptr)
-                rl->contentRebuildStateChanged(isCurrentlyRebuilding);
-        }
-    }
-    
 	void suspendPanelTimers(bool shouldBeSuspended);
 
 	Array<VisualGuide> guides;
 
+	bool hasKeyPressCallbacks() const { return !registeredKeyPresses.isEmpty(); }
+
+	bool handleKeyPress(const KeyPress& k)
+	{
+		auto k1 = k.getKeyCode();
+		auto m1 = k.getModifiers();
+
+		for(auto& rkp: registeredKeyPresses)
+		{
+			auto k2 = rkp.first.getKeyCode();
+			auto m2 = rkp.first.getModifiers();
+			
+			if(k1 == k2 && m1 == m2)
+			{
+				auto obj = createKeyboardCallbackObject(k);
+				WeakCallbackHolder f(getScriptProcessor(), nullptr, rkp.second, 1);
+				f.call1(obj);
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 private:
+
+	WeakCallbackHolder dragCallback;
+	WeakCallbackHolder suspendCallback;
+
+	Array<std::pair<KeyPress, var>> registeredKeyPresses;
 
 	struct AsyncRebuildMessageBroadcaster : public AsyncUpdater
 	{
-		AsyncRebuildMessageBroadcaster(Content& parent_) :
-			parent(parent_)
-		{};
+		AsyncRebuildMessageBroadcaster(Content& parent_);;
 
-		~AsyncRebuildMessageBroadcaster()
-		{
-			cancelPendingUpdate();
-		}
+		~AsyncRebuildMessageBroadcaster();
 
 		Content& parent;
 
-		void notify()
-		{
-			if (MessageManager::getInstance()->isThisTheMessageThread())
-			{
-				handleAsyncUpdate();
-			}
-			else
-				triggerAsyncUpdate();
-		}
+		void notify();
 
 	private:
 
-		void handleAsyncUpdate() override
-		{
-			parent.sendRebuildMessage();
-		}
+		void handleAsyncUpdate() override;
 	};
+
+	Array<Identifier> modifiers;
 
 	Array<WeakReference<ScreenshotListener>> screenshotListeners;
 
@@ -2742,13 +2601,14 @@ private:
 
 		components.add(t);
 
+		updateParameterSlots();
+		
 		restoreSavedValue(name);
-
 		
 		return t;
 	}
 
-	
+	void updateParameterSlots();
 
 	void restoreSavedValue(const Identifier& id);
 
@@ -2788,90 +2648,17 @@ using ScriptComponentSelection = ReferenceCountedArray<ScriptComponent>;
 
 struct ContentValueTreeHelpers
 {
-	static void removeFromParent(ValueTree& v)
-	{
-		v.getParent().removeChild(v, nullptr);
-	}
+	static void removeFromParent(ValueTree& v);
 
-	static Result setNewParent(ValueTree& newParent, ValueTree& child)
-	{
-		if (newParent.isAChildOf(child))
-		{
-			return Result::fail("Can't set child as parent of child");
-		}
+	static Result setNewParent(ValueTree& newParent, ValueTree& child);
 
-		if (child.getParent() == newParent)
-			return Result::ok();
+	static void updatePosition(ValueTree& v, Point<int> localPoint, Point<int> oldParentPosition);
 
-		removeFromParent(child);
-		newParent.addChild(child, -1, nullptr);
+	static Point<int> getLocalPosition(const ValueTree& v);
 
-		return Result::ok();
-	}
+	static bool isShowing(const ValueTree& v);
 
-	static void updatePosition(ValueTree& v, Point<int> localPoint, Point<int> oldParentPosition)
-	{
-		static const Identifier x("x");
-		static const Identifier y("y");
-
-		auto newPoint = localPoint - oldParentPosition;
-
-		v.setProperty(x, newPoint.getX(), nullptr);
-		v.setProperty(y, newPoint.getY(), nullptr);
-	}
-
-	static Point<int> getLocalPosition(const ValueTree& v)
-	{
-		static const Identifier x("x");
-		static const Identifier y("y");
-		static const Identifier root("ContentProperties");
-
-		if (v.getType() == root)
-		{
-			return Point<int>();
-		}
-
-		return Point<int>(v.getProperty(x), v.getProperty(y));
-	}
-
-	static bool isShowing(const ValueTree& v)
-	{
-		static const Identifier visible("visible");
-		static const Identifier co("Component");
-
-		if (v.getProperty(visible, true))
-		{
-			auto p = v.getParent();
-
-			if (p.getType() == co)
-				return isShowing(p);
-			else
-				return true;
-		}
-		else
-		{
-			return false;
-		}
-	}
-
-	static bool getAbsolutePosition(const ValueTree& v, Point<int>& offset)
-	{
-		static const Identifier x("x");
-		static const Identifier y("y");
-		static const Identifier root("ContentProperties");
-
-		auto parent = v.getParent();
-
-		bool ok = parent.isValid() && parent.getType() != root;
-
-		while (parent.isValid() && parent.getType() != root)
-		{
-			offset.addXY((int)parent.getProperty(x), (int)parent.getProperty(y));
-			parent = parent.getParent();
-		}
-
-		return ok;
-	}
+	static bool getAbsolutePosition(const ValueTree& v, Point<int>& offset);
 };
 
 struct MapItemWithScriptComponentConnection : public Component,

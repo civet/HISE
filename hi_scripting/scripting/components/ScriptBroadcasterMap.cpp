@@ -204,25 +204,17 @@ bool ScriptBroadcasterMap::MessageWatcher::LastTime::hasChanged()
 	return false;
 }
 
-ScriptBroadcaster::Panel::Panel(FloatingTile* parent) :
-	PanelWithProcessorConnection(parent)
-{
-
-}
-
-juce::Identifier ScriptBroadcaster::Panel::getProcessorTypeId() const
-{
-	return JavascriptProcessor::getConnectorId();
-}
 
 
 
 
 
-ScriptBroadcasterMap::ScriptBroadcasterMap(JavascriptProcessor* p_) :
+
+ScriptBroadcasterMap::ScriptBroadcasterMap(JavascriptProcessor* p_, bool active_) :
 	ControlledObject(dynamic_cast<Processor*>(p_)->getMainController()),
 	p(p_),
-	factory(*this)
+	factory(*this),
+	active(active_)
 {
 	padding = 20;
 
@@ -264,6 +256,15 @@ void ScriptBroadcasterMap::rebuild()
 	availableTags.clear();
 
 	allBroadcasters = createBroadcasterList();
+	children.clear();
+
+	if(!active)
+	{
+		addChildWithPreferredSize(new PrefferedSizeWrapper<EmptyDisplay, 400, 400>("Broadcaster map is deactivated."));
+		resetSize();
+		zoomToWidth();
+		return;
+	}
 
 	for (auto br : allBroadcasters)
 	{
@@ -273,12 +274,14 @@ void ScriptBroadcasterMap::rebuild()
 		});
 	}
 	
-	children.clear();
-
 	for (auto b : allBroadcasters)
 	{
 		if (filteredBroadcasters.contains(b->metadata))
 			continue;
+
+		if(!b->metadata.visible)
+			continue;
+
 
 		auto be = new BroadcasterRow(factory, b);
 
@@ -402,29 +405,7 @@ hise::ScriptingObjects::ScriptBroadcasterMap::BroadcasterList ScriptBroadcasterM
 		if(auto b = p->getRegisteredCallableObject<ScriptBroadcaster>(i))
 			list.addIfNotAlreadyThere(b);
 	}
-
-#if 0
-	if (auto ah = dynamic_cast<ApiProviderBase::Holder*>(p.get()))
-	{
-		if (auto provider = ah->getProviderBase())
-		{
-			auto check = [&](DebugInformation::Ptr di)
-			{
-				if (auto sb = dynamic_cast<ScriptBroadcaster*>(di->getObject()))
-					list.add(sb);
-			};
-
-			ScopedReadLock sl(ah->getDebugLock());
-
-			for (int i = 0; i < provider->getNumDebugObjects(); i++)
-			{
-				auto di = provider->getDebugInformation(i);
-				forEachDebugInformation(di, check);
-			}
-		}
-	}
-#endif
-
+	
 	return list;
 }
 
@@ -596,7 +577,7 @@ struct ScriptBroadcasterMapViewport : public WrapperWithMenuBarBase
 				
 			int totalHeight = 24 * numRows + HeaderHeight;
 
-			setSize(totalWidth, totalHeight);
+			setSize(jmax(200, totalWidth), totalHeight);
 		}
 
 		Component::SafePointer<ScriptBroadcasterMap> map;
@@ -620,7 +601,7 @@ struct ScriptBroadcasterMapViewport : public WrapperWithMenuBarBase
 
 			Path p;
 
-			p.loadPathFromData(EditorIcons::searchIcon, sizeof(EditorIcons::searchIcon));
+			p.loadPathFromData(EditorIcons::searchIcon, SIZE_OF_PATH(EditorIcons::searchIcon));
 			p.applyTransform(AffineTransform::rotation(float_Pi));
 
 			PathFactory::scalePath(p, b.removeFromLeft(b.getHeight()).reduced(10).toFloat());
@@ -702,10 +683,10 @@ struct ScriptBroadcasterMapViewport : public WrapperWithMenuBarBase
 		{
 			Path p;
 
-			LOAD_PATH_IF_URL("watch", BackendBinaryData::ToolbarIcons::viewPanel);
+			LOAD_EPATH_IF_URL("watch", BackendBinaryData::ToolbarIcons::viewPanel);
 			LOAD_PATH_IF_URL("clear", ColumnIcons::moveIcon);
-			LOAD_PATH_IF_URL("error", ScriptnodeIcons::errorIcon);
-			LOAD_PATH_IF_URL("showall", ScriptnodeIcons::zoomFit);
+			LOAD_EPATH_IF_URL("error", ScriptnodeIcons::errorIcon);
+			LOAD_EPATH_IF_URL("showall", ScriptnodeIcons::zoomFit);
 			LOAD_PATH_IF_URL("filter", ColumnIcons::filterIcon);
 			LOAD_PATH_IF_URL("tags", ScriptBroadcasterMapIcons::tagIcon);
 			LOAD_PATH_IF_URL("dim", ScriptBroadcasterMapIcons::dimIcon);
@@ -714,6 +695,7 @@ struct ScriptBroadcasterMapViewport : public WrapperWithMenuBarBase
 			LOAD_PATH_IF_URL("comment", ScriptBroadcasterMapIcons::commentIcon);
 			LOAD_PATH_IF_URL("neighbour", ScriptBroadcasterMapIcons::neighbourIcon);
 			LOAD_PATH_IF_URL("zoomwidth", ScriptBroadcasterMapIcons::zoomWidthIcon);
+			LOAD_EPATH_IF_URL("active", HiBinaryData::ProcessorEditorHeaderIcons::bypassShape);
 
 			return p;
 		}
@@ -739,9 +721,10 @@ struct ScriptBroadcasterMapViewport : public WrapperWithMenuBarBase
 
 	void rebuildAfterContentChange() override
 	{
-		
+
+		addButton("active");
+
 		addSpacer(10);
-		
 
 		addButton("tags");
 		addButton("dim");
@@ -763,6 +746,16 @@ struct ScriptBroadcasterMapViewport : public WrapperWithMenuBarBase
 
 	struct Actions
 	{
+		static bool toggleActive(ScriptBroadcasterMap& m)
+		{
+			m.active = !m.active;
+			auto sp = m.findParentComponentOfClass<ScriptBroadcasterPanel>();
+			jassert(sp != nullptr);
+			sp->active = m.active;
+			m.rebuild();
+			return true;
+		}
+
 		static bool enableWatch(ScriptBroadcasterMap& m) { return true; }
 		static bool gotoError(ScriptBroadcasterMap& m) 
 		{ 
@@ -851,7 +844,12 @@ struct ScriptBroadcasterMapViewport : public WrapperWithMenuBarBase
 			b->stateFunction = [](ScriptBroadcasterMap& e) { return e.currentMessageWatcher != nullptr; };
 			b->setTooltip("Hide broadcasters until they are used");
 		}
-
+		if(name == "active")
+		{
+			b->actionFunction = Actions::toggleActive;
+			b->stateFunction = [](ScriptBroadcasterMap& m) { return m.active; };
+			b->setTooltip("Deactivate the map (saves performance when many broadcasters are used");
+		}
 		if (name == "comment")
 		{
 			b->actionFunction = Actions::toggleComments;
@@ -870,7 +868,6 @@ struct ScriptBroadcasterMapViewport : public WrapperWithMenuBarBase
 
 				return false;
 			};
-
 			
 			b->setTooltip("Refresh Map and show all broadcasters");
 		}
@@ -952,18 +949,32 @@ struct ScriptBroadcasterMapViewport : public WrapperWithMenuBarBase
 	
 };
 
-Component* ScriptBroadcaster::Panel::createContentComponent(int)
+void ScriptBroadcasterPanel::fillModuleList(StringArray& moduleList)
+{
+	fillModuleListWithType<JavascriptProcessor>(moduleList);
+}
+
+Component* ScriptBroadcasterPanel::createContentComponent(int)
 {
 	if (auto jp = dynamic_cast<JavascriptProcessor*>(getConnectedProcessor()))
 	{
-		return new ScriptBroadcasterMapViewport(new ScriptBroadcasterMap(jp));
+		return new ScriptBroadcasterMapViewport(new ScriptBroadcasterMap(jp, active));
 	}
 		
 
 	return nullptr;
 }
 
+ScriptBroadcasterPanel::ScriptBroadcasterPanel(FloatingTile* parent) :
+	PanelWithProcessorConnection(parent)
+{
 
+}
+
+juce::Identifier ScriptBroadcasterPanel::getProcessorTypeId() const
+{
+	return JavascriptProcessor::getConnectorId();
+}
 
 juce::Path ScriptBroadcasterMap::ListenerEntry::createPath(const String& url) const
 {
@@ -976,7 +987,7 @@ juce::Path ScriptBroadcasterMap::ListenerEntry::createPath(const String& url) co
 	LOAD_PATH_IF_URL("broadcastersource", ScriptBroadcasterMapIcons::otherBroadcasterIcon);
 	LOAD_PATH_IF_URL("componentvalue", ScriptBroadcasterMapIcons::valueIcon);
 	LOAD_PATH_IF_URL("componentproperties", ScriptBroadcasterMapIcons::propertyIcon);
-    LOAD_PATH_IF_URL("scriptfunctioncalls", HiBinaryData::SpecialSymbols::scriptProcessor);
+	LOAD_EPATH_IF_URL("scriptfunctioncalls", HiBinaryData::SpecialSymbols::scriptProcessor);
 
 	if (p.isEmpty())
 		p.loadPathFromData(ScriptBroadcasterMapIcons::complexDataIcon, sizeof(ScriptBroadcasterMapIcons::complexDataIcon));
@@ -988,11 +999,11 @@ juce::Path ScriptBroadcasterMapFactory::createPath(const String& url) const
 {
     Path p;
 
-    LOAD_PATH_IF_URL("bypass", HiBinaryData::ProcessorEditorHeaderIcons::bypassShape);
+	LOAD_EPATH_IF_URL("bypass", HiBinaryData::ProcessorEditorHeaderIcons::bypassShape);
     LOAD_PATH_IF_URL("goto", ColumnIcons::openWorkspaceIcon);
     LOAD_PATH_IF_URL("queue", ScriptBroadcasterMapIcons::queueIcon);
 	LOAD_PATH_IF_URL("error", ColumnIcons::errorIcon);
-    LOAD_PATH_IF_URL("realtime", HnodeIcons::jit);
+    LOAD_EPATH_IF_URL("realtime", HnodeIcons::jit);
 	LOAD_PATH_IF_URL("comment", ScriptBroadcasterMapIcons::commentIcon);
     return p;
 }

@@ -13,6 +13,59 @@ namespace mcl
 {
 using namespace juce;
 
+LanguageManager::~LanguageManager()
+{}
+
+bool LanguageManager::getInplaceDebugValues(Array<InplaceDebugValue>& values) const
+{
+	return false;
+}
+
+void LanguageManager::setupEditor(TextEditor* editor)
+{}
+
+CodeTokeniser* XmlLanguageManager::createCodeTokeniser()
+{
+	return new XmlTokeniser();
+}
+
+void XmlLanguageManager::processBookmarkTitle(juce::String& bookmarkTitle)
+{
+	if(!bookmarkTitle.trim().endsWith("/>"))
+		bookmarkTitle = bookmarkTitle.replace(">", "/>");
+        
+	if(auto xml = XmlDocument::parse(bookmarkTitle))
+	{
+		bookmarkTitle = "<";
+            
+		bookmarkTitle << xml->getTagName();
+            
+		static const StringArray possibleIds =
+		{
+			"FileName",
+			"ID",
+			"id",
+			"name",
+			"file"
+		};
+            
+		for(auto& id: possibleIds)
+		{
+			if(xml->hasAttribute(id))
+			{
+				bookmarkTitle << " (" << xml->getStringAttribute(id) << ")";
+				break;
+			}
+		}
+            
+		bookmarkTitle << ">";
+	}
+        
+}
+
+void XmlLanguageManager::addTokenProviders(mcl::TokenCollection*)
+{}
+
 mcl::FoldableLineRange::List LanguageManager::createLineRange(const juce::CodeDocument& doc)
 {
     mcl::FoldableLineRange::List lineRanges;
@@ -22,13 +75,29 @@ mcl::FoldableLineRange::List LanguageManager::createLineRange(const juce::CodeDo
     bool firstInLine = false;
     mcl::FoldableLineRange::WeakPtr currentElement;
 
+    bool checkScopedStatement = false;
+    
     while (auto c = it.nextChar())
     {
         switch (c)
         {
+        case '.':
+        {
+            if(currentElement != nullptr && checkScopedStatement)
+            {
+                currentElement->setScoped(true);
+                checkScopedStatement = false;
+            }
+            
+            break;
+        }
         case '{':
         {
             auto thisLine = it.getLine();
+            
+            checkScopedStatement = true;
+            
+            it.skipWhitespace();
 
             if (firstInLine)
                 thisLine -= 1;
@@ -53,6 +122,7 @@ mcl::FoldableLineRange::List LanguageManager::createLineRange(const juce::CodeDo
         }
         case '}':
         {
+            checkScopedStatement = false;
             if (currentElement != nullptr)
             {
                 currentElement->setEnd(it.getPosition());
@@ -61,7 +131,14 @@ mcl::FoldableLineRange::List LanguageManager::createLineRange(const juce::CodeDo
 
             break;
         }
-        case '#': it.skipToEndOfLine(); break;
+        case '#':
+        {
+	        if(hashIsPreprocessor)
+            {
+	            it.skipToEndOfLine();
+            	break;
+            }
+        }
         case '/':
         {
             if (it.peekNextChar() == '*')
@@ -105,6 +182,11 @@ mcl::FoldableLineRange::List LanguageManager::createLineRange(const juce::CodeDo
 
             break;
         }
+        case ' ':
+        case '\t':
+        case '\n':
+        case '\r': break; // don't reset the check at whitespace
+        default: checkScopedStatement = false; // reset the check at non-white space
         }
 
         firstInLine = (c == '\n') || (firstInLine && CharacterFunctions::isWhitespace(c));
@@ -293,6 +375,18 @@ void MarkdownLanguageManager::setupEditor(mcl::TextEditor* editor)
     editor->setEnableBreakpoint(false);
 }
 
+CodeTokeniser* FaustLanguageManager::createCodeTokeniser()
+{
+#if USE_BACKEND
+	return new FaustTokeniser();
+#else
+        // I don't know of any use case where the faust tokeniser is required
+        // in a compiled project so this will most likely never get called
+        jassertfalse;
+        return nullptr;
+#endif
+}
+
 FoldableLineRange::List XmlLanguageManager::createLineRange(const CodeDocument& doc)
 {
     CodeDocument::Iterator it(doc);
@@ -367,7 +461,6 @@ FoldableLineRange::List XmlLanguageManager::createLineRange(const CodeDocument& 
     
     for(const auto& t: tags)
     {
-        DBG(t.name);
         index++;
         
         if(t.isSelfClose)
@@ -706,6 +799,8 @@ void FaustLanguageManager::setupEditor(mcl::TextEditor* e)
 {
     currentEditor = e;
     e->setIncludeDotInAutocomplete(true);
+    e->tokenCollection = new TokenCollection(getLanguageId());
+    addTokenProviders(e->tokenCollection.get());
 }
 
 }

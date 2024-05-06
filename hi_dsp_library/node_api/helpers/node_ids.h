@@ -121,6 +121,7 @@ DECLARE_ID(CodeLibrary);
 DECLARE_ID(ClassId);
 DECLARE_ID(AllowSubBlocks);
 DECLARE_ID(Mode);
+DECLARE_ID(Model);
 DECLARE_ID(BlockSize);
 DECLARE_ID(IsPolyphonic);
 DECLARE_ID(UseRingBuffer);
@@ -132,6 +133,8 @@ DECLARE_ID(IsOptionalSnexNode);
 DECLARE_ID(TemplateArgumentIsPolyphonic);
 DECLARE_ID(IsCloneCableNode);
 DECLARE_ID(IsRoutingNode);
+DECLARE_ID(IsFixRuntimeTarget);
+DECLARE_ID(IsDynamicRuntimeTarget);
 DECLARE_ID(IsPublicMod);
 DECLARE_ID(UseUnnormalisedModulation);
 DECLARE_ID(AllowPolyphonic);
@@ -140,6 +143,7 @@ DECLARE_ID(UncompileableNode);
 DECLARE_ID(CompileChannelAmount);
 DECLARE_ID(HasTail);
 DECLARE_ID(SourceId);
+DECLARE_ID(SuspendOnSilence);
 
 struct Helpers
 {
@@ -159,6 +163,7 @@ struct Helpers
 			AllowPolyphonic,
 			AllowCompilation,
 			HasTail,
+			SuspendOnSilence,
             CompileChannelAmount
 		};
 
@@ -179,6 +184,7 @@ struct Helpers
 		returnIfDefault(EmbeddedData, -1);
 		returnIfDefault(Automated, false);
 		returnIfDefault(HasTail, true);
+		returnIfDefault(SuspendOnSilence, false);
 		returnIfDefault(AllowCompilation, false);
 		returnIfDefault(AllowPolyphonic, false);
         returnIfDefault(CompileChannelAmount, 2);

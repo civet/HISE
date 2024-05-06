@@ -52,6 +52,18 @@ public:
 		numEnterStates
 	};
 
+	static Identifier getEnterStateAsIdentifier(EnterState s)
+	{
+		switch(s)
+		{
+		case Nothing: { RETURN_STATIC_IDENTIFIER("Nothing"); }
+		case Entered: { RETURN_STATIC_IDENTIFIER("Entered"); }
+		case Exited: { RETURN_STATIC_IDENTIFIER("Exited"); }
+		case numEnterStates:
+		default: return {};
+		}
+	}
+
 	enum class Action
 	{
 		Moved,
@@ -67,6 +79,25 @@ public:
 		Nothing
 	};
 
+	static Identifier getActionAsIdentifier(Action a)
+	{
+		switch(a)
+		{
+		case Action::Moved: { RETURN_STATIC_IDENTIFIER("Moved"); }
+		case Action::Dragged: { RETURN_STATIC_IDENTIFIER("Dragged"); }
+		case Action::Clicked: { RETURN_STATIC_IDENTIFIER("Clicked"); }
+		case Action::DoubleClicked: { RETURN_STATIC_IDENTIFIER("DoubleClicked"); }
+		case Action::MouseUp: { RETURN_STATIC_IDENTIFIER("MouseUp"); }
+		case Action::Entered: { RETURN_STATIC_IDENTIFIER("Entered"); }
+		case Action::FileMove: { RETURN_STATIC_IDENTIFIER("FileMove"); }
+		case Action::FileEnter: { RETURN_STATIC_IDENTIFIER("FileEnter"); }
+		case Action::FileExit: { RETURN_STATIC_IDENTIFIER("FileExit"); }
+		case Action::FileDrop: { RETURN_STATIC_IDENTIFIER("FileDrop"); }
+		case Action::Nothing: { RETURN_STATIC_IDENTIFIER("Nothing"); }
+		default: return {};
+		}
+	}
+
 	enum class CallbackLevel
 	{
 		NoCallbacks = 0,
@@ -76,6 +107,20 @@ public:
 		Drag,
 		AllCallbacks
 	};
+
+	static Identifier getCallbackLevelAsIdentifier(CallbackLevel c)
+	{
+		switch(c)
+		{
+		case CallbackLevel::NoCallbacks: { RETURN_STATIC_IDENTIFIER("NoCallbacks"); };
+		case CallbackLevel::PopupMenuOnly: { RETURN_STATIC_IDENTIFIER("PopupMenuOnly"); };
+		case CallbackLevel::ClicksOnly: { RETURN_STATIC_IDENTIFIER("ClicksOnly"); };
+		case CallbackLevel::ClicksAndEnter: { RETURN_STATIC_IDENTIFIER("ClicksAndEnter"); };
+		case CallbackLevel::Drag: { RETURN_STATIC_IDENTIFIER("Drag"); };
+		case CallbackLevel::AllCallbacks: { RETURN_STATIC_IDENTIFIER("AllCallbacks"); };
+		default: return {};
+		}
+	}
 
 	enum class FileCallbackLevel
 	{
@@ -91,8 +136,8 @@ public:
 	{
 	public:
 
-		Listener() {}
-		virtual ~Listener() { masterReference.clear(); }
+		Listener();
+		virtual ~Listener();
 		virtual void mouseCallback(const var &mouseInformation) = 0;
 
 		virtual void fileDropCallback(const var& dropInformation) = 0;
@@ -109,7 +154,7 @@ public:
 	{
 		struct Listener
 		{
-			virtual ~Listener() { masterReference.clear(); }
+			virtual ~Listener();
 			virtual void boundsChanged(const Rectangle<int> &newBounds) = 0;
 
 		private:
@@ -134,25 +179,18 @@ public:
 	// ================================================================================================================
 
 	MouseCallbackComponent();;
-	virtual ~MouseCallbackComponent() {};
+	virtual ~MouseCallbackComponent();;
 
 	static StringArray getCallbackLevels(bool getFileCallbacks=false);
 	static StringArray getCallbackPropertyNames();
 
-	void setJSONPopupData(var jsonData, Rectangle<int> popupSize_) 
-	{ 
-		jsonPopupData = jsonData; 
-		popupSize = popupSize_;
-	}
+	void setJSONPopupData(var jsonData, Rectangle<int> popupSize_);
 
 	void setPopupMenuItems(const StringArray &newItemList);
 
 	static PopupMenu parseFromStringArray(const StringArray& itemList, Array<int> activeIndexes, LookAndFeel* laf);
 
-	void setActivePopupItem(int menuId)
-	{
-		activePopupId = menuId;
-	}
+	void setActivePopupItem(int menuId);
 
 	void setUseRightClickForPopup(bool shouldUseRightClickForPopup);
 	void alignPopup(bool shouldBeAligned);
@@ -164,7 +202,7 @@ public:
 	void removeCallbackListener(Listener *l);
 	void removeAllCallbackListeners();
 
-	static var getMouseCallbackObject(Component* c, const MouseEvent& e, CallbackLevel level, Action action, EnterState state);
+	static void fillMouseCallbackObject(var& clickInformation, Component* c, const MouseEvent& e, CallbackLevel level, Action action, EnterState state);
 
 	void mouseDown(const MouseEvent& event) override;
 
@@ -194,30 +232,20 @@ public:
 	CallbackLevel getCallbackLevel() const;
 
 	/** overwrite this method and update the Component to display the current value of the controlled attribute. */
-	virtual void updateValue(NotificationType /*sendAttributeChange=sendNotification*/)
-	{
-		repaint();
-	};
+	virtual void updateValue(NotificationType /*sendAttributeChange=sendNotification*/);;
 
 	/** overwrite this method and return the range that the parameter can have. */
-	virtual NormalisableRange<double> getRange() const
-	{
-		return range;
-	};
+	virtual NormalisableRange<double> getRange() const;;
 
-	void setRange(NormalisableRange<double> &newRange)
-	{
-		range = newRange;
-	}
+	void setRange(NormalisableRange<double> &newRange);
 
-	void setMidiLearnEnabled(bool shouldBeEnabled)
-	{
-		midiLearnEnabled = shouldBeEnabled;
-	}
+	void setMidiLearnEnabled(bool shouldBeEnabled);
 
 	// ================================================================================================================
 
 private:
+
+	var clickInformation[(int)Action::Nothing];
 
 	FileCallbackLevel fileCallbackLevel = FileCallbackLevel::NoCallbacks;
 	StringArray fileDropExtensions;
@@ -261,6 +289,12 @@ private:
 	// ================================================================================================================
 };
 
+
+
+
+
+#define SET_ACTION_ID(x) dispatch::HashedCharPtr getDispatchId() const override { return dispatch::HashedCharPtr(#x); }
+
 struct DrawActions
 {
 	class PostActionBase : public ReferenceCountedObject
@@ -268,7 +302,7 @@ struct DrawActions
 	public:
 
 		virtual void perform(PostGraphicsRenderer& r) = 0;
-		virtual bool needsStackData() const { return false; }
+		virtual bool needsStackData() const;
 	};
 
 	class ActionBase: public ReferenceCountedObject
@@ -277,14 +311,16 @@ struct DrawActions
 
 		using Ptr = ReferenceCountedObjectPtr<ActionBase>;
 
-		ActionBase() {};
-		virtual ~ActionBase() {};
+		ActionBase();;
+		virtual ~ActionBase();;
 		virtual void perform(Graphics& g) = 0;
-		virtual bool wantsCachedImage() const { return false; };
-		virtual bool wantsToDrawOnParent() const { return false; }
+		virtual bool wantsCachedImage() const;;
+		virtual bool wantsToDrawOnParent() const;
 
-		virtual void setCachedImage(Image& actionImage_, Image& mainImage_) { actionImage = actionImage_; mainImage = mainImage_; }
-		virtual void setScaleFactor(float sf) { scaleFactor = sf; }
+		virtual dispatch::HashedCharPtr getDispatchId() const = 0;
+
+		virtual void setCachedImage(Image& actionImage_, Image& mainImage_);
+		virtual void setScaleFactor(float sf);
 
 	protected:
 
@@ -301,17 +337,13 @@ struct DrawActions
 
 	struct MarkdownAction: public ActionBase
 	{
-		MarkdownAction() :
-			renderer("")
-		{};
+		MarkdownAction(const MarkdownLayout::StringWidthFunction& f);;
+
+		SET_ACTION_ID(renderMarkdown);
 
 		using Ptr = ReferenceCountedObjectPtr<MarkdownAction>;
 
-		void perform(Graphics& g) override
-		{
-			ScopedLock sl(lock);
-			renderer.draw(g, area);
-		}
+		void perform(Graphics& g) override;
 
 		CriticalSection lock;
 		MarkdownRenderer renderer;
@@ -324,76 +356,23 @@ struct DrawActions
 
 		using Ptr = ReferenceCountedObjectPtr<ActionLayer>;
 
-		ActionLayer(bool drawOnParent_) :
-			ActionBase(),
-			drawOnParent(drawOnParent_)
-		{};
+		ActionLayer(bool drawOnParent_);;
 
-		bool wantsCachedImage() const override 
-		{ 
-			if(postActions.size() > 0)
-				return true;
+		SET_ACTION_ID(layer);
 
-			for (auto a : internalActions)
-			{
-				if (a->wantsCachedImage())
-					return true;
-			}
+		bool wantsCachedImage() const override;
 
-			return false;
-		}
+		bool wantsToDrawOnParent() const override;;
 
-		bool wantsToDrawOnParent() const override { return drawOnParent; };
+		void setCachedImage(Image& actionImage_, Image& mainImage_) final override;
 
-		void setCachedImage(Image& actionImage_, Image& mainImage_) final override
-		{ 
-			ActionBase::setCachedImage(actionImage_, mainImage_);
+		virtual void setScaleFactor(float sf) final override;
 
-			// do not propagate the main image
-			for (auto a : internalActions)
-				a->setCachedImage(actionImage_, actionImage_);
-		}
+		void perform(Graphics& g);
 
-		virtual void setScaleFactor(float sf) final override
-		{ 
-			ActionBase::setScaleFactor(sf);
+		void addDrawAction(ActionBase* a);
 
-			for (auto a : internalActions)
-				a->setScaleFactor(sf);
-		}
-
-		void perform(Graphics& g)
-		{
-			for (auto action : internalActions)
-				action->perform(g);
-			
-			if (postActions.size() > 0)
-			{
-				PostGraphicsRenderer r(stack, actionImage, scaleFactor);
-				int numDataRequired = 0;
-
-				for (auto p : postActions)
-				{
-					if (p->needsStackData())
-						numDataRequired++;
-				}
-				
-				r.reserveStackOperations(numDataRequired);
-
-				for (auto p : postActions)
-					p->perform(r);
-			}
-		}
-
-		void addDrawAction(ActionBase* a)
-		{
-			internalActions.add(a);
-		}
-
-		void addPostAction(PostActionBase* a)
-		{
-			postActions.add(a);
-		}
+		void addPostAction(PostActionBase* a);
 
 	protected:
 
@@ -408,15 +387,11 @@ struct DrawActions
 	{
 	public:
 
-		BlendingLayer(gin::BlendMode m, float alpha_) :
-			ActionLayer(true),
-			blendMode(m),
-			alpha(alpha_)
-		{
+		BlendingLayer(gin::BlendMode m, float alpha_);
 
-		}
+		SET_ACTION_ID(blendLayer);
 
-		bool wantsCachedImage() const override { return true; }
+		bool wantsCachedImage() const override;
 
 		void perform(Graphics& g) override;
 
@@ -438,42 +413,18 @@ struct DrawActions
 			const bool monochrom;
 		};
 
-		void drawNoiseMap(Graphics& g, Rectangle<int> area, float alpha, bool monochrom, float scale)
-		{
-			auto originalArea = area;
+		void drawNoiseMap(Graphics& g, Rectangle<int> area, float alpha, bool monochrom, float scale);
 
-			if(scale != 1.0f)
-				area = area.transformed(AffineTransform::scale(scale));
-
-			const auto& m = getNoiseMap(area, monochrom);
-
-			g.setColour(Colours::black.withAlpha(alpha));
-
-			if (scale != 1.0f)
-				g.drawImageWithin(m.img, originalArea.getX(), originalArea.getY(), originalArea.getWidth(), originalArea.getHeight(), RectanglePlacement::stretchToFit);
-			else
-				g.drawImageAt(m.img, area.getX(), area.getY());
-		}
-
+        void setScaleFactor(float sf)
+        {
+            scaleFactor = sf;
+        }
+        
 	private:
 
-		NoiseMap& getNoiseMap(Rectangle<int> area, bool monochrom)
-		{
-			for (auto m : maps)
-			{
-
-				if (area.getWidth() == m->width &&
-					area.getHeight() == m->height &&
-					monochrom == m->monochrom)
-				{
-					return *m;
-				}
-			}
-
-			maps.add(new NoiseMap(area, monochrom));
-
-			return *maps.getLast();
-		}
+        float scaleFactor = 1.0f;
+        
+		NoiseMap& getNoiseMap(Rectangle<int> area, bool monochrom);
 
 		SimpleReadWriteLock lock;
 		OwnedArray<NoiseMap> maps;
@@ -483,43 +434,13 @@ struct DrawActions
 	{
 		struct Iterator
 		{
-			Iterator(Handler* handler_):
-				handler(handler_)
-			{
-				if (handler != nullptr)
-				{
-					actionsInIterator.ensureStorageAllocated(handler->nextActions.size());
-					SpinLock::ScopedLockType sl(handler->lock);
+			Iterator(Handler* handler_);
 
-					actionsInIterator.addArray(handler->nextActions);
-				}
-			}
+			ActionBase::Ptr getNextAction();
 
-			ActionBase::Ptr getNextAction()
-			{
-				if (index < actionsInIterator.size())
-					return actionsInIterator[index++];
+			bool wantsCachedImage() const;
 
-				return nullptr;
-			}
-
-			bool wantsCachedImage() const
-			{
-				for (auto action : actionsInIterator)
-					if (action != nullptr && action->wantsCachedImage())
-						return true;
-
-				return false;
-			}
-
-			bool wantsToDrawOnParent() const
-			{
-				for (auto action : actionsInIterator)
-					if (action != nullptr && action->wantsToDrawOnParent())
-						return true;
-
-				return false;
-			}
+			bool wantsToDrawOnParent() const;
 
 			void render(Graphics& g, Component* c);
 
@@ -530,91 +451,49 @@ struct DrawActions
 
 		struct Listener
 		{
-			virtual ~Listener() {};
-			virtual void newPaintActionsAvailable() = 0;
+			virtual ~Listener();;
+			virtual void newPaintActionsAvailable(uint64_t perfettoTrackIndex) = 0;
 
 			JUCE_DECLARE_WEAK_REFERENCEABLE(Listener);
 		};
 
-        ~Handler()
-        {
-            cancelPendingUpdate();
-        }
-        
-		void beginDrawing()
-		{
-			currentActions.clear();
-		}
+        ~Handler();
+
+		void beginDrawing();
 
 		bool beginBlendLayer(const Identifier& blendMode, float alpha);
 
-		void beginLayer(bool drawOnParent)
-		{
-			auto newLayer = new ActionLayer(drawOnParent);
+		void beginLayer(bool drawOnParent);
 
-			addDrawAction(newLayer);
-			layerStack.insert(-1, newLayer);
-		}
+		ActionLayer::Ptr getCurrentLayer();
 
-		ActionLayer::Ptr getCurrentLayer()
-		{
-			return layerStack.getLast();
-		}
+		void endLayer();
 
-		void endLayer()
-		{
-			layerStack.removeLast();
-		}
+		void addDrawAction(ActionBase* newDrawAction);
 
-		void addDrawAction(ActionBase* newDrawAction)
-		{
-			if (layerStack.getLast() != nullptr)
-				layerStack.getLast()->addDrawAction(newDrawAction);
-			else
-				currentActions.add(newDrawAction);
-		}
+		void flush(uint64_t perfettoTrackId);
 
-		void flush()
-		{
-			{
-				SpinLock::ScopedLockType sl(lock);
+		void logError(const String& message);
 
-				nextActions.swapWith(currentActions);
-				currentActions.clear();
-				layerStack.clear();
-			}
-
-			triggerAsyncUpdate();
-		}
-
-		void logError(const String& message)
-		{
-			if (errorLogger)
-				errorLogger(message);
-		}
-
-		void addDrawActionListener(Listener* l) { listeners.addIfNotAlreadyThere(l); }
-		void removeDrawActionListener(Listener* l) { listeners.removeAllInstancesOf(l); }
+		void addDrawActionListener(Listener* l);
+		void removeDrawActionListener(Listener* l);
 
 		Rectangle<int> getScreenshotBounds(Rectangle<int> shaderBounds) const;
 
-		void setGlobalBounds(Rectangle<int> gb, Rectangle<int> tb, float sf)
-		{
-			globalBounds = gb;
-			topLevelBounds = tb;
-			scaleFactor = sf;
-		}
+		void setGlobalBounds(Rectangle<int> gb, Rectangle<int> tb, float sf);
 
-		Rectangle<int> getGlobalBounds() const { return globalBounds; }
-		float getScaleFactor() const { return scaleFactor; }
+		Rectangle<int> getGlobalBounds() const;
+		float getScaleFactor() const;
 
 		std::function<void(const String& m)> errorLogger;
 
 		bool recursion = false;
 
-		NoiseMapManager* getNoiseMapManager() { return &noiseManager.getObject(); }
+		NoiseMapManager* getNoiseMapManager();
 
 	private:
+
+		dispatch::AccumulatedFlowManager flowManager;
 
 		SharedResourcePointer<NoiseMapManager> noiseManager;
 
@@ -622,14 +501,7 @@ struct DrawActions
 		Rectangle<int> topLevelBounds;
 		float scaleFactor = 1.0f;
 
-		void handleAsyncUpdate() override
-		{
-			for (auto l : listeners)
-			{
-				if (l != nullptr)
-					l->newPaintActionsAvailable();
-			}
-		}
+		void handleAsyncUpdate() override;
 
 		Array<WeakReference<Listener>> listeners;
 
@@ -659,57 +531,27 @@ public:
 	BorderPanel(DrawActions::Handler* drawHandler);
 	~BorderPanel();
 
-	void newOpenGLContextCreated() override
-	{
-	}
+	void newOpenGLContextCreated() override;
 
-	void renderOpenGL() override
-	{
-		
-	}
+	void renderOpenGL() override;
 
-	void openGLContextClosing() override
-	{
-	}
+	void openGLContextClosing() override;
 
-	void newPaintActionsAvailable() override { repaint(); }
+	void newPaintActionsAvailable(uint64_t flowId) override;
 
 	void paint(Graphics &g);
 	Colour c1, c2, borderColour;
 
-	void registerToTopLevelComponent()
-	{
-#if 0
-		if (srs == nullptr)
-		{
-			if (auto tc = findParentComponentOfClass<TopLevelWindowWithOptionalOpenGL>())
-				srs = new TopLevelWindowWithOptionalOpenGL::ScopedRegisterState(*tc, this);
-		}
-#endif
-	}
+	void registerToTopLevelComponent();
 
-	void resized() override
-	{
-		registerToTopLevelComponent();
-
-		if (isPopupPanel)
-		{
-			closeButton.setBounds(getWidth() - 24, 0, 24, 24);
-		}
-		else
-			closeButton.setVisible(false);
-		
-	}
+	void resized() override;
 
 	void buttonClicked(Button* b) override;
 
     void changeListenerCallback(SafeChangeBroadcaster* b);
     
 #if HISE_INCLUDE_RLOTTIE
-	void setAnimation(RLottieAnimation::Ptr newAnimation)
-	{
-		animation = newAnimation;
-	}
+	void setAnimation(RLottieAnimation::Ptr newAnimation);
 
 	RLottieAnimation::Ptr animation;
 #endif
@@ -730,6 +572,8 @@ public:
 	ImageButton closeButton;
 
 	WeakReference<DrawActions::Handler> drawHandler;
+
+	dispatch::AccumulatedFlowManager flowManager;
 
 	JUCE_DECLARE_WEAK_REFERENCEABLE(BorderPanel);
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BorderPanel);

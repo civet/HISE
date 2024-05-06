@@ -69,6 +69,7 @@ struct ScriptingApi::Content::Wrapper
 	static var addPanel(const var::NativeFunctionArgs& args);
 	static var addAudioWaveform(const var::NativeFunctionArgs& args);
 	static var addSliderPack(const var::NativeFunctionArgs& args);
+	static var addWebView(const var::NativeFunctionArgs& args);
 	static var addFloatingTile(const var::NativeFunctionArgs& args);
 	static var getComponent(const var::NativeFunctionArgs& args);
 	static var getAllComponents(const var::NativeFunctionArgs& args);
@@ -87,6 +88,7 @@ struct ScriptingApi::Content::Wrapper
 	static var setPosition(const var::NativeFunctionArgs& args);
 	static var setHeight(const var::NativeFunctionArgs& args);
 	static var setWidth(const var::NativeFunctionArgs& args);
+    static var showModalTextInput(const var::NativeFunctionArgs& args);
 	static var setName(const var::NativeFunctionArgs& args);
     static var makeFrontInterface(const var::NativeFunctionArgs& args);
 	static var makeFullScreenInterface(const var::NativeFunctionArgs& args);
@@ -96,6 +98,10 @@ struct ScriptingApi::Content::Wrapper
 	static var setContentTooltip(const var::NativeFunctionArgs& args);
 	static var setToolbarProperties(const var::NativeFunctionArgs& args);
 	static var setUseHighResolutionForPanels(const var::NativeFunctionArgs& args);
+	static var isCtrlDown(const var::NativeFunctionArgs& args);
+
+	static var setSuspendTimerCallback(const var::NativeFunctionArgs& args);
+	static var setKeyPressCallback(const var::NativeFunctionArgs& args);
 
 	static var getCurrentTooltip(const var::NativeFunctionArgs& args);
 
@@ -133,6 +139,8 @@ struct ScriptingApi::Content::Wrapper
 	static var isMouseDown(const var::NativeFunctionArgs& args);
 	static var getComponentUnderMouse(const var::NativeFunctionArgs& args);
 	static var callAfterDelay(const var::NativeFunctionArgs& args);
+	static var refreshDragImage(const var::NativeFunctionArgs& args);
+	static var getComponentUnderDrag(const var::NativeFunctionArgs& args);
 
 };
 
@@ -310,18 +318,22 @@ var ScriptingApi::Content::Wrapper::addSliderPack(const var::NativeFunctionArgs&
 	return var();
 }
 
+juce::var ScriptingApi::Content::Wrapper::addWebView(const var::NativeFunctionArgs& args)
+{
+	if (ScriptingApi::Content* thisObject = GET_OBJECT(Content))
+	{
+		CHECK_ARGUMENTS("addWebView()", 3);
+		return thisObject->addWebView(Identifier(args.arguments[0]), args.arguments[1], args.arguments[2]);
+	}
+
+	return var();
+}
 
 var ScriptingApi::Content::Wrapper::addFloatingTile(const var::NativeFunctionArgs& args)
 {
 	if (ScriptingApi::Content* thisObject = GET_OBJECT(Content))
 	{
-		if (args.numArguments == 1)
-		{
-			return thisObject->addSliderPack(Identifier(args.arguments[0]), 0, 0);
-		}
-
 		CHECK_ARGUMENTS("addFloatingTile()", 3);
-
 		return thisObject->addFloatingTile(Identifier(args.arguments[0]), args.arguments[1], args.arguments[2]);
 	}
 
@@ -412,6 +424,18 @@ var ScriptingApi::Content::Wrapper::get (const var::NativeFunctionArgs& args)
 	return var();
 };
 
+var ScriptingApi::Content::Wrapper::showModalTextInput(const var::NativeFunctionArgs& args)
+{
+    if (ScriptingApi::Content* thisObject = GET_OBJECT(Content))
+    {
+        CHECK_ARGUMENTS("showModalTextInput()", 2);
+
+        thisObject->showModalTextInput(args.arguments[0], args.arguments[1]);
+    }
+
+    return var();
+};
+
 var ScriptingApi::Content::Wrapper::addToMacroControl (const var::NativeFunctionArgs& args)
 {
 	if (ScriptingApi::Content::ScriptComponent* thisObject = GET_OBJECT(Content::ScriptComponent))
@@ -450,6 +474,31 @@ var ScriptingApi::Content::Wrapper::setContentTooltip (const var::NativeFunction
 
 
 
+var ScriptingApi::Content::Wrapper::setSuspendTimerCallback(const var::NativeFunctionArgs& args)
+{
+	if (ScriptingApi::Content* thisObject = GET_OBJECT(Content))
+	{
+		CHECK_ARGUMENTS("setSuspendTimerCallback()", 1);
+
+		thisObject->setSuspendTimerCallback(args.arguments[0]);
+	}
+
+	return var();
+}
+
+
+var ScriptingApi::Content::Wrapper::setKeyPressCallback(const var::NativeFunctionArgs& args)
+{
+	if (ScriptingApi::Content* thisObject = GET_OBJECT(Content))
+	{
+		CHECK_ARGUMENTS("setKeyPressCallback()", 2);
+
+		thisObject->setKeyPressCallback(args.arguments[0], args.arguments[1]);
+	}
+
+	return var();
+}
+
 var ScriptingApi::Content::Wrapper::setUseHighResolutionForPanels(const var::NativeFunctionArgs& args)
 {
 	if (ScriptingApi::Content* thisObject = GET_OBJECT(Content))
@@ -462,6 +511,17 @@ var ScriptingApi::Content::Wrapper::setUseHighResolutionForPanels(const var::Nat
 	return var();
 }
 
+var ScriptingApi::Content::Wrapper::isCtrlDown(const var::NativeFunctionArgs& args)
+{
+	if (ScriptingApi::Content* thisObject = GET_OBJECT(Content))
+	{
+		CHECK_ARGUMENTS("isCtrlDown()", 0);
+
+		return thisObject->isCtrlDown();
+	}
+
+	return var();
+}
 
 var ScriptingApi::Content::Wrapper::setToolbarProperties(const var::NativeFunctionArgs& args)
 {
@@ -1043,6 +1103,27 @@ juce::var ScriptingApi::Content::Wrapper::callAfterDelay(const var::NativeFuncti
 
 	return var();
 }
+
+juce::var ScriptingApi::Content::Wrapper::refreshDragImage(const var::NativeFunctionArgs& args)
+{
+	if (auto thisObject = GET_OBJECT(Content))
+	{
+		return thisObject->refreshDragImage();
+	}
+
+	return var();
+}
+
+juce::var ScriptingApi::Content::Wrapper::getComponentUnderDrag(const var::NativeFunctionArgs& args)
+{
+	if (auto thisObject = GET_OBJECT(Content))
+	{
+		return thisObject->getComponentUnderDrag();
+	}
+
+	return var();
+}
+
 
 #undef GET_OBJECT
 #undef CHECK_ARGUMENTS

@@ -30,11 +30,46 @@
 *   ===========================================================================
 */
 
-#if !HISE_NO_GUI_TOOLS
-#include "../JuceLibraryCode/BinaryData.h"
-#endif
-
 namespace hise { using namespace juce;
+
+	FilmstripLookAndFeel::FilmstripLookAndFeel():
+		imageToUse(Image()),
+		isVertical(true),
+		numStrips(0),
+		scaleFactor(1.0f)
+	{}
+
+	void FilmstripLookAndFeel::setFilmstripImage(const Image& imageToUse_, int numStrips_, bool isVertical_)
+	{
+		imageToUse = imageToUse_;
+		numStrips = numStrips_;
+		isVertical = isVertical_;
+
+		if (numStrips == 0) return;
+
+		if (isVertical)
+		{
+			heightOfEachStrip = imageToUse.getHeight() / numStrips;
+			widthOfEachStrip = imageToUse.getWidth();
+		}
+		else
+		{
+			heightOfEachStrip = imageToUse.getHeight();
+			widthOfEachStrip = imageToUse.getWidth() / numStrips;
+		}
+
+	}
+
+	void FilmstripLookAndFeel::setScaleFactor(float newScaleFactor) noexcept
+	{
+#ifdef HI_FIXED_SCALEFACTOR_FOR_FILMSTRIPS
+		ignoreUnused(newScaleFactor);
+
+		scaleFactor = HI_FIXED_SCALEFACTOR_FOR_FILMSTRIPS;
+#else
+		scaleFactor = newScaleFactor;
+#endif
+	}
 
 void FilmstripLookAndFeel::drawToggleButton(Graphics &g, ToggleButton &b, bool isMouseOverButton, bool isButtonDown)
 {
@@ -253,10 +288,6 @@ void GlobalHiseLookAndFeel::drawToggleButton (Graphics &g, ToggleButton &b, bool
 {
 	drawHiBackground(g, 0, 0, b.getWidth(), b.getHeight() - 2, &b, isMouseOverButton);
 
-	const int filmStripHeight = cachedImage_toggle_png.getHeight() / 2;
-
-	Image clip = Image(cachedImage_toggle_png.getClippedImage(Rectangle<int>(0, b.getToggleState() ? filmStripHeight: 0, filmStripHeight, filmStripHeight)));
-
 	g.setColour (b.getToggleState() ? Colours::white.withAlpha(0.9f) : Colours::white.withAlpha(0.4f));
 	g.setFont (GLOBAL_FONT());
 
@@ -269,17 +300,13 @@ void GlobalHiseLookAndFeel::drawToggleButton (Graphics &g, ToggleButton &b, bool
 		g.drawText(text, textArea, Justification::centredLeft, true);
 	}
 	
-	g.setColour (Colours::black.withAlpha( (b.isEnabled() ? 1.0f : 0.5f) ));
-	g.drawImage(clip, 7, (b.getHeight() - 16) / 2, 16, 16, 0, 0, filmStripHeight, filmStripHeight);
-}
+	auto area = b.getLocalBounds().removeFromLeft(b.getHeight()).withSizeKeepingCentre(16, 16).toFloat().reduced(JUCE_LIVE_CONSTANT_OFF(1.0f));
 
-#ifndef INCLUDE_STOCK_FILMSTRIPS
-#if HISE_IOS
-#define INCLUDE_STOCK_FILMSTRIPS 0
-#else
-#define INCLUDE_STOCK_FILMSTRIPS 1
-#endif
-#endif
+	g.setColour(Colours::black.withAlpha(0.5f));
+	g.fillEllipse(area);
+	g.setColour(Colours::white.withAlpha(b.getToggleState() ? 0.8f : 0.2f));
+	g.fillEllipse(area.reduced(JUCE_LIVE_CONSTANT_OFF(3.0f)));
+}
 
 GlobalHiseLookAndFeel::GlobalHiseLookAndFeel()
 {
@@ -292,22 +319,6 @@ GlobalHiseLookAndFeel::GlobalHiseLookAndFeel()
 
 	ring2.startNewSubPath(0.5f, 1.0f);
 	ring2.addArc(0.0f, 0.0f, 1.0f, 1.0f, -float_Pi * 0.75f - 0.04f, float_Pi * 0.75f + 0.04f, true);
-
-#if INCLUDE_STOCK_FILMSTRIPS
-	cachedImage_smalliKnob_png = ImageProvider::getImage(ImageProvider::ImageType::KnobEmpty); // ImageCache::getFromMemory(BinaryData::knob_empty_png, BinaryData::knob_empty_pngSize);
-	cachedImage_knobRing_png = ImageProvider::getImage(ImageProvider::ImageType::KnobUnmodulated); // ImageCache::getFromMemory(BinaryData::ring_unmodulated_png, BinaryData::ring_unmodulated_pngSize);
-	ring_modulated = ImageProvider::getImage(ImageProvider::ImageType::KnobModulated); //ImageCache::getFromMemory(BinaryData::ring_modulated_png, BinaryData::ring_modulated_pngSize);
-
-	//ring_red = ImageCache::getFromMemory(BinaryData::_1_red_png, BinaryData::_1_red_pngSize);
-	//ring_yellow = ImageCache::getFromMemory(BinaryData::_2_yellow_png, BinaryData::_2_yellow_pngSize);
-	//ring_blue = ImageCache::getFromMemory(BinaryData::_4_blue_png, BinaryData::_4_blue_pngSize);
-	//ring_green = ImageCache::getFromMemory(BinaryData::_3_green_png, BinaryData::_3_green_pngSize);
-
-	cachedImage_toggle_png = ImageProvider::getImage(ImageProvider::ImageType::ToggleButton); // ImageCache::getFromMemory(toggle_png, toggle_pngSize);
-	cachedImage_slider_strip2_png = ImageCache::getFromMemory (slider_strip2_png, slider_strip2_pngSize);
-	cachedImage_slider2_bipolar_png = ImageCache::getFromMemory (slider2_bipolar_png, slider2_bipolar_pngSize);
-#endif
-    
     
 	setColour(PopupMenu::highlightedBackgroundColourId, Colour(SIGNAL_COLOUR));
 
@@ -323,9 +334,143 @@ GlobalHiseLookAndFeel::GlobalHiseLookAndFeel()
 	comboBoxFont = GLOBAL_FONT();
 }
 
+Slider::SliderLayout GlobalHiseLookAndFeel::getSliderLayout(Slider& s)
+{
+	auto layout = LookAndFeel_V3::getSliderLayout(s);
+
+	if (s.getSliderStyle() == Slider::RotaryHorizontalVerticalDrag)
+	{
+		layout.textBoxBounds = layout.textBoxBounds.withBottomY(s.getHeight()-3);
+	}
+
+	return layout;
+}
+
+Label* GlobalHiseLookAndFeel::createSliderTextBox(Slider& s)
+{
+	Label *label = new Label("Textbox");
+	label->setFont (GLOBAL_FONT());
+	label->setEditable (false, false, false);
+		
+	Colour textColour;
+	Colour contrastColour;
+
+	if(s.getSliderStyle() == Slider::RotaryHorizontalVerticalDrag)
+	{
+			
+		label->setJustificationType (Justification::centred);
+		label->setEditable (false, false, false);
+			
+		textColour = Colour(0x66ffffff);
+		contrastColour = Colours::black;
+	}
+	else
+	{
+			
+		label->setJustificationType (Justification::centred);
+			
+		textColour = s.findColour(Slider::textBoxTextColourId);
+		contrastColour = textColour.contrasting();
+			
+	}
+
+	label->setColour(CaretComponent::ColourIds::caretColourId, Colours::white);
+	label->setColour(Label::textColourId, textColour);
+	label->setColour(Label::ColourIds::textWhenEditingColourId, textColour);
+	label->setColour(TextEditor::ColourIds::highlightColourId, textColour);
+	label->setColour(TextEditor::ColourIds::highlightedTextColourId, contrastColour);
+	label->setColour(TextEditor::ColourIds::focusedOutlineColourId, textColour);
+
+	return label;
+}
+
+int GlobalHiseLookAndFeel::getSliderThumbRadius(Slider& slider)
+{ return 0; }
+
+void GlobalHiseLookAndFeel::drawLinearSlider(Graphics& g, int i, int i1, int width, int height, float x,
+	float minSliderPos, float maxSliderPos, const Slider::SliderStyle style, Slider& s)
+{
+	if (style == Slider::TwoValueHorizontal)
+	{
+		g.fillAll(s.findColour(Slider::backgroundColourId));
+
+		//width += 18;
+			
+		const float leftBoxPos = minSliderPos;// *(float)(width - 6.0f) + 3.0f;
+		const float rightBoxPos = maxSliderPos;// *(float)(width - 6.0f) + 3.0f;
+
+		Rectangle<float> area(leftBoxPos, 0.0f, rightBoxPos - leftBoxPos, (float)height);
+
+		area.reduce(-1.0f, -1.0f);
+			
+		g.setColour(s.findColour(Slider::ColourIds::thumbColourId));
+		g.fillRect(area);
+
+		g.setColour(s.findColour(Slider::ColourIds::trackColourId));
+		g.drawRect(0, 0, width, height, 1);
+
+		g.drawLine(leftBoxPos, 0.0f, leftBoxPos, (float)height, 1.0f);
+		g.drawLine(rightBoxPos, 0.0f, rightBoxPos, (float)height, 1.0f);
+
+		g.setColour(s.findColour(Slider::ColourIds::textBoxTextColourId));
+
+		const int decimal = jmax<int>(0, (int)-log10(s.getInterval()));
+
+		const String text = String(s.getMinValue(), decimal) + " - " + String(s.getMaxValue(), decimal);
+		g.setFont(GLOBAL_FONT());
+		g.drawText(text, 0, 0, width, height, Justification::centred, false);
+	}
+	else
+	{
+		height = s.getHeight();
+		width = s.getWidth();
+
+		if (!s.isEnabled()) g.setOpacity(0.4f);
+
+		//drawHiBackground(g, 12, 6, width-18, 32);
+
+		const double value = s.getValue();
+		const double normalizedValue = (value - s.getMinimum()) / (s.getMaximum() - s.getMinimum());
+		const double proportion = pow(normalizedValue, s.getSkewFactor());
+
+		g.fillAll(s.findColour(Slider::backgroundColourId));
+
+		g.setColour(s.findColour(Slider::ColourIds::thumbColourId));
+
+		if (style == Slider::SliderStyle::LinearBar)
+		{
+			g.fillRect(0.0f, 0.0f, (float)proportion * (float)width, (float)height);
+		}
+		else if (style == Slider::SliderStyle::LinearBarVertical)
+		{
+			g.fillRect(0.0f, (float)(1.0 - proportion)*height, (float)width, (float)(proportion * height));
+		}
+
+		g.setColour(s.findColour(Slider::ColourIds::trackColourId));
+		g.drawRect(0, 0, width, height, 1);
+	}
+
+		
+
+}
+
+void GlobalHiseLookAndFeel::setDefaultColours(Component& c)
+{
+	c.setColour(HiseColourScheme::ComponentBackgroundColour, Colours::transparentBlack);
+	c.setColour(HiseColourScheme::ComponentFillTopColourId, Colour(0x66333333));
+	c.setColour(HiseColourScheme::ComponentFillBottomColourId, Colour(0xfb111111));
+	c.setColour(HiseColourScheme::ComponentOutlineColourId, Colours::white.withAlpha(0.3f));
+	c.setColour(HiseColourScheme::ComponentTextColourId, Colours::white);
+}
+
 
 void GlobalHiseLookAndFeel::fillPathHiStyle(Graphics &g, const Path &p, int, int, bool drawBorders /*= true*/)
 {
+	if(!PathFactory::isValid(p))
+		return;
+	
+
+
 	if (drawBorders)
 	{
 		g.setColour(Colours::lightgrey.withAlpha(0.8f));
@@ -360,19 +505,22 @@ void GlobalHiseLookAndFeel::draw1PixelGrid(Graphics& g, Component* c, Rectangle<
     float tenAlpha = JUCE_LIVE_CONSTANT_OFF(0.15f);
     float oneAlpha = JUCE_LIVE_CONSTANT_OFF(.06f);
     
+    const int R = jlimit<int>(1, 100, HI_RASTER_SIZE);
+    
     if (mulAlpha > 0.1f)
     {
-        for (int x = 10; x < bounds.getWidth(); x += 10)
+        
+        for (int x = R; x < bounds.getWidth(); x += R)
         {
-            float alpha = (x % 100 == 0) ? tenAlpha : oneAlpha;
+            float alpha = (x % (R*10) == 0) ? tenAlpha : oneAlpha;
             alpha *= mulAlpha;
             g.setColour(lineColour.withAlpha(alpha));
             ug.draw1PxVerticalLine(x, 0.0f, (float)bounds.getHeight());
         }
 
-        for (int y = 10; y < bounds.getHeight(); y += 10)
+        for (int y = R; y < bounds.getHeight(); y += R)
         {
-            float alpha = (y % 100 == 0) ? tenAlpha : oneAlpha;
+            float alpha = (y % (R*10) == 0) ? tenAlpha : oneAlpha;
             alpha *= mulAlpha;
             g.setColour(lineColour.withAlpha(alpha));
             ug.draw1PxHorizontalLine(y, 0.0f, (float)bounds.getWidth());
@@ -453,7 +601,7 @@ Point<float> GlobalHiseLookAndFeel::paintCable(Graphics& g, Rectangle<float> sta
 void GlobalHiseLookAndFeel::setTextEditorColours(TextEditor& ed)
 {
 	ed.setColour(TextEditor::ColourIds::textColourId, Colours::black);
-	ed.setColour(TextEditor::ColourIds::backgroundColourId, Colours::white.withAlpha(0.25f));
+	ed.setColour(TextEditor::ColourIds::backgroundColourId, Colours::white.withAlpha(0.45f));
 	ed.setColour(TextEditor::ColourIds::focusedOutlineColourId, Colour(SIGNAL_COLOUR));
 	ed.setColour(Label::ColourIds::outlineWhenEditingColourId, Colour(SIGNAL_COLOUR));
 	ed.setColour(TextEditor::ColourIds::outlineColourId, Colours::black.withAlpha(0.8f));
@@ -536,24 +684,6 @@ void GlobalHiseLookAndFeel::drawVectorRotaryKnob(Graphics& g, Rectangle<float> a
 		g.drawEllipse(area.reduced(ringWidth * 2.9), ringWidth * 1.6);
 	}
 }
-
-const char* GlobalHiseLookAndFeel::smalliKnob_png =  (const char*) HiBinaryData::LookAndFeelBinaryData::knob_mod_bg_png;
-const int GlobalHiseLookAndFeel::smalliKnob_pngSize = 16277;
-
-const char* GlobalHiseLookAndFeel::knobRing_png =  (const char*) HiBinaryData::LookAndFeelBinaryData::knob_mod_ring_png;
-const int GlobalHiseLookAndFeel::knobRing_size = 17983;
-
-const char* GlobalHiseLookAndFeel::toggle_png = (const char*) HiBinaryData::LookAndFeelBinaryData::resource_Background_toggle_png;
-const int GlobalHiseLookAndFeel::toggle_pngSize = 1758;
-
-const char* GlobalHiseLookAndFeel::slider_strip2_png = (const char*) HiBinaryData::LookAndFeelBinaryData::resource_Background_slider_strip2_png;
-const int GlobalHiseLookAndFeel::slider_strip2_pngSize = 97907;
-
-const char* GlobalHiseLookAndFeel::slider2_bipolar_png = (const char*) HiBinaryData::LookAndFeelBinaryData::resource_Background_slider2_bipolar_png;
-const int GlobalHiseLookAndFeel::slider2_bipolar_pngSize = 87929;
-
-const char* BalanceButtonLookAndFeel::balanceKnob_png = (const char*) HiBinaryData::LookAndFeelBinaryData::resource_Button_balanceKnob_png;
-const int BalanceButtonLookAndFeel::balanceKnob_pngSize = 5215;
 
 void MacroKnobLookAndFeel::drawRotarySlider(Graphics &g, int /*x*/, int /*y*/, int /*width*/, int /*height*/, float /*sliderPosProportional*/, float /*rotaryStartAngle*/, float /*rotaryEndAngle*/, Slider &s)
 {
@@ -650,8 +780,6 @@ void MacroKnobLookAndFeel::drawRotarySlider(Graphics &g, int /*x*/, int /*y*/, i
 	
 }
 
-const char* MacroKnobLookAndFeel::macroKnob_png = (const char*)HiBinaryData::LookAndFeelBinaryData::resource_Background_macroKnob2_png;
-const int MacroKnobLookAndFeel::macroKnob_pngSize = 241928;
 
 
 ImageProvider::DisplayScaleFactor ImageProvider::getScaleFactor()
@@ -667,38 +795,91 @@ ImageProvider::DisplayScaleFactor ImageProvider::getScaleFactor()
 
 Image ImageProvider::getImage(ImageType type)
 {
-	
-
-#if HISE_NO_GUI_TOOLS
 	return {};
-#else
-	switch (type)
-	{
-	case ImageProvider::KnobEmpty:
+}
 
+Path HiToolbarIcons::createSettingsPath()
+{
+	static const unsigned char pathData[] = { 110,109,35,219,53,65,18,131,180,65,108,19,131,74,65,86,14,166,65,108,84,227,51,65,119,190,154,65,108,219,249,22,65,111,18,165,65,98,178,157,17,65,117,147,163,65,59,223,11,65,66,96,162,65,10,215,5,65,31,133,161,65,108,0,0,0,65,0,0,144,65,108,0,0,192,64,
+		0,0,144,65,108,236,81,180,64,31,133,161,65,98,138,65,168,64,66,96,162,65,156,196,156,64,105,145,163,65,74,12,146,64,111,18,165,65,108,176,114,48,64,119,190,154,65,108,108,231,171,63,86,14,166,65,108,116,147,40,64,18,131,180,65,98,165,155,28,64,38,49,
+		183,65,12,2,19,64,98,16,186,65,87,57,12,64,122,20,189,65,108,0,8,131,58,255,255,191,65,108,0,8,131,58,255,255,207,65,108,87,57,12,64,132,235,210,65,98,110,18,19,64,157,239,213,65,165,155,28,64,216,206,216,65,214,163,40,64,236,124,219,65,108,47,8,172,
+		63,168,241,233,65,108,18,131,48,64,135,65,245,65,108,123,20,146,64,143,237,234,65,98,205,204,156,64,137,108,236,65,186,73,168,64,188,159,237,65,29,90,180,64,223,122,238,65,108,50,8,192,64,254,255,255,65,108,25,4,0,65,254,255,255,65,108,35,219,5,65,223,
+		122,238,65,98,84,227,11,65,188,159,237,65,203,161,17,65,149,110,236,65,244,253,22,65,143,237,234,65,108,109,231,51,65,135,65,245,65,108,44,135,74,65,168,241,233,65,108,60,223,53,65,236,124,219,65,98,48,221,56,65,216,206,216,65,150,67,59,65,156,239,213,
+		65,220,249,60,65,132,235,210,65,108,26,4,96,65,255,255,207,65,108,26,4,96,65,255,255,191,65,108,220,249,60,65,122,20,189,65,98,150,67,59,65,97,16,186,65,73,225,56,65,38,49,183,65,60,223,53,65,18,131,180,65,99,109,0,0,224,64,0,0,216,65,98,215,163,188,
+		64,0,0,216,65,0,0,160,64,10,215,208,65,0,0,160,64,0,0,200,65,98,0,0,160,64,246,40,191,65,215,163,188,64,0,0,184,65,0,0,224,64,0,0,184,65,98,20,174,1,65,0,0,184,65,0,0,16,65,246,40,191,65,0,0,16,65,0,0,200,65,98,0,0,16,65,10,215,208,65,20,174,1,65,0,0,
+		216,65,0,0,224,64,0,0,216,65,99,109,0,0,0,66,0,0,64,65,108,0,0,0,66,0,0,32,65,108,234,38,239,65,59,223,25,65,98,11,215,238,65,34,219,21,65,177,114,238,65,84,227,17,65,207,247,237,65,231,251,13,65,108,41,92,252,65,71,225,246,64,108,113,61,246,65,118,190,
+		187,64,108,6,129,229,65,63,53,202,64,98,176,114,228,65,198,75,195,64,235,81,227,65,116,147,188,64,196,32,226,65,122,20,182,64,108,71,225,235,65,186,116,123,64,108,104,145,224,65,192,245,32,64,108,225,122,210,65,216,249,110,64,98,35,219,208,65,161,112,
+		101,64,14,45,207,65,124,106,92,64,176,114,205,65,204,247,83,64,108,98,16,209,65,240,40,156,63,108,174,71,194,65,172,245,232,62,108,12,2,185,65,134,65,16,64,98,86,14,183,65,222,122,12,64,110,18,181,65,171,71,9,64,98,16,179,65,177,200,6,64,108,0,0,176,
+		65,0,0,64,181,108,0,0,160,65,0,0,64,181,108,158,239,156,65,177,200,6,64,98,146,237,154,65,171,71,9,64,170,241,152,65,124,106,12,64,244,253,150,65,134,65,16,64,108,82,184,141,65,168,245,232,62,108,60,223,125,65,239,40,156,63,108,80,141,130,65,204,247,
+		83,64,98,242,210,128,65,124,106,92,64,187,73,126,65,161,112,101,64,62,10,123,65,216,249,110,64,108,48,221,94,65,192,245,32,64,108,114,61,72,65,186,116,123,64,108,120,190,91,65,122,20,182,64,98,42,92,89,65,116,147,188,64,161,26,87,65,198,75,195,64,245,
+		253,84,65,63,53,202,64,108,32,133,51,65,118,190,187,64,108,175,71,39,65,71,225,246,64,108,99,16,68,65,231,251,13,65,98,185,30,67,65,84,227,17,65,236,81,66,65,34,219,21,65,46,178,65,65,59,223,25,65,108,1,0,32,65,0,0,32,65,108,1,0,32,65,0,0,64,65,108,46,
+		178,65,65,197,32,70,65,98,236,81,66,65,222,36,74,65,161,26,67,65,172,28,78,65,99,16,68,65,25,4,82,65,108,175,71,39,65,93,143,100,65,108,32,133,51,65,99,16,129,65,108,245,253,84,65,98,229,122,65,98,161,26,87,65,30,90,126,65,42,92,89,65,36,219,128,65,120,
+		190,91,65,226,122,130,65,108,114,61,72,65,105,145,144,65,108,48,221,94,65,72,225,155,65,108,62,10,123,65,197,32,146,65,98,187,73,126,65,236,81,147,65,242,210,128,65,177,114,148,65,80,141,130,65,7,129,149,65,108,60,223,125,65,114,61,166,65,108,82,184,
+		141,65,42,92,172,65,108,244,253,150,65,208,247,157,65,98,170,241,152,65,165,112,158,65,146,237,154,65,11,215,158,65,158,239,156,65,235,38,159,65,108,0,0,160,65,2,0,176,65,108,0,0,176,65,2,0,176,65,108,98,16,179,65,236,38,159,65,98,110,18,181,65,13,215,
+		158,65,86,14,183,65,179,114,158,65,12,2,185,65,209,247,157,65,108,174,71,194,65,43,92,172,65,108,98,16,209,65,115,61,166,65,108,176,114,205,65,8,129,149,65,98,14,45,207,65,178,114,148,65,35,219,208,65,237,81,147,65,225,122,210,65,198,32,146,65,108,104,
+		145,224,65,73,225,155,65,108,71,225,235,65,106,145,144,65,108,196,32,226,65,227,122,130,65,98,235,81,227,65,37,219,128,65,176,114,228,65,32,90,126,65,6,129,229,65,100,229,122,65,108,112,61,246,65,100,16,129,65,108,40,92,252,65,96,143,100,65,108,206,247,
+		237,65,28,4,82,65,98,163,112,238,65,175,28,78,65,9,215,238,65,225,36,74,65,233,38,239,65,200,32,70,65,108,0,0,0,66,3,0,64,65,99,109,0,0,168,65,154,153,117,65,98,180,200,148,65,154,153,117,65,51,51,133,65,152,110,86,65,51,51,133,65,0,0,48,65,98,51,51,
+		133,65,104,145,9,65,180,200,148,65,205,204,212,64,0,0,168,65,205,204,212,64,98,76,55,187,65,205,204,212,64,205,204,202,65,104,145,9,65,205,204,202,65,0,0,48,65,98,205,204,202,65,152,110,86,65,76,55,187,65,154,153,117,65,0,0,168,65,154,153,117,65,99,101,
+		0,0 };
 
-
-	case ImageProvider::KnobUnmodulated:
-
-
-	case ImageProvider::KnobModulated:
-
-
-	case ImageProvider::MacroKnob:
-
-
-	case ImageProvider::BalanceKnob:
-		return {};
-	case ImageProvider::ImageType::ToggleButton:
+	Path path;
+	path.loadPathFromData (pathData, sizeof (pathData));
 		
-		return ImageCache::getFromMemory(BinaryData::toggle_200_png, BinaryData::toggle_200_pngSize);
+	return path;
+		
+}
 
-	default:
-		jassertfalse;
-		return Image();
-		break;
+NumberTag::LookAndFeelMethods::~LookAndFeelMethods()
+{}
+
+void NumberTag::LookAndFeelMethods::drawNumberTag(Graphics& g, Component& comp, Colour& c, Rectangle<int> area, int offset, int size,
+	int number)
+{
+	if (number > 0)
+	{
+		Rectangle<float> rect = area.reduced(offset).removeFromTop(size).removeFromRight(size).toFloat();
+		DropShadow d;
+
+		d.colour = c.withAlpha(0.3f);
+		d.radius = (int)offset * 2;
+		d.offset = Point<int>();
+		d.drawForRectangle(g, Rectangle<int>((int)rect.getX(), (int)rect.getY(), (int)rect.getWidth(), (int)rect.getHeight()));
+
+		g.setColour(Colours::black.withAlpha(0.3f));
+		g.setColour(Colours::white.withAlpha(0.7f));
+		g.drawRoundedRectangle(rect.reduced(1.0f), 4.0f, 1.0f);
+		g.setFont(GLOBAL_BOLD_FONT());
+		g.drawText(String(number), rect, Justification::centred, false);
 	}
-#endif
+}
+
+NumberTag::NumberTag(float offset_, float size_, Colour c_):
+	number(0),
+	offset(offset_),
+	size(size_),
+	c(c_)
+{
+	setInterceptsMouseClicks(false, false);
+	setLookAndFeel(&dlaf);
+}
+
+NumberTag::~NumberTag()
+{
+	setLookAndFeel(nullptr);
+}
+
+void NumberTag::paint(Graphics& g)
+{
+	if(number == 0) 
+		return;
+
+	if (auto l = dynamic_cast<LookAndFeelMethods*>(&getLookAndFeel()))
+		l->drawNumberTag(g, *this, c, getLocalBounds(), roundToInt(offset), roundToInt(size), number);
+}
+
+void NumberTag::setNumber(int newNumber)
+{
+	number = newNumber;
 }
 
 void ProcessorEditorLookAndFeel::drawBackground(Graphics &g, int width, int height, Colour bgColour, bool folded, int intendationLevel /*= 0*/)
@@ -947,6 +1128,194 @@ void ConcertinaPanelHeaderLookAndFeel::drawConcertinaPanelHeader(Graphics& g, co
 
 }
 
+void HiPropertyPanelLookAndFeel::setFontForAll(const Font& newFont)
+{
+	comboBoxFont = newFont;
+	textButtonFont = newFont;
+	labelFont = newFont;
+	popupMenuFont = newFont;
+}
+
+HiPropertyPanelLookAndFeel::HiPropertyPanelLookAndFeel()
+{
+	comboBoxFont = GLOBAL_FONT();
+	textButtonFont = GLOBAL_FONT();
+	labelFont = GLOBAL_FONT();
+	popupMenuFont = GLOBAL_FONT();
+
+	setColour(PopupMenu::highlightedBackgroundColourId, Colour(SIGNAL_COLOUR));
+
+	Colour dark(0xFF333333);
+
+	Colour bright(0xFF999999);
+
+	setColour(PopupMenu::ColourIds::backgroundColourId, dark);
+	setColour(PopupMenu::ColourIds::textColourId, bright);
+	setColour(PopupMenu::ColourIds::highlightedBackgroundColourId, bright);
+	setColour(PopupMenu::ColourIds::highlightedTextColourId, dark);
+	setColour(PopupMenu::ColourIds::headerTextColourId, bright);
+	setColour (TextEditor::highlightColourId, Colour (SIGNAL_COLOUR).withAlpha(0.5f));
+	setColour (TextEditor::ColourIds::focusedOutlineColourId, Colour(SIGNAL_COLOUR));
+
+}
+
+void HiPropertyPanelLookAndFeel::drawPropertyPanelSectionHeader(Graphics& g, const String& name, bool isOpen, int width,
+	int height)
+{
+	g.setColour(JUCE_LIVE_CONSTANT_OFF(Colour(0xff1b1b1b)));
+
+	auto r = Rectangle<int>(0, 0, width, height);
+        
+	g.fillRect(r);
+
+	PopupLookAndFeel::drawFake3D(g, r);
+        
+        
+        
+	const float buttonSize = height * 0.75f;
+	const float buttonIndent = (height - buttonSize) * 0.5f;
+
+	drawTreeviewPlusMinusBox (g, Rectangle<float> (buttonIndent, buttonIndent, buttonSize, buttonSize), Colours::black, isOpen, false);
+
+	const int textX = (int) (buttonIndent * 2.0f + buttonSize + 2.0f);
+
+	g.setColour (JUCE_LIVE_CONSTANT_OFF(Colour(0xffa2a2a2)));
+	g.setFont (GLOBAL_BOLD_FONT());
+	g.drawText (name, textX, 0, width - textX - 4, height, Justification::centredLeft, true);
+}
+
+Rectangle<int> HiPropertyPanelLookAndFeel::getPropertyComponentContentPosition(PropertyComponent& component)
+{
+	const int textW = jmin(labelWidth, component.getWidth() / 3);
+	return Rectangle<int>(textW, 1, component.getWidth() - textW - 1, component.getHeight() - 3);
+}
+
+void HiPropertyPanelLookAndFeel::setLabelWidth(int newLabelWidth)
+{
+	labelWidth = newLabelWidth;
+}
+
+void HiPropertyPanelLookAndFeel::drawPropertyComponentLabel(Graphics& g, int i, int i1, PropertyComponent& component)
+{
+	Colour textColour = JUCE_LIVE_CONSTANT_OFF(Colour(0xffdddddd));
+
+	g.setColour (textColour.withMultipliedAlpha (component.isEnabled() ? 1.0f : 0.6f));
+
+	g.setFont (labelFont);
+
+	const Rectangle<int> r (getPropertyComponentContentPosition (component));
+
+	if(r.getX() > 8)
+	{
+		g.drawFittedText (component.getName(),
+		                  3, r.getY(), r.getX() - 8, r.getHeight(),
+		                  Justification::centredRight, 2);
+	}
+}
+
+void HiPropertyPanelLookAndFeel::drawLinearSlider(Graphics& g, int i, int i1, int width, int height, float x, float x1,
+	float x2, const Slider::SliderStyle sliderStyle, Slider& s)
+{
+	const bool isBiPolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;
+
+	float leftX;
+	float actualWidth;
+
+	const float max = (float)s.getMaximum();
+	const float min = (float)s.getMinimum();
+
+	Colour c = s.findColour(Slider::ColourIds::backgroundColourId);
+
+	g.fillAll(c);
+
+	if(isBiPolar)
+	{
+		const float value = ((float)s.getValue() - min) / (max - min);
+
+		leftX = 2.0f + (value < 0.5f ? value * (float)(width-2) : 0.5f * (float)(width-2));
+		actualWidth = fabs(0.5f - value) * (float)(width-2);
+	}
+	else
+	{
+		const double value = s.getValue();
+		const double normalizedValue = (value - s.getMinimum()) / (s.getMaximum() - s.getMinimum());
+		const double proportion = pow(normalizedValue, s.getSkewFactor());
+
+		//const float value = ((float)s.getValue() - min) / (max - min);
+
+		leftX = 2;
+		actualWidth = (float)proportion * (float)(width-2);
+	}
+
+    if(actualWidth > 0.0f)
+    {
+        c = s.findColour(Slider::ColourIds::thumbColourId);
+
+        g.setGradientFill (ColourGradient (c.withMultipliedAlpha(s.isEnabled() ? 0.8f : 0.4f),
+                                           0.0f, 0.0f,
+                                           c.withMultipliedAlpha(s.isEnabled() ? 0.8f : 0.4f),
+                                           0.0f, (float)height,
+                                           false));
+        
+        
+        
+        g.fillRect(leftX, 2.0f, actualWidth , (float)(height-2));
+    }
+}
+
+Font HiPropertyPanelLookAndFeel::getLabelFont(Label& label)
+{
+	return labelFont;
+}
+
+Font HiPropertyPanelLookAndFeel::getComboBoxFont(ComboBox& comboBox)
+{
+	return comboBoxFont;
+}
+
+Font HiPropertyPanelLookAndFeel::getPopupMenuFont()
+{
+	return popupMenuFont;
+}
+
+void HiPropertyPanelLookAndFeel::drawPopupMenuBackground(Graphics& g, int width, int height)
+{
+	g.setColour( (findColour (PopupMenu::backgroundColourId)));
+	g.fillRect(0.0f, 0.0f, (float)width, (float)height);
+}
+
+Font HiPropertyPanelLookAndFeel::getTextButtonFont(TextButton& textButton, int i)
+{
+	return textButtonFont;
+}
+
+void HiPropertyPanelLookAndFeel::drawButtonBackground(Graphics& g, Button& b, const Colour& colour, bool over,
+	bool down)
+{
+	auto ar = b.getLocalBounds().toFloat();
+
+	if (b.getToggleState())
+	{
+		g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.4f));
+		g.fillRoundedRectangle(ar, 2.0f);
+	}
+
+	g.setColour(Colours::white.withAlpha(0.1f));
+
+	if (over)
+		g.fillRoundedRectangle(ar, 2.0f);
+
+	if (down)
+		g.fillRoundedRectangle(ar, 2.0f);
+}
+
+void HiPropertyPanelLookAndFeel::drawButtonText(Graphics& g, TextButton& b, bool cond, bool cond1)
+{
+	g.setFont(GLOBAL_BOLD_FONT());
+	g.setColour(b.getToggleState() ? Colours::black : Colours::white);
+	g.drawText(b.getButtonText(), b.getLocalBounds().toFloat(), Justification::centred);
+}
+
 void PopupLookAndFeel::drawMenuBarBackground(Graphics& g, int width, int height, bool, MenuBarComponent& /*menuBar*/)
 {
 	const Colour colour = JUCE_LIVE_CONSTANT_OFF(Colour(0xff282828));
@@ -966,12 +1335,307 @@ void PopupLookAndFeel::drawMenuBarBackground(Graphics& g, int width, int height,
 }
 
 
+void PopupLookAndFeel::drawFake3D(Graphics& g, Rectangle<int> area)
+{
+	Colour upperLight = JUCE_LIVE_CONSTANT_OFF(Colour(0x10ffffff));
+	Colour c1 = JUCE_LIVE_CONSTANT_OFF(Colour(0x06ffffff));
+	Colour c2 = JUCE_LIVE_CONSTANT_OFF(Colour(0x10000000));
+	Colour shadowLight = JUCE_LIVE_CONSTANT_OFF(Colour(0x58000000));
+        
+        
+	g.setGradientFill(ColourGradient(c1, 0.0f, (float)area.getY(), c2, 0.0f, (float)area.getBottom(), false));
+	g.fillRect(area);
+        
+	g.setColour(upperLight);
+        
+	g.drawHorizontalLine(area.getY(), (float)area.getX(), (float)area.getRight());
+        
+	g.setColour(shadowLight);
+	g.drawHorizontalLine(area.getBottom()-1, (float)area.getX(), (float)area.getRight());
+}
+
+PopupLookAndFeel::PopupLookAndFeel()
+{
+	comboBoxFont = GLOBAL_BOLD_FONT();
+
+	setColour(PopupMenu::highlightedBackgroundColourId, Colour(SIGNAL_COLOUR));
+
+	Colour dark = JUCE_LIVE_CONSTANT_OFF(Colour(0xff333333));
+
+	Colour bright(0xFFAAAAAA);
+
+	setColour(PopupMenu::ColourIds::backgroundColourId, dark);
+	setColour(PopupMenu::ColourIds::textColourId, bright);
+	setColour(PopupMenu::ColourIds::highlightedBackgroundColourId, bright);
+	setColour(PopupMenu::ColourIds::highlightedTextColourId, dark);
+	setColour(PopupMenu::ColourIds::headerTextColourId, bright);
+}
+
+int PopupLookAndFeel::showAtComponent(PopupMenu& m, Component* c, bool alignToBottom)
+{
+        
+	PopupMenu::Options options;
+	options = options.withTargetComponent (c);
+        
+	if(!alignToBottom)
+	{
+		Rectangle<int> r;
+            
+		r.setPosition(Desktop::getMousePosition());
+		options = options.withTargetScreenArea(r);
+	}
+        
+	return m.showMenu(options);
+}
+
+void PopupLookAndFeel::setComboBoxFont(Font f)
+{
+	comboBoxFont = f;
+}
+
+void PopupLookAndFeel::getIdealPopupMenuItemSize(const String& text, bool isSeparator, int standardMenuItemHeight,
+	int& idealWidth, int& idealHeight)
+{
+	if (HiseDeviceSimulator::isMobileDevice())
+	{
+		idealHeight = 28;
+
+		idealWidth = getPopupMenuFont().getStringWidth(text) + 50;
+	}
+	else
+	{
+		if (isSeparator)
+		{
+			idealWidth = 50;
+			idealHeight = standardMenuItemHeight > 0 ? standardMenuItemHeight / 2 : 10;
+		}
+		else
+		{
+			Font font(getPopupMenuFont());
+
+			if (standardMenuItemHeight > 0 && font.getHeight() > standardMenuItemHeight / 1.3f)
+				font.setHeight(standardMenuItemHeight / 1.3f);
+
+			idealHeight = standardMenuItemHeight > 0 ? standardMenuItemHeight : roundToInt(font.getHeight() * 1.3f);
+
+			idealHeight = jmax<int>(idealHeight, 18);
+
+			idealWidth = font.getStringWidth(text) + idealHeight * 2;
+		}
+	}
+}
+
+void PopupLookAndFeel::drawMenuBarItem(Graphics& g, int width, int height, int i, const String& itemText,
+	bool isMouseOverItem, bool isMenuOpen, bool cond, MenuBarComponent& menuBar)
+{
+	if (!menuBar.isEnabled())
+	{
+		g.setColour(menuBar.findColour(PopupMenu::textColourId));
+	}
+	else if (isMenuOpen || isMouseOverItem)
+	{
+		Colour c1 = findColour(PopupMenu::highlightedBackgroundColourId).withMultipliedBrightness(JUCE_LIVE_CONSTANT_OFF(1.4f));
+		Colour c2 = findColour(PopupMenu::highlightedBackgroundColourId).withMultipliedBrightness(1.1f);
+
+		g.setGradientFill(ColourGradient(c1, 0.0f, 0.0f, c2, 0.0f, (float)height, false));
+
+		g.fillRect(0, 0, width, height);
+
+		Colour dark(0xFF444444);
+
+			
+
+		g.setColour(dark);
+	}
+	else
+	{
+		g.setColour(JUCE_LIVE_CONSTANT_OFF(Colour(0xffbdbdbd)));
+	}
+
+	g.setFont(getPopupMenuFont());
+		
+	g.drawFittedText(itemText, 0, 0, width, height, Justification::centred, 1);
+
+		
+}
+
+void PopupLookAndFeel::drawTooltip(Graphics& g, const String& text, int width, int height)
+{
+	g.fillAll(Colour(0xFF444444));
+	g.setColour(Colours::white.withAlpha(0.8f));
+	g.drawRect(0, 0, width, height, 1);
+	g.setFont(GLOBAL_BOLD_FONT());
+	g.drawText(text, 0, 0, width, height, Justification::centred);
+}
+
+bool PopupLookAndFeel::shouldPopupMenuScaleWithTargetComponent(const PopupMenu::Options& options)
+{
+	return true;
+}
+
+void PopupLookAndFeel::drawPopupMenuBackground(Graphics& g, int width, int height)
+{
+	Colour c1 = findColour(PopupMenu::backgroundColourId).withMultipliedBrightness(JUCE_LIVE_CONSTANT_OFF(1.1f));
+	Colour c2 = findColour(PopupMenu::backgroundColourId).withMultipliedBrightness(0.9f);
+
+	g.setGradientFill(ColourGradient(c1, 0.0f, 0.0f, c2, 0.0f, (float)height, false));
+
+	g.fillRect(0.0f, 0.0f, (float)width, (float)height);
+	(void)width; (void)height;
+
+	g.setColour(JUCE_LIVE_CONSTANT_OFF(Colour(0xff555555)));
+
+	g.drawRect(0.0f, 0.0f, (float)width, (float)height, 1.0f);
+
+#if ! JUCE_MAC
+	g.setColour(findColour(PopupMenu::textColourId));
+	//g.drawRoundedRectangle(0.0f, 0.0f, (float)width, (float)height, 4.0f, 0.5f);
+#endif
+}
+
+void PopupLookAndFeel::drawPopupMenuItem(Graphics& g, const Rectangle<int>& area, bool isSeparator, bool isActive,
+	bool isHighlighted, bool isTicked, bool hasSubMenu, const String& text, const String& shortcutKeyText,
+	const Drawable* icon, const Colour* textColourToUse)
+{
+	if (isSeparator)
+	{
+		Rectangle<int> r (area.reduced (0, 0));
+		r.removeFromTop (r.getHeight() / 2 - 1);
+            
+		g.setColour (Colour(0x55999999));
+		g.fillRect (r.removeFromTop (1));
+	}
+	else
+	{
+		Colour textColour (findColour (PopupMenu::textColourId));
+            
+		if (textColourToUse != nullptr)
+			textColour = *textColourToUse;
+            
+		Rectangle<int> r (area.reduced (1));
+            
+		if (isHighlighted)
+		{
+			Colour c1 = findColour (PopupMenu::highlightedBackgroundColourId).withMultipliedBrightness(JUCE_LIVE_CONSTANT_OFF(1.4f));
+			Colour c2 = findColour(PopupMenu::highlightedBackgroundColourId).withMultipliedBrightness(1.1f);
+                
+			g.setGradientFill(ColourGradient(c1, 0.0f, 0.0f, c2, 0.0f, (float)r.getHeight(), false));
+
+			g.fillRect (r);
+                
+			g.setColour (findColour (PopupMenu::highlightedTextColourId));
+		}
+		else
+		{
+			g.setColour (textColour);
+		}
+            
+		if (! isActive)
+			g.setOpacity (0.3f);
+            
+		Font font (getPopupMenuFont());
+            
+		const float maxFontHeight = area.getHeight() / 1.3f;
+            
+		if (font.getHeight() > maxFontHeight)
+			font.setHeight (maxFontHeight);
+            
+		g.setFont (font);
+            
+		Rectangle<float> iconArea (r.removeFromLeft ((r.getHeight() * 5) / 4).reduced (3).toFloat());
+            
+		if (icon != nullptr)
+		{
+			if (auto dp = dynamic_cast<const DrawablePath*>(icon))
+			{
+				auto p = dp->getPath();
+
+				p.scaleToFit(iconArea.getX(), iconArea.getY(), iconArea.getWidth(), iconArea.getHeight(), true);
+
+				g.fillPath(p);
+			}
+			else
+			{
+				icon->drawWithin(g, iconArea, RectanglePlacement::centred | RectanglePlacement::onlyReduceInSize, 1.0f);
+			}
+
+				
+		}
+		else if (isTicked)
+		{
+			const Path tick (getTickShape (1.0f));
+			g.fillPath (tick, tick.getTransformToScaleToFit (iconArea, true));
+		}
+            
+		if (hasSubMenu)
+		{
+			const float arrowH = 0.6f * getPopupMenuFont().getAscent();
+                
+			const float x = (float) r.removeFromRight ((int) arrowH).getX();
+			const float halfH = (float) r.getCentreY();
+                
+			Path p;
+			p.addTriangle (x, halfH - arrowH * 0.5f,
+			               x, halfH + arrowH * 0.5f,
+			               x + arrowH * 0.6f, halfH);
+                
+			g.fillPath (p);
+		}
+            
+		r.removeFromRight (3);
+		g.drawFittedText (text, r, Justification::centredLeft, 1);
+            
+		if (shortcutKeyText.isNotEmpty())
+		{
+			Font f2 (font);
+			f2.setHeight (f2.getHeight() * 0.75f);
+			f2.setHorizontalScale (0.95f);
+			g.setFont (f2);
+                
+			g.drawText (shortcutKeyText, r, Justification::centredRight, true);
+		}
+	}
+}
+
+void PopupLookAndFeel::drawPopupMenuSectionHeader(Graphics& g, const Rectangle<int>& area, const String& sectionName)
+{
+	g.setFont (getPopupMenuFont());
+	g.setColour (Colours::white);
+        
+	g.drawFittedText (sectionName,
+	                  area.getX() + 12, area.getY(), area.getWidth() - 16, (int) (area.getHeight() * 0.8f),
+	                  Justification::bottomLeft, 1);
+}
+
+Rectangle<int> PopupLookAndFeel::getPropertyComponentContentPosition(PropertyComponent& component)
+{
+	const int textW = jmin(200, component.getWidth() / 3);
+	return Rectangle<int>(textW, 1, component.getWidth() - textW - 1 - component.getHeight()-1, component.getHeight() - 3);
+}
+
+Component* PopupLookAndFeel::getParentComponentForMenuOptions(const PopupMenu::Options& options)
+{
+	if (HiseDeviceSimulator::isAUv3())
+	{
+		if (options.getParentComponent() == nullptr && options.getTargetComponent() != nullptr)
+			return options.getTargetComponent()->getTopLevelComponent();
+	}
+		
+	return LookAndFeel_V3::getParentComponentForMenuOptions(options);
+
+}
+
+Font PopupLookAndFeel::getComboBoxFont(ComboBox& comboBox)
+{
+	return comboBoxFont;
+}
+
 void PopupLookAndFeel::drawHiBackground(Graphics &g, int x, int y, int width, int height, Component *c /*= nullptr*/, bool isMouseOverButton /*= false*/)
 {
-	Colour upperBgColour = (c != nullptr) ? c->findColour(HiseColourScheme::ColourIds::ComponentFillTopColourId) :
+	Colour upperBgColour = (c != nullptr) ? c->findColour(HiseColourScheme::ColourIds::ComponentFillTopColourId, true) :
 		Colour(0x66333333);
 
-	Colour lowerBgColour = (c != nullptr) ? c->findColour(HiseColourScheme::ColourIds::ComponentFillBottomColourId) :
+	Colour lowerBgColour = (c != nullptr) ? c->findColour(HiseColourScheme::ColourIds::ComponentFillBottomColourId, true) :
 		Colour(0xfb111111);
 
 	g.setGradientFill(ColourGradient(upperBgColour.withMultipliedBrightness(isMouseOverButton ? 1.6f : 1.1f),
@@ -982,7 +1646,7 @@ void PopupLookAndFeel::drawHiBackground(Graphics &g, int x, int y, int width, in
 
 	g.fillRect((float)x, (float)y, (float)width, (float)height);
 
-	Colour outlineColour = (c != nullptr) ? c->findColour(HiseColourScheme::ColourIds::ComponentOutlineColourId) :
+	Colour outlineColour = (c != nullptr) ? c->findColour(HiseColourScheme::ColourIds::ComponentOutlineColourId, true) :
 		Colours::white.withAlpha(0.3f);
 
 	g.setColour(outlineColour);
@@ -1014,7 +1678,10 @@ juce::Font PopupLookAndFeel::getPopupMenuFont()
 
 void PopupLookAndFeel::drawComboBox(Graphics &g, int width, int height, bool isButtonDown, int, int, int, int, ComboBox &c)
 {
-	c.setColour(ComboBox::ColourIds::textColourId, c.findColour(HiseColourScheme::ColourIds::ComponentTextColourId));
+    auto textColour = c.findColour(HiseColourScheme::ColourIds::ComponentTextColourId, true);
+    //jassert(textColour != Colours::transparentBlack);
+    
+	c.setColour(ComboBox::ColourIds::textColourId, textColour);
 
 	drawHiBackground(g, 0, 0, width, height - 2, dynamic_cast<ComboBox*>(&c), isButtonDown);
 
@@ -1025,7 +1692,7 @@ void PopupLookAndFeel::drawComboBox(Graphics &g, int width, int height, bool isB
 
 	path.scaleToFit((float)width - 20.0f, (float)(height - 12) * 0.5f, 12.0f, 12.0f, true);
 
-	g.setColour(c.findColour(HiseColourScheme::ColourIds::ComponentTextColourId));
+	g.setColour(c.findColour(HiseColourScheme::ColourIds::ComponentTextColourId, true));
 	g.fillPath(path);
 }
 
@@ -1071,6 +1738,36 @@ void ScriptnodeComboBoxLookAndFeel::drawScriptnodeDarkBackground(Graphics& g, Re
 	}
 }
 
+TableHeaderLookAndFeel::TableHeaderLookAndFeel()
+{
+	f = GLOBAL_BOLD_FONT();
+
+	bgColour = Colour(0xff474747);
+	textColour = Colour(0xa2ffffff);
+}
+
+void TableHeaderLookAndFeel::drawTableHeaderBackground(Graphics& graphics, TableHeaderComponent& tableHeaderComponent)
+{
+		
+		
+}
+
+void TableHeaderLookAndFeel::drawTableHeaderColumn(Graphics& g, TableHeaderComponent& tableHeaderComponent,
+	const String& columnName, int i, int width, int height, bool cond, bool cond1, int i1)
+{
+	if (width > 0)
+	{
+		g.setColour(bgColour);
+
+		g.fillRect(0.0f, 0.0f, (float)width - 1.0f, (float)height);
+
+		g.setFont(f);
+		g.setColour(textColour);
+
+		g.drawText(columnName, 3, 0, width - 3, height, Justification::centredLeft, true);
+	}
+}
+
 Rectangle<int> getTextBoundsForComboBox(ComboBox& c)
 {
 	if (c.getHeight() < 20)
@@ -1084,6 +1781,31 @@ void PopupLookAndFeel::positionComboBoxText(ComboBox &c, Label &labelToPosition)
 	labelToPosition.setBounds(getTextBoundsForComboBox(c));
 
 	labelToPosition.setFont(getComboBoxFont(c));
+}
+
+PopupMenu::Options PopupLookAndFeel::getOptionsForComboBoxPopupMenu (ComboBox& box, Label& label)
+{
+    auto options = LookAndFeel_V3::getOptionsForComboBoxPopupMenu(box, label);
+    
+    auto alignment = box.getProperties()["popupAlignment"].toString();
+    
+    if(alignment.isNotEmpty())
+    {
+        auto area = options.getTargetScreenArea().toFloat();
+        
+        auto sf = UnblurryGraphics::getScaleFactorForComponent(&box);
+        
+        if(alignment == "topRight")
+            area.translate((float)box.getWidth() * sf, -1.0f * (float)box.getHeight() * sf);
+        if(alignment == "bottomRight")
+            area.translate((float)box.getWidth() * sf, 0.0f);
+        if(alignment == "top")
+            area.translate(0.0f, -1.0f * (float)box.getHeight() * sf);
+        
+        return options.withTargetScreenArea(area.toNearestInt());
+    }
+    
+    return options;
 }
 
 void PopupLookAndFeel::drawComboBoxTextWhenNothingSelected(Graphics& g, ComboBox& box, Label& label)
@@ -1159,6 +1881,18 @@ void FrontendKnobLookAndFeel::drawRotarySlider(Graphics &g, int /*x*/, int /*y*/
 	g.drawImageAt(clip, 0, 0);
 }
 
+void FrontendKnobLookAndFeel::setCustomFilmstripImage(const Image* customImage, int numFilmstrips)
+{
+	if (numFilmstrips != 0 && customImage->isValid())
+	{
+		volumeFilmStrip = customImage->createCopy();
+		balanceFilmStrip = volumeFilmStrip;
+
+		numStrips = numFilmstrips;
+		useCustomStrip = true;
+	}
+}
+
 void AlertWindowLookAndFeel::drawButtonText(Graphics &g, TextButton &button, bool /*isMouseOverButton*/, bool /*isButtonDown*/)
 {
 	Font font(getTextButtonFont(button, button.getHeight()));
@@ -1229,6 +1963,44 @@ void AlertWindowLookAndFeel::drawAlertBox(Graphics &g, AlertWindow &alert, const
 
 	g.setColour(bright);
 	g.drawRect(0, 0, alert.getWidth(), alert.getHeight());
+}
+
+
+BalanceButtonLookAndFeel::BalanceButtonLookAndFeel()
+{
+}
+
+void BalanceButtonLookAndFeel::drawRotarySlider(Graphics& g, int x, int y, int width, int height,
+	float sliderPosProportional, float rotaryStartAngle, float rotaryEndAngle, Slider& s)
+{
+	auto area = Rectangle<int>(x, y, width, height).toFloat();
+	area.removeFromBottom(JUCE_LIVE_CONSTANT_OFF(3.0f));
+	auto size = jmin(area.getWidth(), area.getHeight());
+
+	if(s.isMouseButtonDown())
+		size -= 1.0f;
+
+	area = area.withSizeKeepingCentre(size, size);
+
+	float alpha = 0.5f;
+
+	if(s.isMouseOverOrDragging())
+		alpha += 0.3f;
+
+	if(s.isMouseButtonDown(true))
+		alpha += 0.2f;
+
+	Path track, thumb;
+
+	float radius = JUCE_LIVE_CONSTANT_OFF(0.6f);
+
+	track.addPieSegment(area, -2.7f, 2.7f, radius);
+	thumb.addPieSegment(area, 0.0f, -2.7f + (2.7f * 2.0f * sliderPosProportional), radius);
+
+	g.setColour(Colours::black.withAlpha(sliderPosProportional != 0.5 ? 0.3f : 0.15f));
+	g.fillPath(track);
+	g.setColour(Colour(0xFF111111).withAlpha(alpha));
+	g.fillPath(thumb);
 }
 
 
@@ -1304,6 +2076,26 @@ void ChainBarButtonLookAndFeel::drawButtonBackground(Graphics &g, Button &b, con
 	g.fillPath(path);
 }
 
+MacroKnobLookAndFeel::MacroKnobLookAndFeel()
+{
+	cachedImage_macroKnob_png = ImageProvider::getImage(ImageProvider::KnobEmpty);// ImageCache::getFromMemory(macroKnob_png, macroKnob_pngSize);
+	cachedImage_macroKnob_ring_png = ImageProvider::getImage(ImageProvider::KnobUnmodulated);
+}
+
+Label* MacroKnobLookAndFeel::createSliderTextBox(Slider& slider)
+{
+
+
+	Label *label = new Label("Textbox");
+	label->setFont (GLOBAL_FONT());
+	label->setEditable (false, false, false);
+	label->setColour (Label::textColourId, Colours::black);
+		
+	label->setJustificationType (Justification::centred);
+
+	return label;
+}
+
 BlackTextButtonLookAndFeel::BlackTextButtonLookAndFeel()
 {
 	//================== CheckboxOff.png ==================
@@ -1333,6 +2125,49 @@ BlackTextButtonLookAndFeel::BlackTextButtonLookAndFeel()
 
 	f = GLOBAL_BOLD_FONT();
 	textColour = Colours::white;
+}
+
+void BlackTextButtonLookAndFeel::drawButtonBackground(Graphics& g, Button& button, const Colour& colour,
+	bool isMouseOverButton, bool isButtonDown)
+{
+		
+
+	auto area = button.getLocalBounds().toFloat();
+
+	if (button.getToggleState())
+	{
+		g.setColour(textColour);
+		g.drawRoundedRectangle(area.reduced(1.0f), 4.0f, 1.0f);
+	}
+
+	float alpha = 0.2f;
+
+	if (isButtonDown)
+		alpha += 0.1f;
+
+	if (isMouseOverButton)
+		alpha += 0.1f;
+
+	if (!button.isEnabled())
+		alpha = 0.1f;
+		
+
+	g.setGradientFill(ColourGradient(Colours::white.withAlpha(alpha + 0.1f), 0.0f, 0.0f,
+	                                 Colours::white.withAlpha(alpha), 0.0f, (float)button.getHeight(), false));
+
+	g.fillRoundedRectangle(area, 4.0f);
+}
+
+void BlackTextButtonLookAndFeel::drawButtonText(Graphics& g, TextButton& b, bool cond, bool cond1)
+{
+	float alpha = 1.0f;
+
+	if (!b.isEnabled())
+		alpha = 0.5f;
+
+	g.setColour(textColour.withMultipliedAlpha(alpha));
+	g.setFont(f);
+	g.drawText(b.getButtonText(), b.getLocalBounds().toFloat(), Justification::centred);
 }
 
 void BlackTextButtonLookAndFeel::drawToggleButton(Graphics &g, ToggleButton &b, bool , bool)
@@ -1432,8 +2267,10 @@ void PresetBrowserLookAndFeelMethods::drawPresetBrowserButtonBackground(Graphics
     }
 }
 
+
 void PresetBrowserLookAndFeelMethods::drawListItem(Graphics& g, int columnIndex, int, const String& itemName, Rectangle<int> position, bool rowIsSelected, bool deleteMode, bool hover)
 {
+#if !HISE_NO_GUI_TOOLS
     float alphaBoost = hover ? 0.1f : 0.0f;
 
     g.setGradientFill(ColourGradient(highlightColour.withAlpha(0.3f + alphaBoost), 0.0f, 0.0f,
@@ -1458,6 +2295,7 @@ void PresetBrowserLookAndFeelMethods::drawListItem(Graphics& g, int columnIndex,
     g.setColour(textColour);
     g.setFont(font.withHeight(16.0f));
     g.drawText(itemName, columnIndex == 2 ? 10 + 26 : 10, 0, position.getWidth() - 20, position.getHeight(), Justification::centredLeft);
+#endif
 }
 
 void PresetBrowserLookAndFeelMethods::drawPresetBrowserButtonText(Graphics& g, TextButton& button, bool isMouseOverButton, bool isButtonDown)
@@ -1475,6 +2313,111 @@ void PresetBrowserLookAndFeelMethods::drawPresetBrowserButtonText(Graphics& g, T
     }
 }
 
+void BiPolarSliderLookAndFeel::drawLinearSlider(Graphics& g, int i, int i1, int width, int height, float x, float x1,
+	float x2, const Slider::SliderStyle style, Slider& s)
+{
+
+	if (style == Slider::SliderStyle::LinearBarVertical)
+	{
+		const bool isBiPolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;
+
+		float leftY;
+		float actualHeight;
+
+		const float max = (float)s.getMaximum();
+		const float min = (float)s.getMinimum();
+
+		g.fillAll(s.findColour(Slider::ColourIds::backgroundColourId));
+
+		if (isBiPolar)
+		{
+			const float value = (-1.0f * (float)s.getValue() - min) / (max - min);
+
+			leftY = (value < 0.5f ? value * (float)(height) : 0.5f * (float)(height));
+			actualHeight = fabs(0.5f - value) * (float)(height);
+		}
+		else
+		{
+			const double value = s.getValue();
+			const double normalizedValue = (value - s.getMinimum()) / (s.getMaximum() - s.getMinimum());
+			const double proportion = pow(normalizedValue, s.getSkewFactor());
+
+			//const float value = ((float)s.getValue() - min) / (max - min);
+
+			actualHeight = (float)proportion * (float)(height);
+			leftY = (float)height - actualHeight ;
+		}
+
+		Colour c = s.findColour(Slider::ColourIds::thumbColourId);
+
+		g.setGradientFill(ColourGradient(c.withMultipliedAlpha(s.isEnabled() ? 1.0f : 0.4f),
+		                                 0.0f, 0.0f,
+		                                 c.withMultipliedAlpha(s.isEnabled() ? 1.0f : 0.3f).withMultipliedBrightness(0.9f),
+		                                 0.0f, (float)height,
+		                                 false));
+
+		g.fillRect(0.0f, leftY, (float)(width+1), actualHeight+1.0f);
+
+		if (width > 4)
+		{
+			//g.setColour(Colours::white.withAlpha(0.3f));
+			g.setColour(s.findColour(Slider::trackColourId));
+			g.drawRect(0.0f, leftY, (float)(width + 1), actualHeight + 1.0f, 1.0f);
+		}
+
+			
+	}
+	else
+	{
+		const bool isBiPolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;
+
+		float leftX;
+		float actualWidth;
+
+		const float max = (float)s.getMaximum();
+		const float min = (float)s.getMinimum();
+
+		g.fillAll(Colour(0xfb333333));
+
+		if (isBiPolar)
+		{
+			const float value = ((float)s.getValue() - min) / (max - min);
+
+			leftX = 2.0f + (value < 0.5f ? value * (float)(width - 2) : 0.5f * (float)(width - 2));
+			actualWidth = fabs(0.5f - value) * (float)(width - 2);
+		}
+		else
+		{
+			const double value = s.getValue();
+			const double normalizedValue = (value - s.getMinimum()) / (s.getMaximum() - s.getMinimum());
+			const double proportion = pow(normalizedValue, s.getSkewFactor());
+
+			//const float value = ((float)s.getValue() - min) / (max - min);
+
+			leftX = 2;
+			actualWidth = (float)proportion * (float)(width - 2);
+		}
+
+		g.setGradientFill(ColourGradient(Colour(0xff888888).withAlpha(s.isEnabled() ? 0.8f : 0.4f),
+		                                 0.0f, 0.0f,
+		                                 Colour(0xff666666).withAlpha(s.isEnabled() ? 0.8f : 0.4f),
+		                                 0.0f, (float)height,
+		                                 false));
+		g.fillRect(leftX, 2.0f, actualWidth, (float)(height - 2));
+	}
+
+		
+
+}
+
+void BiPolarSliderLookAndFeel::drawLinearSliderBackground(Graphics& graphics, int i, int i1, int i2, int i3, float x,
+	float x1, float x2, const Slider::SliderStyle sliderStyle, Slider& slider)
+{}
+
+Font BiPolarSliderLookAndFeel::getLabelFont(Label& label)
+{
+	return GLOBAL_FONT();
+}
 
 
 void PresetBrowserLookAndFeelMethods::drawModalOverlay(Graphics& g, Rectangle<int> area, Rectangle<int> labelArea, const String& title, const String& command)
@@ -1562,41 +2505,111 @@ void ProcessorEditorHeaderLookAndFeel::drawBackground(Graphics &g, float width, 
 		g.fillAll();
 }
 
-void PeriodicScreenshotter::drawGlassSection(Graphics& g, Component* c, Rectangle<int> b, Point<int> offset)
+AlertWindowLookAndFeel::AlertWindowLookAndFeel()
 {
-    if (b.isEmpty())
-        b = c->getLocalBounds();
+	dark = Colour(0xFF252525);
+	bright = Colour(0xFFAAAAAA);
 
-    auto area = comp->getLocalArea(c, b);
-    area = area.getIntersection(comp->getLocalBounds());
-
-    b = c->getLocalArea(comp, area);
-    auto clip = img.getClippedImage(area.translated(offset.getX(), offset.getY()).transformedBy(AffineTransform::scale(0.5f)));
-    g.setOpacity(1.0f);
-
-    g.saveState();
-    g.setImageResamplingQuality(Graphics::lowResamplingQuality);
-    g.drawImageWithin(clip, b.getX(), b.getY(), b.getWidth(), b.getHeight(), RectanglePlacement::fillDestination);
-    g.restoreState();
+	setColour(PopupMenu::ColourIds::backgroundColourId, dark);
+	setColour(PopupMenu::ColourIds::textColourId, bright);
+	setColour(PopupMenu::ColourIds::highlightedBackgroundColourId, bright);
+	setColour(PopupMenu::ColourIds::highlightedTextColourId, dark);
+	setColour(PopupMenu::ColourIds::headerTextColourId, dark);
+        
+        
+	setColour (TextEditor::highlightColourId, Colour (SIGNAL_COLOUR).withAlpha(0.5f));
+	setColour (TextEditor::ColourIds::focusedOutlineColourId, Colour (SIGNAL_COLOUR));
+                                  
 }
 
-void PeriodicScreenshotter::PopupGlassLookAndFeel::drawPopupMenuBackgroundWithOptions (Graphics& g,
-                                                 int width,
-                                                 int height,
-                                                 const PopupMenu::Options& o)
+Font AlertWindowLookAndFeel::getAlertWindowMessageFont()
 {
-    g.fillAll(Colour(0xEE404040));
-    if(auto s = holder->getScreenshotter())
-    {
-        auto x = o.getTargetScreenArea().getX();
-        auto y = o.getTargetScreenArea().getX();
-        s->drawGlassSection(g, dynamic_cast<Component*>(holder.get()), {0, 0, width, height}, {x, y});
-    }
-    
-    g.fillAll(Colour(0x22000000));
-    
-    g.setColour(Colours::white.withAlpha(0.1f));
-    g.drawRect(0, 0, width, height);
+	return GLOBAL_BOLD_FONT();
 }
 
+Font AlertWindowLookAndFeel::getAlertWindowTitleFont()
+{
+	if (HiseDeviceSimulator::isMobileDevice())
+	{
+		return GLOBAL_BOLD_FONT().withHeight(24.0f);
+	}
+	else
+	{
+		return GLOBAL_BOLD_FONT().withHeight(17.0f);
+	}
+}
+
+Font AlertWindowLookAndFeel::getTextButtonFont(TextButton& textButton, int i)
+{
+	return getAlertWindowFont();
+}
+
+Font AlertWindowLookAndFeel::getComboBoxFont(ComboBox& comboBox)
+{
+	return GLOBAL_FONT();
+}
+
+Font AlertWindowLookAndFeel::getPopupMenuFont()
+{
+	return GLOBAL_BOLD_FONT();
+}
+
+void AlertWindowLookAndFeel::drawPopupMenuBackground(Graphics& g, int width, int height)
+{
+	g.setColour((findColour(PopupMenu::backgroundColourId)));
+	g.fillRect(0.0f, 0.0f, (float)width, (float)height);
+}
+
+Font AlertWindowLookAndFeel::getAlertWindowFont()
+{
+	return GLOBAL_BOLD_FONT();
+}
+
+void AlertWindowLookAndFeel::setColourIdsForAlertWindow(AlertWindow& window)
+{
+	window.setColour(AlertWindow::ColourIds::backgroundColourId, dark);
+	window.setColour(AlertWindow::ColourIds::textColourId, bright);
+	window.setColour(AlertWindow::ColourIds::outlineColourId, bright);
+}
+
+void AlertWindowLookAndFeel::drawProgressBar(Graphics& g, ProgressBar& progressBar, int width, int height,
+	double progress, const String& textToShow)
+{
+	const Colour background = bright;
+	const Colour foreground = dark;
+
+	g.fillAll (dark);
+
+	if (progress >= 0.0f && progress < 1.0f)
+	{
+		ColourGradient grad(bright, 0.0f, 0.0f, bright.withAlpha(0.6f), 0.0f, (float)height, false);
+
+		g.setColour(bright);
+
+		g.drawRect(0, 0, width, height);
+
+		int x = 2;
+		int y = 2;
+		int w = (int)((width - 4) * progress);
+		int h = height - 4;
+
+		g.setGradientFill(grad);
+
+		g.fillRect(x,y,w,h);
+	}
+	else
+	{
+			
+			
+	}
+
+	if (textToShow.isNotEmpty())
+	{
+		g.setColour (Colour::contrasting (background, foreground));
+		g.setFont (GLOBAL_FONT());
+
+		g.drawText (textToShow, 0, 0, width, height, Justification::centred, false);
+	}
+
+}
 } // namespace hise

@@ -53,9 +53,6 @@ END_JUCE_MODULE_DECLARATION
 #ifndef HI_STREAMING_INCLUDED
 #define HI_STREAMING_INCLUDED
 
-
-#include "AppConfig.h"
-
 #include <atomic>
 
 #include "../JUCE/modules/juce_core/juce_core.h"
@@ -87,9 +84,20 @@ Set this to true if you add this module to your existing C++ project and don't e
 #define STANDALONE_STREAMING 1
 #endif
 
+/** Config: HISE_SAMPLER_CUBIC_INTERPOLATION
+
+Set this to true in order to use cubic interpolation for the sample playback.
+
+*/
+#ifndef HISE_SAMPLER_CUBIC_INTERPOLATION
+#define HISE_SAMPLER_CUBIC_INTERPOLATION 0
+#endif
+
 
 #include "hi_streaming/lockfree_fifo/readerwriterqueue.h"
 #include "hi_streaming/lockfree_fifo/concurrentqueue.h"
+
+#include "timestretch/time_stretcher.h"
 
 #include "hi_streaming/SampleThreadPool.h"
 #include "hi_streaming/MonolithAudioFormat.h"

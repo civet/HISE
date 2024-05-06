@@ -36,6 +36,7 @@ ModuleBrowser::ModuleBrowser(BackendRootWindow* rootWindow) :
 SearchableListComponent(rootWindow)
 {
 	setName("Module Browser");
+    setFuzzyness(0.6);
 }
 
 
@@ -125,7 +126,7 @@ void ModuleBrowser::ModuleItem::paintPopupBox(Graphics &g) const
 }
 
 ModuleBrowser::ModuleItem::ModuleItem(String name_, Identifier id_) :
-Item(name_.toLowerCase()),
+Item(name_.toLowerCase().replaceCharacter(' ', ';')),
 id(id_),
 name(name_),
 state(Inactive)
@@ -148,7 +149,7 @@ void ModuleBrowser::ModuleItem::setParameters(const ValueTree &v)
 
 ModuleBrowser::ModuleCollection::ModuleCollection(Types t)
 {
-	File f = NativeFileHandler::getAppDataDirectory().getChildFile("moduleEnums.xml");
+	File f = NativeFileHandler::getAppDataDirectory(nullptr).getChildFile("moduleEnums.xml");
 
 	jassert(f.existsAsFile());
 
@@ -191,7 +192,7 @@ ModuleBrowser::ModuleCollection::ModuleCollection(Types t)
 	case ModuleBrowser::ModuleCollection::ModulatorSynths:
 		typeName = "Sound Generators";
 		factoryType = new ModulatorSynthChainFactoryType(NUM_POLYPHONIC_VOICES, nullptr);
-		p.loadPathFromData(BackendBinaryData::ToolbarIcons::keyboard, sizeof(BackendBinaryData::ToolbarIcons::keyboard));
+		p.loadPathFromData(BackendBinaryData::ToolbarIcons::keyboard, SIZE_OF_PATH(BackendBinaryData::ToolbarIcons::keyboard));
 		c = Colours::white.withAlpha(0.7f);
         
 		if (xml != nullptr) vt = ValueTree::fromXml(*xml->getChildByName("ModulatorSynths"));
@@ -199,7 +200,7 @@ ModuleBrowser::ModuleCollection::ModuleCollection(Types t)
 	case ModuleBrowser::ModuleCollection::Effects:
 		typeName = "Effects";
 		factoryType = new EffectProcessorChainFactoryType(NUM_POLYPHONIC_VOICES, nullptr);
-		p.loadPathFromData(HiBinaryData::ProcessorIcons::effectChain, sizeof(HiBinaryData::ProcessorIcons::effectChain));
+		p.loadPathFromData(HiBinaryData::ProcessorIcons::effectChain, SIZE_OF_PATH(HiBinaryData::ProcessorIcons::effectChain));
 		c = Colour(EFFECT_PROCESSOR_COLOUR);
 		if (xml != nullptr) vt = ValueTree::fromXml(*xml->getChildByName("Effects"));
 		break;

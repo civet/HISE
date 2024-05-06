@@ -244,13 +244,14 @@ FileBrowser::FileBrowser(BackendRootWindow* rootWindow_) :
 
     auto vp = fileTreeComponent->getViewport();
     
-    vp->setScrollBarThickness(14);
+    vp->setScrollBarThickness(13);
     
     sf.addScrollBarToAnimate(vp->getVerticalScrollBar());
 
 #if HISE_IOS
 #else
-    goToDirectory(GET_PROJECT_HANDLER(rootWindow->getMainSynthChain()).getWorkDirectory());
+
+	resetToRoot();
 #endif
 
 	browseUndoManager->clearUndoHistory();
@@ -354,8 +355,7 @@ bool FileBrowser::perform(const InvocationInfo &info)
 	{
 	case ShowFavoritePopup:
 	{
-		goToDirectory(GET_PROJECT_HANDLER(rootWindow->getMainSynthChain()).getWorkDirectory());
-
+		resetToRoot();
 		return true;
 	}
 	case HardDisks:
@@ -442,7 +442,7 @@ struct AudioPreviewComponent: public Component,
         addAndMakeVisible(stopButton);
         
         double unused;
-        b = hlac::CompressionHelpers::loadFile(f, unused);
+        b = hlac::CompressionHelpers::loadFile(f, unused, &sr);
         
         getMainController()->addPreviewListener(this);
         
@@ -459,6 +459,8 @@ struct AudioPreviewComponent: public Component,
         startPreview();
     }
     
+	double sr = 44100.0;
+
     void buttonClicked(Button* b) override
     {
         if(b == &startButton)
@@ -546,7 +548,7 @@ struct AudioPreviewComponent: public Component,
     
     void startPreview()
     {
-        getMainController()->setBufferToPlay(b);
+        getMainController()->setBufferToPlay(b, sr);
     }
     
     void stopPreview()
@@ -760,6 +762,14 @@ void FileBrowser::previewFile(const File& f)
 	rootWindow->getRootFloatingTile()->showComponentInRootPopup(content, fileTreeComponent, bounds.getCentre(), wrapInViewport);
 }
 
+void FileBrowser::resetToRoot()
+{
+	if(auto am = rootWindow->getBackendProcessor()->assetManager)
+		goToDirectory(am->getRootFolder());
+	else
+		goToDirectory(GET_PROJECT_HANDLER(rootWindow->getMainSynthChain()).getWorkDirectory());
+}
+
 FileBrowser::~FileBrowser()
 {
 	//GET_PROJECT_HANDLER(rootWindow->getMainSynthChain()).removeListener(this);
@@ -932,7 +942,7 @@ void FileBrowser::mouseDoubleClick(const MouseEvent& )
     }
 }
 
-void FileBrowser::textEditorReturnKeyPressed(TextEditor& editor)
+void FileBrowser::textEditorTextChanged(TextEditor& editor)
 {
 	if (&editor == textEditor)
 	{
@@ -1019,5 +1029,6 @@ bool FileBrowser::HiseFileBrowserFilter::isDirectorySuitable(const File& directo
 
 	return true;
 }
+
 
 } // namespace hise

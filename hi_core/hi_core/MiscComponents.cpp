@@ -38,6 +38,9 @@ callbackLevels(getCallbackLevels()),
 constrainer(new RectangleConstrainer())
 {
 	initMacroControl(dontSendNotification);
+
+	for(int i = 0; i < (int)Action::Nothing; i++)
+		clickInformation[i] = new DynamicObject();
 }
 
 
@@ -79,6 +82,7 @@ StringArray MouseCallbackComponent::getCallbackPropertyNames()
 	sa.add("rightClick");
 	sa.add("mouseUp");
 	sa.add("drag");
+	sa.add("isDragOnly");
 	sa.add("dragX");
 	sa.add("dragY");
 	sa.add("insideDrag");
@@ -100,125 +104,11 @@ void MouseCallbackComponent::setPopupMenuItems(const StringArray &newItemList)
 	itemList.addArray(newItemList);
 }
 
+
+
 juce::PopupMenu MouseCallbackComponent::parseFromStringArray(const StringArray& itemList, Array<int> activeIndexes, LookAndFeel* laf)
 {
-	PopupMenu m;
-
-	
-	m.setLookAndFeel(laf);
-
-	std::vector<MouseCallbackComponent::SubMenuList> subMenus;
-
-	for (int i = 0; i < itemList.size(); i++)
-	{
-		if (itemList[i].contains("::"))
-		{
-			String subMenuName = itemList[i].upToFirstOccurrenceOf("::", false, false);
-			String subMenuItem = itemList[i].fromFirstOccurrenceOf("::", false, false);
-
-			if (subMenuName.isEmpty() || subMenuItem.isEmpty()) continue;
-
-			bool subMenuExists = false;
-
-			for (size_t j = 0; j < subMenus.size(); j++)
-			{
-				if (std::get<0>(subMenus[j]) == subMenuName)
-				{
-					std::get<1>(subMenus[j]).add(subMenuItem);
-					subMenuExists = true;
-					break;
-				}
-			}
-
-			if (!subMenuExists)
-			{
-				StringArray sa;
-				sa.add(subMenuItem);
-				MouseCallbackComponent::SubMenuList item(subMenuName, sa);
-				subMenus.push_back(item);
-			}
-		}
-	}
-	if (subMenus.size() != 0)
-	{
-		int menuIndex = 1;
-
-		for (size_t i = 0; i < subMenus.size(); i++)
-		{
-			PopupMenu sub;
-
-			StringArray sa = std::get<1>(subMenus[i]);
-
-			bool subIsTicked = false;
-
-			for (int j = 0; j < sa.size(); j++)
-			{
-				if (sa[j].startsWith("**") && sa[j].endsWith("**"))
-				{
-					sub.addSectionHeader(sa[j].replace("**", ""));
-					continue;
-				}
-
-				if (sa[j] == "___")
-				{
-					sub.addSeparator();
-					continue;
-				}
-
-				if (sa[j] == "%SKIP%")
-				{
-					menuIndex++;
-					continue;
-				}
-
-				const bool isDeactivated = sa[j].startsWith("~~") && sa[j].endsWith("~~");
-				const String itemText = isDeactivated ? sa[j].replace("~~", "") : sa[j];
-
-				const bool isTicked = activeIndexes.contains((menuIndex - 1));
-
-				if (isTicked) subIsTicked = true;
-
-				sub.addItem(menuIndex, itemText, !isDeactivated, isTicked);
-
-
-				menuIndex++;
-			}
-
-			m.addSubMenu(std::get<0>(subMenus[i]), sub, true, nullptr, subIsTicked);
-		}
-	}
-	else
-	{
-		int menuIndex = 0;
-
-		for (int i = 0; i < itemList.size(); i++)
-		{
-			if (itemList[i] == "%SKIP%")
-			{
-				menuIndex++;
-				continue;
-			}
-
-			if (itemList[i].startsWith("**") && itemList[i].endsWith("**"))
-			{
-				m.addSectionHeader(itemList[i].replace("**", ""));
-				continue;
-			}
-
-			if (itemList[i] == "___")
-			{
-				m.addSeparator();
-				continue;
-			}
-
-			const bool isDeactivated = itemList[i].startsWith("~~") && itemList[i].endsWith("~~");
-			const String itemText = isDeactivated ? itemList[i].replace("~~", "") : itemList[i];
-			m.addItem(menuIndex + 1, itemText, !isDeactivated, activeIndexes.contains(menuIndex));
-			menuIndex++;
-		}
-	}
-
-	return m;
+	return SubmenuComboBox::parseFromStringArray(itemList, activeIndexes, laf);
 }
 
 void MouseCallbackComponent::setUseRightClickForPopup(bool shouldUseRightClickForPopup)
@@ -286,6 +176,8 @@ void MouseCallbackComponent::setEnableFileDrop(const String& newCallbackLevel, c
 
 void MouseCallbackComponent::mouseDown(const MouseEvent& event)
 {
+	CHECK_MIDDLE_MOUSE_DOWN(event);
+
 	ignoreMouseUp = false;
 	startTouch(event.getMouseDownPosition());
 
@@ -404,18 +296,8 @@ void MouseCallbackComponent::fillPopupMenu(const MouseEvent &event)
 	
 	ScopedValueSetter<bool>(currentlyShowingPopup, true, false);
 
-	int result = 0;
-
-	if (popupShouldBeAligned)
-	{
-		auto gm = dynamic_cast<GlobalSettingManager*>(getProcessor()->getMainController());
-		result = m.showAt(this, 0, getWidth() * gm->getGlobalScaleFactor());
-	}
-	else
-	{
-		result = m.show();
-	}
-
+	auto result = PopupLookAndFeel::showAtComponent(m, this, popupShouldBeAligned);
+    
 	String itemName = result != 0 ? itemList[result - 1] : "";
 
 	auto obj = new DynamicObject();
@@ -496,6 +378,8 @@ void MouseCallbackComponent::mouseMove(const MouseEvent& event)
 
 void MouseCallbackComponent::mouseDrag(const MouseEvent& event)
 {
+	CHECK_MIDDLE_MOUSE_DRAG(event);
+
 	if (draggingEnabled)
 	{
 		dragger.dragComponent(this, event, constrainer);
@@ -522,6 +406,8 @@ void MouseCallbackComponent::mouseExit(const MouseEvent &event)
 
 void MouseCallbackComponent::mouseUp(const MouseEvent &event)
 {
+	CHECK_MIDDLE_MOUSE_UP(event);
+
 	abortTouch();
 
 	if (draggingEnabled)
@@ -577,17 +463,23 @@ void MouseCallbackComponent::sendFileMessage(Action a, const String& f, Point<in
 
 
 
-juce::var MouseCallbackComponent::getMouseCallbackObject(Component* c, const MouseEvent& event, CallbackLevel callbackLevel, Action action, EnterState state)
+void MouseCallbackComponent::fillMouseCallbackObject(var& clickInformation, Component* c, const MouseEvent& event, CallbackLevel callbackLevel, Action action, EnterState state)
 {
-	auto e = new DynamicObject();
-	var clickInformation(e);
+	auto e = clickInformation.getDynamicObject();
 
+	if(e == nullptr)
+	{
+		auto e = new DynamicObject();
+		clickInformation = var(e);
+	}
+	
 	static const Identifier x("x");
 	static const Identifier y("y");
 	static const Identifier clicked("clicked");
 	static const Identifier doubleClick("doubleClick");
 	static const Identifier rightClick("rightClick");
 	static const Identifier drag("drag");
+	static const Identifier isDragOnly("isDragOnly");
 	static const Identifier dragX("dragX");
 	static const Identifier dragY("dragY");
 	static const Identifier insideDrag("insideDrag");
@@ -604,7 +496,7 @@ juce::var MouseCallbackComponent::getMouseCallbackObject(Component* c, const Mou
 	{
 		e->setProperty(clicked, action == Action::Clicked);
 		e->setProperty(doubleClick, action == Action::DoubleClicked);
-		e->setProperty(rightClick, (action == Action::Clicked && event.mods.isRightButtonDown()) ||
+		e->setProperty(rightClick, ((action == Action::Clicked || action == Action::Dragged || action == Action::DoubleClicked) && event.mods.isRightButtonDown()) ||
 			(action == Action::MouseUp && event.mods.isRightButtonDown()));
 		e->setProperty(mouseUp, action == Action::MouseUp);
 		e->setProperty(mouseDownX, event.getMouseDownX());
@@ -628,11 +520,10 @@ juce::var MouseCallbackComponent::getMouseCallbackObject(Component* c, const Mou
 
 		e->setProperty(insideDrag, isIn ? 1 : 0);
 		e->setProperty(drag, action == Action::Dragged);
+		e->setProperty(isDragOnly, (event.getDistanceFromDragStartX() != 0) || (event.getDistanceFromDragStartY() != 0));
 		e->setProperty(dragX, event.getDistanceFromDragStartX());
 		e->setProperty(dragY, event.getDistanceFromDragStartY());
 	}
-
-	return clickInformation;
 }
 
 void MouseCallbackComponent::sendMessage(const MouseEvent &e, Action action, EnterState state)
@@ -640,7 +531,15 @@ void MouseCallbackComponent::sendMessage(const MouseEvent &e, Action action, Ent
 	if (callbackLevel == CallbackLevel::NoCallbacks) 
 		return;
 
-	sendToListeners(getMouseCallbackObject(this, e, callbackLevel, action, state));
+	dispatch::StringBuilder n;
+
+	n << "panel mouse callback for " << Component::getName() << ": [" << getCallbackLevelAsIdentifier(callbackLevel) << ", " << getActionAsIdentifier(action) << "]";
+	
+	TRACE_EVENT("component", DYNAMIC_STRING_BUILDER(n));
+
+	fillMouseCallbackObject(clickInformation[(int)action], this, e, callbackLevel, action, state);
+
+	sendToListeners(clickInformation[(int)action]);
 }
 
 void MouseCallbackComponent::sendToListeners(var clickInformation)
@@ -656,6 +555,301 @@ void MouseCallbackComponent::sendToListeners(var clickInformation)
 	}
 }
 
+bool DrawActions::PostActionBase::needsStackData() const
+{ return false; }
+
+DrawActions::ActionBase::ActionBase()
+{}
+
+DrawActions::ActionBase::~ActionBase()
+{}
+
+bool DrawActions::ActionBase::wantsCachedImage() const
+{ return false; }
+
+bool DrawActions::ActionBase::wantsToDrawOnParent() const
+{ return false; }
+
+void DrawActions::ActionBase::setCachedImage(Image& actionImage_, Image& mainImage_)
+{ actionImage = actionImage_; mainImage = mainImage_; }
+
+void DrawActions::ActionBase::setScaleFactor(float sf)
+{ scaleFactor = sf; }
+
+DrawActions::MarkdownAction::MarkdownAction(const MarkdownLayout::StringWidthFunction& f):
+	renderer("", f)
+{}
+
+void DrawActions::MarkdownAction::perform(Graphics& g)
+{
+	ScopedLock sl(lock);
+	renderer.draw(g, area);
+}
+
+DrawActions::ActionLayer::ActionLayer(bool drawOnParent_):
+	ActionBase(),
+	drawOnParent(drawOnParent_)
+{}
+
+bool DrawActions::ActionLayer::wantsCachedImage() const
+{ 
+	if(postActions.size() > 0)
+		return true;
+
+	for (auto a : internalActions)
+	{
+		if (a->wantsCachedImage())
+			return true;
+	}
+
+	return false;
+}
+
+bool DrawActions::ActionLayer::wantsToDrawOnParent() const
+{ return drawOnParent; }
+
+void DrawActions::ActionLayer::setCachedImage(Image& actionImage_, Image& mainImage_)
+{ 
+	ActionBase::setCachedImage(actionImage_, mainImage_);
+
+	// do not propagate the main image
+	for (auto a : internalActions)
+		a->setCachedImage(actionImage_, actionImage_);
+}
+
+void DrawActions::ActionLayer::setScaleFactor(float sf)
+{ 
+	ActionBase::setScaleFactor(sf);
+
+	for (auto a : internalActions)
+		a->setScaleFactor(sf);
+}
+
+void DrawActions::ActionLayer::perform(Graphics& g)
+{
+	for (auto action : internalActions)
+		action->perform(g);
+			
+	if (postActions.size() > 0)
+	{
+		PostGraphicsRenderer r(stack, actionImage, scaleFactor);
+		int numDataRequired = 0;
+
+		for (auto p : postActions)
+		{
+			if (p->needsStackData())
+				numDataRequired++;
+		}
+				
+		r.reserveStackOperations(numDataRequired);
+
+		for (auto p : postActions)
+			p->perform(r);
+	}
+}
+
+void DrawActions::ActionLayer::addDrawAction(ActionBase* a)
+{
+	internalActions.add(a);
+}
+
+void DrawActions::ActionLayer::addPostAction(PostActionBase* a)
+{
+	postActions.add(a);
+}
+
+DrawActions::BlendingLayer::BlendingLayer(gin::BlendMode m, float alpha_):
+	ActionLayer(true),
+	blendMode(m),
+	alpha(alpha_)
+{
+
+}
+
+bool DrawActions::BlendingLayer::wantsCachedImage() const
+{ return true; }
+
+void DrawActions::NoiseMapManager::drawNoiseMap(Graphics& g, Rectangle<int> area, float alpha, bool monochrom,
+	float scale)
+{
+	auto originalArea = area;
+
+    //scale *= scaleFactor;
+    
+	if(scale != 1.0f)
+		area = area.transformed(AffineTransform::scale(scale));
+
+	const auto& m = getNoiseMap(area, monochrom);
+
+    g.saveState();
+    
+	g.setColour(Colours::black.withAlpha(alpha));
+
+    g.setImageResamplingQuality(Graphics::ResamplingQuality::lowResamplingQuality);
+    
+	if (scale != 1.0f)
+		g.drawImageWithin(m.img, originalArea.getX(), originalArea.getY(), originalArea.getWidth(), originalArea.getHeight(), RectanglePlacement::stretchToFit);
+	else
+		g.drawImageAt(m.img, area.getX(), area.getY());
+    
+    g.restoreState();
+}
+
+DrawActions::NoiseMapManager::NoiseMap& DrawActions::NoiseMapManager::getNoiseMap(Rectangle<int> area, bool monochrom)
+{
+	for (auto m : maps)
+	{
+
+		if (area.getWidth() == m->width &&
+			area.getHeight() == m->height &&
+			monochrom == m->monochrom)
+		{
+			return *m;
+		}
+	}
+
+    dispatch::StringBuilder n;
+    n << "create noisemap [" << area.getWidth() << ", " << area.getHeight() << "]";
+    
+    TRACE_EVENT("drawactions", DYNAMIC_STRING_BUILDER(n));
+    
+	maps.add(new NoiseMap(area, monochrom));
+
+	return *maps.getLast();
+}
+
+DrawActions::Handler::Iterator::Iterator(Handler* handler_):
+	handler(handler_)
+{
+	if (handler != nullptr)
+	{
+		actionsInIterator.ensureStorageAllocated(handler->nextActions.size());
+		SpinLock::ScopedLockType sl(handler->lock);
+
+		actionsInIterator.addArray(handler->nextActions);
+	}
+}
+
+DrawActions::ActionBase::Ptr DrawActions::Handler::Iterator::getNextAction()
+{
+	if (index < actionsInIterator.size())
+		return actionsInIterator[index++];
+
+	return nullptr;
+}
+
+bool DrawActions::Handler::Iterator::wantsCachedImage() const
+{
+	for (auto action : actionsInIterator)
+		if (action != nullptr && action->wantsCachedImage())
+			return true;
+
+	return false;
+}
+
+bool DrawActions::Handler::Iterator::wantsToDrawOnParent() const
+{
+	for (auto action : actionsInIterator)
+		if (action != nullptr && action->wantsToDrawOnParent())
+			return true;
+
+	return false;
+}
+
+DrawActions::Handler::Listener::~Listener()
+{}
+
+DrawActions::Handler::~Handler()
+{
+	cancelPendingUpdate();
+}
+
+void DrawActions::Handler::beginDrawing()
+{
+	currentActions.clear();
+}
+
+void DrawActions::Handler::beginLayer(bool drawOnParent)
+{
+	auto newLayer = new ActionLayer(drawOnParent);
+
+	addDrawAction(newLayer);
+	layerStack.insert(-1, newLayer);
+}
+
+DrawActions::ActionLayer::Ptr DrawActions::Handler::getCurrentLayer()
+{
+	return layerStack.getLast();
+}
+
+void DrawActions::Handler::endLayer()
+{
+	layerStack.removeLast();
+}
+
+void DrawActions::Handler::addDrawAction(ActionBase* newDrawAction)
+{
+	if (layerStack.getLast() != nullptr)
+		layerStack.getLast()->addDrawAction(newDrawAction);
+	else
+		currentActions.add(newDrawAction);
+}
+
+void DrawActions::Handler::flush(uint64_t perfettoTrackId)
+{
+	{
+		SpinLock::ScopedLockType sl(lock);
+
+		nextActions.swapWith(currentActions);
+		currentActions.clear();
+		layerStack.clear();
+	}
+
+	if(perfettoTrackId != 0)
+		flowManager.continueFlow(perfettoTrackId, "flush draw handler");
+
+	triggerAsyncUpdate();
+}
+
+void DrawActions::Handler::logError(const String& message)
+{
+	if (errorLogger)
+		errorLogger(message);
+}
+
+void DrawActions::Handler::addDrawActionListener(Listener* l)
+{ listeners.addIfNotAlreadyThere(l); }
+
+void DrawActions::Handler::removeDrawActionListener(Listener* l)
+{ listeners.removeAllInstancesOf(l); }
+
+void DrawActions::Handler::setGlobalBounds(Rectangle<int> gb, Rectangle<int> tb, float sf)
+{
+	globalBounds = gb;
+	topLevelBounds = tb;
+	scaleFactor = sf;
+}
+
+Rectangle<int> DrawActions::Handler::getGlobalBounds() const
+{ return globalBounds; }
+
+float DrawActions::Handler::getScaleFactor() const
+{ return scaleFactor; }
+
+DrawActions::NoiseMapManager* DrawActions::Handler::getNoiseMapManager()
+{ return &noiseManager.getObject(); }
+
+void DrawActions::Handler::handleAsyncUpdate()
+{
+	auto x = flowManager.flushAllButLastOne("flush draw handler", {});
+
+	for (auto l : listeners)
+	{
+		if (l != nullptr)
+			l->newPaintActionsAvailable(x);
+	}
+}
+
 BorderPanel::BorderPanel(DrawActions::Handler* handler_) :
 borderColour(Colours::black),
 drawHandler(handler_),
@@ -664,8 +858,6 @@ c2(Colours::white),
 borderRadius(0.0f),
 borderSize(1.0f)
 {
-    PeriodicScreenshotter::disableForScreenshot(this);
-    
 	addAndMakeVisible(closeButton);
 	
 	drawHandler->addDrawActionListener(this);
@@ -735,6 +927,56 @@ BorderPanel::~BorderPanel()
 		drawHandler->removeDrawActionListener(this);
 }
 
+void BorderPanel::newOpenGLContextCreated()
+{
+}
+
+void BorderPanel::renderOpenGL()
+{
+		
+}
+
+void BorderPanel::openGLContextClosing()
+{
+}
+
+void BorderPanel::newPaintActionsAvailable(uint64_t flowId)
+{
+	flowManager.continueFlow(flowId, "repaint request");
+	repaint();
+}
+
+void BorderPanel::registerToTopLevelComponent()
+{
+#if 0
+		if (srs == nullptr)
+		{
+			if (auto tc = findParentComponentOfClass<TopLevelWindowWithOptionalOpenGL>())
+				srs = new TopLevelWindowWithOptionalOpenGL::ScopedRegisterState(*tc, this);
+		}
+#endif
+}
+
+void BorderPanel::resized()
+{
+	registerToTopLevelComponent();
+
+	if (isPopupPanel)
+	{
+		closeButton.setBounds(getWidth() - 24, 0, 24, 24);
+	}
+	else
+		closeButton.setVisible(false);
+		
+}
+
+#if HISE_INCLUDE_RLOTTIE
+void BorderPanel::setAnimation(RLottieAnimation::Ptr newAnimation)
+{
+	animation = newAnimation;
+}
+#endif
+
 void BorderPanel::buttonClicked(Button* /*b*/)
 {
 	auto contentComponent = findParentComponentOfClass<ScriptContentComponent>();
@@ -779,9 +1021,20 @@ struct GraphicHelpers
 
 void BorderPanel::paint(Graphics &g)
 {
+
+	dispatch::StringBuilder n;
+
+	bool hasOpenGL = false;
+
+	if(auto c = TopLevelWindowWithOptionalOpenGL::findRoot(this))
+		hasOpenGL = dynamic_cast<TopLevelWindowWithOptionalOpenGL*>(c)->isOpenGLEnabled();
 	
+	n << Component::getName() << "::paint()";
+	TRACE_EVENT("component", DYNAMIC_STRING_BUILDER(n));
+	PerfettoHelpers::setCurrentThreadName(!hasOpenGL ? "UI Render Thread (Software)" : "UI Render Thread (Open GL)");
 
-
+	flowManager.flushAll("juce::Component paint routine");
+	
 	registerToTopLevelComponent();
 
 	
@@ -789,6 +1042,7 @@ void BorderPanel::paint(Graphics &g)
 #if HISE_INCLUDE_RLOTTIE
 	if (animation != nullptr)
 	{
+		TRACE_EVENT("component", "rendering lottie");
 		animation->render(g, { 0, 0 });
 		return;
 	}
@@ -796,6 +1050,8 @@ void BorderPanel::paint(Graphics &g)
 
 	if (isUsingCustomImage)
 	{
+		TRACE_EVENT("component", "rendering script draw actions");
+
         SET_IMAGE_RESAMPLING_QUALITY();
 		
 		if (isOpaque())
@@ -976,6 +1232,49 @@ void ImageComponentWithMouseCallback::setScale(double newScale)
 	}
 }
 
+MouseCallbackComponent::Listener::Listener()
+{}
+
+MouseCallbackComponent::Listener::~Listener()
+{ masterReference.clear(); }
+
+MouseCallbackComponent::RectangleConstrainer::Listener::~Listener()
+{ masterReference.clear(); }
+
+MouseCallbackComponent::~MouseCallbackComponent()
+{}
+
+void MouseCallbackComponent::setJSONPopupData(var jsonData, Rectangle<int> popupSize_)
+{ 
+	jsonPopupData = jsonData; 
+	popupSize = popupSize_;
+}
+
+void MouseCallbackComponent::setActivePopupItem(int menuId)
+{
+	activePopupId = menuId;
+}
+
+void MouseCallbackComponent::updateValue(NotificationType)
+{
+	repaint();
+}
+
+NormalisableRange<double> MouseCallbackComponent::getRange() const
+{
+	return range;
+}
+
+void MouseCallbackComponent::setRange(NormalisableRange<double>& newRange)
+{
+	range = newRange;
+}
+
+void MouseCallbackComponent::setMidiLearnEnabled(bool shouldBeEnabled)
+{
+	midiLearnEnabled = shouldBeEnabled;
+}
+
 void MouseCallbackComponent::RectangleConstrainer::checkBounds(Rectangle<int> &newBounds, const Rectangle<int> &, const Rectangle<int> &, bool, bool, bool, bool)
 {
 	if (!draggingBounds.isEmpty())
@@ -1099,6 +1398,11 @@ void DrawActions::Handler::Iterator::render(Graphics& g, Component* c)
 
 	handler->setGlobalBounds(gb, tc->getLocalBounds(), sf);
 
+    auto zoomFactor = UnblurryGraphics::getScaleFactorForComponent(c, false);
+    
+    handler->getNoiseMapManager()->setScaleFactor(zoomFactor);
+
+    
 	if (wantsCachedImage())
 	{
 		// We are creating one master image before the loop
@@ -1121,6 +1425,12 @@ void DrawActions::Handler::Iterator::render(Graphics& g, Component* c)
 
 		while (auto action = getNextAction())
 		{
+#if PERFETTO
+			dispatch::StringBuilder b;
+			b << "g." << action->getDispatchId() << "()";
+			TRACE_EVENT("drawactions", DYNAMIC_STRING_BUILDER(b));
+#endif
+
 			if (action->wantsCachedImage())
 			{
 				Image actionImage;
@@ -1153,7 +1463,16 @@ void DrawActions::Handler::Iterator::render(Graphics& g, Component* c)
 	else
 	{
 		while (auto action = getNextAction())
+		{
+#if PERFETTO
+			dispatch::StringBuilder b;
+			b << "g." << action->getDispatchId() << "()";
+			TRACE_EVENT("drawactions", DYNAMIC_STRING_BUILDER(b));
+#endif
+
 			action->perform(g);
+		}
+			
 	}
 }
 

@@ -80,8 +80,13 @@ public:
 		WorkspaceCustom,
 		numToolbarButtons,
 		MenuFileOffset = 0x20000,
+
+		MenuSnippetFileNew,
+		MenuSnippetFileImport,
+		MenuSnippetClose,
 		MenuNewFile,
 		MenuOpenFile,
+		MenuFileBrowseExamples,
 		MenuOpenFileFromProjectOffset,
 		MenuSaveFile = 0x23000,
 		MenuSaveFileAs,
@@ -92,8 +97,8 @@ public:
 		MenuProjectNew = 0x24000,
 		MenuProjectLoad,
 		MenuCloseProject,
-		MenuFileArchiveProject,
-		MenuFileDownloadNewProject,
+		MenuFileImportProjectFromHXI,
+		MenuFileExtractEmbeddeSnippetFiles,
 		MenuFileCreateRecoveryXml,
 		MenuProjectShowInFinder,
 		MenuProjectRecentOffset,
@@ -115,12 +120,12 @@ public:
 		MenuExportFileAsEffectPlugin,
 		MenuExportFileAsMidiFXPlugin,
 		MenuExportFileAsStandaloneApp,
-		MenuExportFileAsPlayerLibrary,
+		MenuExportProject,
         MenuExportFileAsSnippet,
 		MenuExportSampleDataForInstaller,
+		MenuExportWavetablesToMonolith,
 		MenuExportCompileFilesInPool,
 		MenuExportCompileNetworksAsDll,
-		
 		MenuEditOffset = 0x30000,
 		MenuEditUndo,
 		MenuEditRedo,
@@ -143,6 +148,7 @@ public:
 		MenuViewAddInterfacePreview,
         MenuViewGotoUndo,
         MenuViewGotoRedo,
+		MenuViewToggleSnippetBrowser,
 		MenuOneColumn,
 		MenuTwoColumns,
 		MenuThreeColumns,
@@ -165,9 +171,10 @@ public:
 		MenuToolsRecompileScriptsOnReload,
 		MenuToolsEnableCallStack,
 		MenuToolsCheckCyclicReferences,
-		MenuToolsCreateToolbarPropertyDefinition,
+		MenuToolsBroadcasterWizard,
 		MenuToolsCreateExternalScriptFile,
 		MenuToolsConvertSVGToPathData,
+		MenuToolsRestoreToDefault,
 		MenuToolsValidateUserPresets,
 		MenuToolsExternalScriptFileOffset,
 		MenuToolsResolveMissingSamples = 0x60000,
@@ -178,8 +185,7 @@ public:
 		MenuToolsImportArchivedSamples,
 		MenuToolsCheckUnusedImages,
 		MenuToolsRedirectScriptFolder,
-		MenuToolsCreateUIDataFromDesktop,
-		MenuToolsCheckDeviceSanity,
+		MenuToolsCheckPluginParameterSanity,
 		MenuToolsForcePoolSearch,
 		MenuToolsConvertAllSamplesToMonolith,
 		MenuToolsConvertSampleMapToWavetableBanks,
@@ -194,10 +200,9 @@ public:
 		MenuToolsRecordOneSecond,
 		MenuToolsSimulateChangingBufferSize,
 		MenuToolsShowDspNetworkDllInfo,
-		MenuToolsDeviceSimulatorOffset,
+        MenuToolsCreateRnboTemplate,
 		MenuHelpShowAboutPage = 0x70000,
 		MenuHelpShowDocumentation,
-		MenuHelpShowHelpForComponents,
         MenuHelpCheckVersion,
 		numCommands
 	};
@@ -276,21 +281,7 @@ public:
 		menuItemsChanged();
 	}
 
-	void setCopyPasteTarget(CopyPasteTarget *newTarget)
-	{
-        if (currentCopyPasteTarget.get() != nullptr)
-		{
-			currentCopyPasteTarget->deselect();
-		}
-		else
-		{
-			mainCommandManager->setFirstCommandTarget(this);
-		}
-        
-		currentCopyPasteTarget = newTarget;
-
-		updateCommands();
-	}
+	void setCopyPasteTarget(CopyPasteTarget *newTarget);
 
 	void createMenuBarNames();
 
@@ -300,22 +291,20 @@ public:
 
 	ColumnMode getColumnMode() const noexcept { return currentColumnMode; }
 
-	struct Helpers
-	{
-		static bool deviceTypeHasUIData(BackendRootWindow* bpe);
-		static bool canCopyDeviceType(BackendRootWindow* bpe);
-	};
-
 	class Actions
 	{
 	public:
 
+		
 		static void editShortcuts(BackendRootWindow* bpe);
 		static bool hasProcessorInClipboard();
 		static bool hasSnippetInClipboard();
 		static void openFile(BackendRootWindow *bpe);
 		static void saveFile(BackendRootWindow *bpe, bool forceRename);
 		static void replaceWithClipboardContent(BackendRootWindow *bpe);
+
+		static void loadSnippet(BackendRootWindow *bpe, const String& snippet);
+
 		static void createScriptVariableDeclaration(CopyPasteTarget *currentCopyPasteTarget);
 		static void recompileAllScripts(BackendRootWindow * bpe);
 		static void toggleFullscreen(BackendRootWindow * bpe);
@@ -332,12 +321,18 @@ public:
 		static void toggleCompileScriptsOnPresetLoad(BackendRootWindow * bpe);
 		static void createNewProject(BackendRootWindow *bpe);
 		static void loadProject(BackendRootWindow *bpe);
+		static DialogWindowWithBackgroundThread* importProject(BackendRootWindow* bpe);
 
+		static void extractProject(BackendRootWindow* bpe, const File& newProjectRoot, const File& sourceFile);
+
+        static void createRnboTemplate(BackendRootWindow* bpe);
 		static void convertSVGToPathData(BackendRootWindow* bpe);
 
 		static void applySampleMapProperties(BackendRootWindow* bpe);
 
 		static void loadFirstXmlAfterProjectSwitch(BackendRootWindow * bpe);
+
+		
 
 		static void closeProject(BackendRootWindow *bpe);
 		static void showProjectInFinder(BackendRootWindow *bpe);
@@ -346,7 +341,7 @@ public:
 		static void saveFileXml(BackendRootWindow * bpe);
 		static void saveFileAsXml(BackendRootWindow * bpe);
 		static void openFileFromXml(BackendRootWindow * bpe, const File &fileToLoad);
-		static void exportFileAsSnippet(BackendProcessor* bp);
+		static String exportFileAsSnippet(BackendRootWindow* bpe, bool copyToClipboard=true);
 		static void showFilePresetSettings(BackendRootWindow * bpe);
 		static void showFileProjectSettings(BackendRootWindow * bpe);
 		static void showFileUserSettings(BackendRootWindow * bpe);
@@ -357,12 +352,14 @@ public:
 		static void createRSAKeys(BackendRootWindow * bpe);
 		static void createDummyLicenseFile(BackendRootWindow * bpe);
 		static void toggleForcePoolSearch(BackendRootWindow * bpe);
-		static void archiveProject(BackendRootWindow * bpe);
-		static void downloadNewProject(BackendRootWindow * bpe);
 		static void showMainMenu(BackendRootWindow * bpe);
 		static void moveModule(CopyPasteTarget *currentCopyPasteTarget, bool moveUp);
 		static void createExternalScriptFile(BackendRootWindow * bpe);
-		static void exportMainSynthChainAsPlayerLibrary(BackendRootWindow * bpe);
+		static void exportHiseProject(BackendRootWindow * bpe);
+		static Result exportInstrumentExpansion(BackendProcessor* bp);
+		static Result createSampleArchive(BackendProcessor* bp);
+
+
 		static void compileNetworksToDll(BackendRootWindow* bpe);
 		static void cleanBuildDirectory(BackendRootWindow * bpe);
 		static void convertAllSamplesToMonolith(BackendRootWindow * bpe);
@@ -376,27 +373,33 @@ public:
 		static void updateSampleMapIds(BackendRootWindow * bpe);
 		static void toggleCallStackEnabled(BackendRootWindow * bpe);
 		static void testPlugin(const String& pluginToLoad);
-
+        static void checkPluginParameterSanity(BackendRootWindow* bpe);
 		static void newFile(BackendRootWindow* bpe);
 
 		static void removeAllSampleMaps(BackendRootWindow * bpe);
 		static void redirectScriptFolder(BackendRootWindow * bpe);
 		static void exportSampleDataForInstaller(BackendRootWindow * bpe);
+		static void exportWavetablesToMonolith(BackendRootWindow* bpe);
 		static void importArchivedSamples(BackendRootWindow * bpe);
 		static void checkCyclicReferences(BackendRootWindow * bpe);
 		static void unloadAllAudioFiles(BackendRootWindow * bpe);
-		static void createUIDataFromDesktop(BackendRootWindow * bpe);
+		
 
 		static String createWindowsInstallerTemplate(MainController* mc, bool includeAAX, bool include32, bool include64, bool includeVST2, bool includeVST3);
 		static void convertSampleMapToWavetableBanks(BackendRootWindow* bpe);
 		static void exportCompileFilesInPool(BackendRootWindow* bpe);
-		static void checkDeviceSanity(BackendRootWindow * bpe);
+		
 		static void copyMissingSampleListToClipboard(BackendRootWindow * bpe);
 		static void createRecoveryXml(BackendRootWindow * bpe);
 		static void showDocWindow(BackendRootWindow * bpe);
 		static void showNetworkDllInfo(BackendRootWindow * bpe);
 
 		static void createThirdPartyNode(BackendRootWindow* bpe);
+		static void restoreToDefault(BackendRootWindow * bpe);
+
+		static void extractEmbeddedFilesFromSnippet(BackendRootWindow* bpe);
+
+		static void showExampleBrowser(BackendRootWindow* bpe);
 	};
 
 private:

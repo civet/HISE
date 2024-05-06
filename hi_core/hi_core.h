@@ -77,11 +77,6 @@ END_JUCE_MODULE_DECLARATION
 #include <complex>
 
 
-#ifndef HISE_VERSION
-#define HISE_VERSION "2.0.0"
-#endif
-
-
 //=============================================================================
 /** Config: USE_BACKEND
 
@@ -131,6 +126,23 @@ Set this to 1 to disable the creation of the Expansions folder at init (i.e. for
 #define DONT_CREATE_EXPANSIONS_FOLDER 0
 #endif
 
+/** Config: HISE_OVERWRITE_OLD_USER_PRESETS
+
+If true, then the plugin will silently overwrite user presets with the same name but an older version number. This will also overwrite user-modified factory presets
+but will not modify or delete user-created user presets (with the exception of a name collision).
+*/
+#ifndef HISE_OVERWRITE_OLD_USER_PRESETS
+#define HISE_OVERWRITE_OLD_USER_PRESETS 0
+#endif
+
+/** Config: HISE_BACKEND_AS_FX
+ 
+ Set this to 1 in order to use HISE as a effect plugin. This will simulate the processing setup of an FX plugin (so child sound generators will not be processed etc).
+*/
+#ifndef HISE_BACKEND_AS_FX
+#define HISE_BACKEND_AS_FX 0
+#endif
+
 /** Config: USE_COPY_PROTECTION
 
 If true, then the copy protection will be used
@@ -174,7 +186,11 @@ Use the Intel Performance Primitives Library for the convolution reverb.
 If set to 1, the compiled plugin will be a effect (stereo in / out).
 */
 #ifndef FRONTEND_IS_PLUGIN
+#if USE_BACKEND
+#define FRONTEND_IS_PLUGIN HISE_BACKEND_AS_FX
+#else
 #define FRONTEND_IS_PLUGIN 0
+#endif
 #endif
 
 
@@ -190,9 +206,19 @@ If set to 1, then the FX plugin will also process child sound generators (eg. gl
 
 If set to 1, the compiled plugin will use a stereo input channel pair and render the master containers effect chain on top of it.
 This can be used to simulate an audio effect routing setup (when the appropriate plugin type is selected in the projucer settings).
+
 */
 #ifndef FORCE_INPUT_CHANNELS
-#define FORCE_INPUT_CHANNELS 0
+#define FORCE_INPUT_CHANNELS USE_BACKEND
+#endif
+
+/** Config: HI_DONT_SEND_ATTRIBUTE_UPDATES
+ 
+If enabled, this will skip the internal UI message update when calling setAttribute from a scripting callback. If you're calling
+ this method a lot, setting this to true might help with certain stability issues and UI message clogging.
+*/
+#ifndef HI_DONT_SEND_ATTRIBUTE_UPDATES
+#define HI_DONT_SEND_ATTRIBUTE_UPDATES 0
 #endif
 
 /** Config: HISE_DEACTIVATE_OVERLAY
@@ -372,6 +398,16 @@ OpenGL should be enabled by default or not.
 #define HISE_DEFAULT_OPENGL_VALUE 1
 #endif
 
+/** Config: HISE_USE_SYSTEM_APP_DATA_FOLDER
+
+    If enabled, the compiled plugin will use the global app data folder instead of the local one.
+    This flag will be set automatically based on the project setting. In HISE this must not be changed
+    as the app data directory will be checked dynamically using this setting value.
+*/
+#ifndef HISE_USE_SYSTEM_APP_DATA_FOLDER
+#define HISE_USE_SYSTEM_APP_DATA_FOLDER 0
+#endif
+
 /** Config: ENABLE_STARTUP_LOGGER
 
 If this is enabled, compiled plugins will write a startup log to the desktop for debugging purposes
@@ -448,6 +484,19 @@ Set this to false to not give the user the ability to set the sample location on
 #define HISE_SAMPLE_DIALOG_SHOW_LOCATE_BUTTON 1
 #endif
 
+/** Config: HISE_MACROS_ARE_PLUGIN_PARAMETERS
+
+If enabled, the plugin will ignore any plugin parameter definitions from the script components (or custom automation data) and will only propagate the macros as plugin parameters
+(Note: You might want to define HISE_NUM_MACROS along with the plugin parameters to ensure that it will only use as much parameters as you want).
+
+ */
+#ifndef HISE_MACROS_ARE_PLUGIN_PARAMETERS
+#define HISE_MACROS_ARE_PLUGIN_PARAMETERS 0
+#endif
+
+#ifndef HISE_INCLUDE_BEATPORT
+#define HISE_INCLUDE_BEATPORT 0
+#endif
 
 // for iOS apps, the external files don't need to be embedded. Enable this to simulate this behaviour on desktop projects (not recommended for production)
 //#define DONT_EMBED_FILES_IN_FRONTEND 1
@@ -500,6 +549,10 @@ For all defined variables:
 
 #include "hi_core/hi_core.h" // has its own namespace definition
 
+#include "hi_dsp/hi_dsp.h"
+#include "hi_components/hi_components.h"
+#include "hi_sampler/hi_sampler.h"
+#include "hi_modules/hi_modules.h"
 
 
 

@@ -39,6 +39,8 @@ namespace hise { using namespace juce;
 class ScriptBaseMidiProcessor;
 class JavascriptMidiProcessor;
 
+
+
 /** This class wraps all available functions for the scripting engine provided by a ScriptProcessor.
 *	@ingroup scripting
 */
@@ -112,6 +114,27 @@ public:
 		/** Returns the Velocity. */
 		int getVelocity() const;
 
+		/** Checks if the message is a MONOPHONIC aftertouch message. */
+		bool isMonophonicAfterTouch() const;;
+
+		/** Returns the aftertouch value of the monophonic aftertouch message. */
+		int getMonophonicAftertouchPressure() const;;
+
+		/** Sets the pressure value of the monophonic aftertouch message */
+		void setMonophonicAfterTouchPressure(int pressure);;
+
+		/** Checks if the message is a POLYPHONIC aftertouch message (Use isChannelPressure() for monophonic aftertouch). */
+		bool isPolyAftertouch() const;;
+
+		/** Returns the polyphonic aftertouch note number. */
+		int getPolyAfterTouchNoteNumber() const;
+
+		/** Checks if the message is a POLYPHONIC aftertouch message (Use isChannelPressure() for monophonic aftertouch). */
+		int getPolyAfterTouchPressureValue() const;;
+
+		/** Copied from MidiMessage. */
+		void setPolyAfterTouchNoteNumberAndPressureValue(int noteNumber, int aftertouchAmount);;
+
 		/** Ignores the event. */
 		void ignoreEvent(bool shouldBeIgnored=true);;
 
@@ -153,8 +176,11 @@ public:
 		/** Stores a copy of the current event into the given holder object. */
 		void store(var messageEventHolder) const;
 
-		/** Creates a artificial copy of this event and returns the new event ID. */
+		/** Creates a artificial copy of this event and returns the new event ID. If the event is already artificial it will return the event ID. */
 		int makeArtificial();
+
+		/** Creates a artificial copy of this event and returns the new event ID. If the event is artificial it will make a new one with a new ID. */
+		int makeArtificialOrLocal();
 
 		/** Checks if the event was created by a script earlier. */
 		bool isArtificial() const;
@@ -184,6 +210,8 @@ public:
 
 	private:
 
+		int makeArtificialInternal(bool makeLocal);
+		
 		WeakCallbackHolder allNotesOffCallback;
 
 		friend class Synth;
@@ -195,6 +223,8 @@ public:
 		const HiseEvent* constMessageHolder;
 
 		uint16 artificialNoteOnIds[128];
+
+		HiseEvent artificialNoteOnThatWasKilled;
 
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Message);
 		JUCE_DECLARE_WEAK_REFERENCEABLE(Message);
@@ -310,6 +340,7 @@ public:
 		/** Returns the amount of output channels. */
 		int getNumPluginChannels() const;
 
+        /** Creates an FFT object. */
 		var createFFT();
 
 		/** Returns the latency of the plugin as reported to the host. Default is 0. */
@@ -345,20 +376,32 @@ public:
 		/** Returns a reference to the global routing manager. */
 		var getGlobalRoutingManager();
 
+        /** Returns a reference to the global Loris manager. */
+        var getLorisManager();
+        
+		/** Returns a reference to a complex data type from the given module. */
+		var getComplexDataReference(String dataType, String moduleId, int index);
+
 		/** Creates a background task that can execute heavyweight functions. */
 		var createBackgroundTask(String name);
 
         /** Creates a fix object factory using the data layout. */
         var createFixObjectFactory(var layoutDescription);
-        
+
+		/** Creates a thread safe storage container. */
+		var createThreadSafeStorage();
+
 		/** Creates a reference to the script license manager. */
 		var createLicenseUnlocker();
+
+		/** Creates a beatport manager object. */
+		var createBeatportManager();
 
 		/** Renders a MIDI event list as audio data on a background thread and calls a function when it's ready. */
 		void renderAudio(var eventList, var finishCallback);
 
 		/** Previews a audio buffer with a callback indicating the state. */
-		void playBuffer(var bufferData, var callback);
+		void playBuffer(var bufferData, var callback, double fileSampleRate);
 
 		/** Sends an allNotesOff message at the next buffer. */
 		void allNotesOff();
@@ -449,6 +492,9 @@ public:
 
 		/** Loads a file and returns its content as array of Buffers. */
 		var loadAudioFileIntoBufferArray(String audioFileReference);
+
+		/** Returns the list of wavetables of the current expansion (or factory content). */
+		var getWavetableList();
 
 		/** Loads an image into the pool. You can use a wildcard to load multiple images at once. */
 		void loadImageIntoPool(const String& id);
@@ -570,11 +616,26 @@ public:
 		/** Creates a storage object for Message events. */
 		ScriptingObjects::ScriptingMessageHolder* createMessageHolder();
 
+		/** Creates a neural network with the given ID. */
+		ScriptingObjects::ScriptNeuralNetwork* createNeuralNetwork(String id);
+
 		/** Creates an object that can listen to transport events. */
 		var createTransportHandler();
 
+		/** Creates a modulation matrix object that handles dynamic modulation using the given Global Modulator Container as source. */
+		var createModulationMatrix(String containerId);
+
+		/** Creates a macro handler that lets you programmatically change the macro connections. */
+		var createMacroHandler();
+
 		/** Exports an object as JSON. */
 		void dumpAsJSON(var object, String fileName);
+
+		/** Compresses a JSON object as Base64 string using zstd. */
+		String compressJSON(var object);
+
+		/** Expands a compressed JSON object. */
+		var uncompressJSON(const String& b64);
 
 		/** Imports a JSON file as object. */
 		var loadFromJSON(String fileName);
@@ -608,6 +669,9 @@ public:
 		/** Redo the last controller change. */
 		void redo();
 
+        /** Clears the undo history. */
+        void clearUndoHistory();
+        
 		/** Returns a fully described string of this date and time in ISO-8601 format (using the local timezone) with or without divider characters. */
 		String getSystemTime(bool includeDividerCharacters);
 		
@@ -631,6 +695,36 @@ public:
 
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Engine);
 	};
+
+	/** This class takes over a few of the Engine methods in order to break down this gigantomanic object. */
+	class Date : public ApiClass,
+				   public ScriptingObject
+	{
+	public:
+
+		Date(ProcessorWithScriptingContent* s);
+		~Date() {};
+
+		Identifier getObjectName() const override { RETURN_STATIC_IDENTIFIER("Date"); }
+
+		// ================================================================================================== API Calls
+
+		/** Returns a fully described string of this date and time in milliseconds or ISO-8601 format (using the local timezone) with or without divider characters. */
+		String getSystemTimeISO8601(bool includeDividerCharacters);
+		
+		/** Returns the system time in milliseconds. */
+		int64 getSystemTimeMs();
+		
+		/** Returns a time in milliseconds to a date string. */
+		String millisecondsToISO8601(int64 miliseconds, bool includeDividerCharacters);
+		
+		/** Returns a date string to time in milliseconds. */
+		int64 ISO8601ToMilliseconds(String iso8601);
+		
+
+		struct Wrapper;
+	};
+
 
 	/** This class takes over a few of the Engine methods in order to break down this gigantomanic object. */
 	class Settings : public ApiClass,
@@ -737,6 +831,18 @@ public:
 		/** Enables or disables debug logging */
 		void setEnableDebugMode(bool shouldBeEnabled);
 
+		/** Changes the sample folder. */
+		void setSampleFolder(var sampleFolder);
+
+		/** Starts the perfetto profile recording. */
+		void startPerfettoTracing();
+
+		/** Stops the perfetto profile recording and dumps the data to the given file. */
+		void stopPerfettoTracing(var traceFileToUse);
+
+		/** Calls abort to terminate the program. You can use this to check your crash reporting workflow. */
+		void crashAndBurn();
+
 		// ============================================================================================================
 
 	private:
@@ -774,14 +880,23 @@ public:
 		/** Enables the group with the given index (one-based). Works only with samplers and `enableRoundRobin(false)`. */
 		void setActiveGroup(int activeGroupIndex);
 
+		/** Enables the group with the given index (one-based) for the given event ID. Works only with samplers and `enableRoundRobin(false)`. */
+		void setActiveGroupForEventId(int eventId, int activeGroupIndex);
+
 		/** Enables the group with the given index (one-based). Allows multiple groups to be active. */
 		void setMultiGroupIndex(var groupIndex, bool enabled);
+
+		/** Enables the group with the given index (one-based) for the given event id. Allows multiple groups to be active. */
+		void setMultiGroupIndexForEventId(int eventId, var groupIndex, bool enabled);
 
 		/** Sets the volume of a particular group (use -1 for active group). Only works with disabled crossfade tables. */
 		void setRRGroupVolume(int groupIndex, int gainInDecibels);
 
 		/** Returns the currently (single) active RR group. */
 		int getActiveRRGroup();
+
+		/** Returns the RR group that is associated with the event ID. */
+		int getActiveRRGroupForEventId(int eventId);
 
 		/** Returns the number of currently active groups. */
 		int getNumActiveGroups() const;
@@ -812,6 +927,9 @@ public:
 
 		/** Purges all samples of the given mic (Multimic samples only). */
 		void purgeMicPosition(String micName, bool shouldBePurged);
+
+		/** Purges the array of sampler sounds (and unpurges the rest). */
+		void purgeSampleSelection(var selection);
 
 		/** Returns the name of the channel with the given index (Multimic samples only. */
 		String getMicPositionName(int channelIndex);
@@ -865,6 +983,15 @@ public:
 
 		/** Creates a JSON object from the sample file that can be used with loadSampleMapFromJSON. */
 		var parseSampleFile(var sampleFile);
+
+		/** Sets the timestretch ratio for the sampler depending on its timestretch mode. */
+		void setTimestretchRatio(double newRatio);
+
+		/** Returns the current timestretching options as JSON object. */
+		var getTimestretchOptions();
+
+		/** Sets the timestretching options from a JSON object. */
+		void setTimestretchOptions(var newOptions);
 
 		/** Converts the user preset data of a audio waveform to a base 64 samplemap. */
 		String getAudioWaveformContentAsBase64(var presetObj);
@@ -956,6 +1083,8 @@ public:
 		/** Adds the interface to the Container's body (or the frontend interface if compiled) */
 		void addToFront(bool addToFront);
 
+		
+
 		/** Defers all callbacks to the message thread (midi callbacks become read-only). */
 		void deferCallbacks(bool makeAsynchronous);
 
@@ -968,11 +1097,23 @@ public:
 		/** Sends a note off message for the supplied event ID with the given delay in samples. */
 		void noteOffDelayedByEventId(int eventId, int timestamp);
 
+        /** Injects a note on to the incoming MIDI buffer (just as if the virtual keyboard was pressed. */
+        void playNoteFromUI(int channel, int noteNumber, int velocity);
+        
+        /** Injects a note off to the incoming MIDI buffer (similar to playNoteFromUI). */
+        void noteOffFromUI(int channel, int noteNumber);
+        
 		/** Plays a note and returns the event id. Be careful or you get stuck notes! */
 		int playNote(int noteNumber, int velocity);
 
 		/** Plays a note and returns the event id with the given channel and start offset. */
 		int playNoteWithStartOffset(int channel, int number, int velocity, int offset);
+
+		/** Attaches an artificial note to be stopped when the original note is stopped. */
+		bool attachNote(int originalNoteId, int artificialNoteId);
+
+		/** Adds a few additional safe checks to prevent stuck notes from note offs being processed before their note-on message. */
+		void setFixNoteOnAfterNoteOff(bool shouldBeFixed);
 
 		/** Fades all voices with the given event id to the target volume (in decibels). */
 		void addVolumeFade(int eventId, int fadeTimeMilliseconds, int targetVolume);
@@ -1130,6 +1271,9 @@ public:
 		/** Returns true if the sustain pedal is pressed. */
 		bool isSustainPedalDown() const { return sustainState; }
 
+		/** Use a uniform voice index for the given container. */
+		void setUseUniformVoiceHandler(String containerId, bool shouldUseUniformVoiceHandling);
+
 		// ============================================================================================================
 
 		void handleNoteCounter(const HiseEvent& e) noexcept
@@ -1253,14 +1397,12 @@ public:
 			lineNumber = lineNumber_;
 		}
 
-	private:
+private:
 
 		Identifier id;
 		int lineNumber;
 
 		double startTime;
-
-
 
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Console)
 	};
@@ -1340,6 +1482,9 @@ public:
 		/** Registers a callback to changes in the grid. */
 		void setOnGridChange(var sync, var f);
 
+		/** Registers a callback that will be executed asynchronously when the plugin's bypass state changes. */
+		void setOnBypass(var f);
+
 		/** Enables a high precision grid timer. */
 		void setEnableGrid(bool shouldBeEnabled, int tempoFactor);
 
@@ -1358,7 +1503,15 @@ public:
 		/** sends a message on the next grid callback to resync the external clock. */
 		void sendGridSyncOnNextCallback();
 
+		/** If enabled, this will link the internal / external BPM to the sync mode. */
+		void setLinkBpmToSyncMode(bool shouldPrefer);
+
+		/** This will return true if the DAW is currently bouncing the audio to a file. You can use this in the transport change callback to modify your processing chain. */
+		bool isNonRealtime() const;
+
 	private:
+
+		static void onBypassUpdate(TransportHandler& handler, bool state);
 
 		void clearIf(ScopedPointer<Callback>& cb, const var& f)
 		{
@@ -1383,6 +1536,8 @@ public:
 		ScopedPointer<Callback> timeSignatureCallback;
 		ScopedPointer<Callback> beatCallback;
 		ScopedPointer<Callback> gridCallback;
+
+		ScopedPointer<Callback> bypassCallback;
 
 		ScopedPointer<Callback> tempoChangeCallbackAsync;
 		ScopedPointer<Callback> transportChangeCallbackAsync;
@@ -1449,9 +1604,18 @@ public:
 		/** Adds the given String to the HTTP POST header. */
 		void setHttpHeader(String additionalHeader);
 
+        /** Resends the last call to the Server (eg. in case that there was no internet connection). */
+        bool resendLastCall();
+        
 		/** Downloads a file to the given target and returns a Download object. */
 		var downloadFile(String subURL, var parameters, var targetFile, var callback);
 
+        /** Sets a string that is parsed as timeout message when the server doesn't respond. Default is "{}" (empty JSON object). */
+        void setTimeoutMessageString(String timeoutMessage);
+        
+        /** Sets whether to append a trailing slash to each POST call (default is true). */
+        void setEnforceTrailingSlash(bool shouldAddSlash);
+        
 		/** Returns a list of all pending Downloads. */
 		var getPendingDownloads();
 
@@ -1549,6 +1713,9 @@ public:
 		/** Returns a list of all child files of a directory that match the wildcard. */
 		var findFiles(var directory, String wildcard, bool recursive);
 
+        /** Returns a list of all root drives of the current computer. */
+        var findFileSystemRoots();
+        
 		/** Opens a file browser to choose a file. */
 		void browse(var startFolder, bool forSaving, String wildcard, var callback);
 
@@ -1569,7 +1736,10 @@ public:
         
         /** Decrypts the given string using a RSA public key. */
         String decryptWithRSA(const String& dataToDecrypt, const String& publicKey);
-        
+
+		/** Loads a bunch of dummy assets (audio files, MIDI files, filmstrips) for use in snippets & examples. */
+		void loadExampleAssets();
+
 		// ========================================================= End of API calls
 
 		ProcessorWithScriptingContent* p;
@@ -1587,6 +1757,63 @@ public:
 
 	};
 
+    class Threads: public ApiClass,
+				   public ScriptingObject
+    {
+    public:
+
+        Threads(ProcessorWithScriptingContent* p);
+
+        Identifier getObjectName() const override { RETURN_STATIC_IDENTIFIER("Threads"); }
+
+		// API METHODS ===============================================================================
+
+		/** Returns the thread ID of the thread that is calling this method. */
+        int getCurrentThread() const;
+
+		/** Returns true if the audio callback is running or false if it's suspended during a load operation. */
+        bool isAudioRunning() const;
+
+		/** Returns true if the audio exporter is currently rendering the audio on a background thread. */
+		bool isCurrentlyExporting() const;
+
+		/** Returns true if the given thread is currently locked by the current thread. */
+        bool isLockedByCurrentThread(int thread) const;
+
+		/** Returns the thread ID of the thread the locks the given thread ID. */
+        int getLockerThread(int threadThatIsLocked) const;
+
+		/** Returns true if the given thread is currently locked. */
+        bool isLocked(int thread) const;
+
+		/** Returns the name of the given string (for debugging purposes only!). */
+		String toString(int thread) const;
+
+		/** Returns the name of the current thread (for debugging purposes only!). */
+        String getCurrentThreadName() const
+        {
+			return toString(getCurrentThread());
+        }
+
+        /** Kills all voices, suspends the audio processing and calls the given function on the loading thread. Returns true if the function was executed synchronously. */
+        bool killVoicesAndCall(const var& functionToExecute);
+
+    private:
+
+		using TargetThreadId = MainController::KillStateHandler::TargetThread;
+		using LockId = LockHelpers::Type;
+
+        static TargetThreadId getAsThreadId(int x);
+        static LockId getAsLockId(int x);
+
+        MainController::KillStateHandler& getKillStateHandler();
+        const MainController::KillStateHandler& getKillStateHandler() const;
+
+        struct Wrapper;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Threads);
+    };
+
 	class Colours: public ApiClass
 	{
 	public:
@@ -1601,34 +1828,34 @@ public:
 		// ============================================================================================================ API Methods
 
 		/** Returns a colour value with the specified alpha value. */
-		int withAlpha(int colour, float alpha);
+		int withAlpha(var colour, float alpha);
 
 		/** Returns a colour with the specified hue. */
-		int withHue(int colour, float hue);
+		int withHue(var colour, float hue);
 
 		/** Returns a colour with the specified saturation. */
-		int withSaturation(int colour, float saturation);
+		int withSaturation(var colour, float saturation);
 
 		/** Returns a colour with the specified brightness. */
-		int withBrightness(int colour, float brightness);
+		int withBrightness(var colour, float brightness);
 
 		/** Returns a colour with a multiplied alpha value. */
-		int withMultipliedAlpha(int colour, float factor);
+		int withMultipliedAlpha(var colour, float factor);
 
 		/** Returns a colour with a multiplied saturation value. */
-		int withMultipliedSaturation(int colour, float factor);
+		int withMultipliedSaturation(var colour, float factor);
 
 		/** Returns a colour with a multiplied brightness value. */
-		int withMultipliedBrightness(int colour, float factor);
+		int withMultipliedBrightness(var colour, float factor);
 
 		/** Converts a colour to a [r, g, b, a] array that can be passed to GLSL as vec4. */
-		var toVec4(int colour);
+		var toVec4(var colour);
 
 		/** Converts a colour from a [r, g, b, a] float array to a uint32 value. */
 		int fromVec4(var vec4);
 
 		/** Linear interpolation between two colours. */
-		int mix(int colour1, int colour2, float alpha);
+		int mix(var colour1, var colour2, float alpha);
 
 		// ============================================================================================================
 
@@ -1654,14 +1881,14 @@ public:
 		void setIntensity(var newValue)
 		{
 			m->setIntensity((float)newValue);
-			BACKEND_ONLY(mod->sendChangeMessage());
+			BACKEND_ONLY(mod->sendOtherChangeMessage(dispatch::library::ProcessorChangeEvent::Intensity, dispatch::sendNotificationAsync););
 		}
 
 		/** Bypasses the modulator. */
 		void setBypassed(var newValue)
 		{
 			mod->setBypassed((bool)newValue);
-			BACKEND_ONLY(mod->sendChangeMessage());
+			BACKEND_ONLY(mod->sendOtherChangeMessage(dispatch::library::ProcessorChangeEvent::Bypassed, dispatch::sendNotificationAsync););
 		}
 
 	private:

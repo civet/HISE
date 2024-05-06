@@ -99,9 +99,19 @@ String ScriptingObjects::ScriptShader::FileParser::createLinePointer(int i) cons
 String ScriptingObjects::ScriptShader::FileParser::loadFileContent()
 {
 #if USE_BACKEND
-	auto f = getMainController()->getCurrentFileHandler().getSubDirectory(FileHandlerBase::Scripts).getChildFile(fileNameWithoutExtension).withFileExtension("glsl");
 
-    if(!f.existsAsFile())
+	auto glslFile = getMainController()->getCurrentFileHandler().getSubDirectory(FileHandlerBase::Scripts).getChildFile(fileNameWithoutExtension).withFileExtension("glsl");
+
+
+	auto ef = getMainController()->getExternalScriptFile(glslFile, false);
+
+	String content;
+
+	if(ef != nullptr)
+		content = ef->getFileDocument().getAllContent();
+	else if (glslFile.existsAsFile())
+		content = glslFile.loadFileAsString();
+	else
     {
         String s;
         String nl = "\n";
@@ -118,21 +128,22 @@ String ScriptingObjects::ScriptShader::FileParser::loadFileContent()
         s << "    fragColor = pixelAlpha * vec4(col,1.0);" << nl;
         s << "}" << nl;
         
-        f.replaceWithText(s);
+		content = s;
+		glslFile.replaceWithText(s);
     }
-    
+	
 	if (auto jp = dynamic_cast<JavascriptProcessor*>(sp))
 	{
-		auto ef = jp->addFileWatcher(f);
+		ef = jp->addFileWatcher(glslFile);
 
 		if (includedFiles.contains(ef))
 			throw String("Trying to include " + fileNameWithoutExtension + " multiple times");
 
 		includedFiles.add(ef);
-		jp->getScriptEngine()->addShaderFile(f);
+		jp->getScriptEngine()->addShaderFile(glslFile);
 	}
 
-	return f.loadFileAsString();
+	return content;
 #else
 
 	if (!fileNameWithoutExtension.endsWith(".glsl"))
@@ -415,8 +426,8 @@ struct ScriptingObjects::ScriptShader::PreviewComponent: public Component,
 		Path p;
 
 #if USE_BACKEND
-		LOAD_PATH_IF_URL("stats", BackendBinaryData::ToolbarIcons::debugPanel);
-		LOAD_PATH_IF_URL("view", BackendBinaryData::ToolbarIcons::viewPanel);
+		LOAD_EPATH_IF_URL("stats", BackendBinaryData::ToolbarIcons::debugPanel);
+		LOAD_EPATH_IF_URL("view", BackendBinaryData::ToolbarIcons::viewPanel);
 		LOAD_PATH_IF_URL("time", ColumnIcons::moveIcon);
 #endif
 		return p;
@@ -486,6 +497,69 @@ ScriptingObjects::ScriptShader::ScriptShader(ProcessorWithScriptingContent* sp) 
 	ADD_API_METHOD_0(getOpenGLStatistics);
 	ADD_API_METHOD_1(setEnableCachedBuffer);
 	ADD_API_METHOD_2(setPreprocessor);
+}
+
+Identifier ScriptingObjects::ScriptShader::getObjectName() const
+{ RETURN_STATIC_IDENTIFIER("ScriptShader"); }
+
+void ScriptingObjects::ScriptShader::setEnableLineNumbers(bool shouldUseLineNumbers)
+{
+	useLineNumbers = shouldUseLineNumbers;
+}
+
+bool ScriptingObjects::ScriptShader::compiledOk() const
+{ return r.wasOk(); }
+
+void ScriptingObjects::ScriptShader::setCompileResult(Result compileResult)
+{
+	r = processErrorMessage(compileResult);
+
+	for (auto f : includedFiles)
+		f->setRuntimeErrors(r);
+}
+
+void ScriptingObjects::ScriptShader::setGlobalBounds(Rectangle<int> b, float sf)
+{
+	globalRect = b.toFloat();
+	scaleFactor = sf;
+}
+
+bool ScriptingObjects::ScriptShader::shouldWriteToBuffer() const
+{
+	return enableCache || screenshotPending;
+}
+
+void ScriptingObjects::ScriptShader::renderWasFinished(ScreenshotListener::CachedImageBuffer::Ptr newData)
+{
+	if (screenshotPending)
+	{
+		DBG("REPAINT DONE");
+		screenshotPending = false;
+		lastScreenshot = newData;
+	}
+	else
+		lastScreenshot = nullptr;
+}
+
+ScreenshotListener::CachedImageBuffer::Ptr ScriptingObjects::ScriptShader::getScreenshotBuffer()
+{
+	if (isRenderingScreenshot())
+		return lastScreenshot;
+
+	return nullptr;
+}
+
+bool ScriptingObjects::ScriptShader::isRenderingScreenshot()
+{ return renderingScreenShot; }
+
+ScriptingObjects::ScriptShader::ScopedScreenshotRenderer::ScopedScreenshotRenderer()
+{
+	renderingScreenShot = true;
+}
+
+ScriptingObjects::ScriptShader::ScopedScreenshotRenderer::~ScopedScreenshotRenderer()
+{
+	renderingScreenShot = false;
 }
 
 bool ScriptingObjects::ScriptShader::renderingScreenShot = false;
@@ -817,11 +891,13 @@ ScriptingObjects::SVGObject::SVGObject(ProcessorWithScriptingContent* p, const S
     
     comp.expand(mb, xmlText);
     
-    if(auto xml = XmlDocument::parse(xmlText))
-    {
-        MessageManagerLock mm;
-        svg = Drawable::createFromSVG(*xml);
-    }
+	WeakReference<SVGObject> safeThis(this);
+
+	SafeAsyncCall::call<SVGObject>(*this, [xmlText](SVGObject& obj)
+	{
+		if (auto xml = XmlDocument::parse(xmlText))
+			obj.svg = Drawable::createFromSVG(*xml);
+	});
 }
 
 
@@ -906,9 +982,25 @@ struct ScriptingObjects::PathObject::Wrapper
 	API_VOID_METHOD_WRAPPER_2(PathObject, lineTo);
 	API_VOID_METHOD_WRAPPER_0(PathObject, clear);
 	API_VOID_METHOD_WRAPPER_4(PathObject, quadraticTo);
+	API_VOID_METHOD_WRAPPER_4(PathObject, cubicTo);
+	API_VOID_METHOD_WRAPPER_4(PathObject, addQuadrilateral);
 	API_VOID_METHOD_WRAPPER_3(PathObject, addArc);
+	API_VOID_METHOD_WRAPPER_1(PathObject, addEllipse);
+	API_VOID_METHOD_WRAPPER_1(PathObject, addRectangle);
+    API_VOID_METHOD_WRAPPER_2(PathObject, addRoundedRectangle);
+    API_VOID_METHOD_WRAPPER_3(PathObject, addRoundedRectangleCustomisable);
+	API_VOID_METHOD_WRAPPER_3(PathObject, addTriangle);
+	API_VOID_METHOD_WRAPPER_4(PathObject, addPolygon);
+	API_VOID_METHOD_WRAPPER_5(PathObject, addArrow);
+	API_VOID_METHOD_WRAPPER_5(PathObject, addStar);
+	API_VOID_METHOD_WRAPPER_5(PathObject, scaleToFit);
+	API_VOID_METHOD_WRAPPER_1(PathObject, roundCorners);
 	API_METHOD_WRAPPER_2(PathObject, createStrokedPath);
+	API_METHOD_WRAPPER_3(PathObject, getIntersection);
+	API_METHOD_WRAPPER_1(PathObject, getPointOnPath);
+	API_METHOD_WRAPPER_1(PathObject, contains);
 	API_METHOD_WRAPPER_1(PathObject, getBounds);
+	API_METHOD_WRAPPER_0(PathObject, getLength);
 	API_METHOD_WRAPPER_0(PathObject, toString);
 	API_VOID_METHOD_WRAPPER_1(PathObject, fromString);
 };
@@ -922,8 +1014,24 @@ ScriptingObjects::PathObject::PathObject(ProcessorWithScriptingContent* p) :
 	ADD_API_METHOD_2(startNewSubPath);
 	ADD_API_METHOD_2(lineTo);
 	ADD_API_METHOD_4(quadraticTo);
+	ADD_API_METHOD_4(cubicTo);
+	ADD_API_METHOD_4(addQuadrilateral);
 	ADD_API_METHOD_3(addArc);
+	ADD_API_METHOD_1(addEllipse);
+	ADD_API_METHOD_1(addRectangle);
+    ADD_API_METHOD_2(addRoundedRectangle);
+    ADD_API_METHOD_3(addRoundedRectangleCustomisable);
+	ADD_API_METHOD_3(addTriangle);
+	ADD_API_METHOD_4(addPolygon);
+	ADD_API_METHOD_5(addArrow);
+	ADD_API_METHOD_5(addStar);
+	ADD_API_METHOD_5(scaleToFit);
+	ADD_API_METHOD_1(roundCorners);
+	ADD_API_METHOD_1(getPointOnPath);
+	ADD_API_METHOD_3(getIntersection);
+	ADD_API_METHOD_1(contains);
 	ADD_API_METHOD_1(getBounds);
+	ADD_API_METHOD_0(getLength);
 	ADD_API_METHOD_2(createStrokedPath);
 	ADD_API_METHOD_0(toString);
 	ADD_API_METHOD_1(fromString);
@@ -973,6 +1081,16 @@ void ScriptingObjects::PathObject::quadraticTo(var cx, var cy, var x, var y)
 	p.quadraticTo(cx, cy, x, y);
 }
 
+void ScriptingObjects::PathObject::cubicTo(var cxy1, var cxy2, var x, var y)
+{
+	p.cubicTo(cxy1[0], cxy1[1], cxy2[0], cxy2[1], x, y);
+}
+
+void ScriptingObjects::PathObject::addQuadrilateral(var xy1, var xy2, var xy3, var xy4)
+{
+	p.addQuadrilateral(xy1[0], xy1[1], xy2[0], xy2[1], xy3[0], xy3[1], xy4[0], xy4[1]);
+}
+
 void ScriptingObjects::PathObject::addArc(var area, var fromRadians, var toRadians)
 {
 	auto rect = ApiHelpers::getRectangleFromVar(area);
@@ -981,6 +1099,127 @@ void ScriptingObjects::PathObject::addArc(var area, var fromRadians, var toRadia
 	auto tr = (float)toRadians;
 
 	p.addArc(rect.getX(), rect.getY(), rect.getWidth(), rect.getHeight(), SANITIZED(fr), SANITIZED(tr), true);
+}
+
+void ScriptingObjects::PathObject::addEllipse(var area)
+{
+	auto rect = ApiHelpers::getRectangleFromVar(area);
+
+	p.addEllipse(rect);
+}
+
+void ScriptingObjects::PathObject::addRectangle(var area)
+{
+	auto rect = ApiHelpers::getRectangleFromVar(area);
+	
+	p.addRectangle(rect);
+}
+
+void ScriptingObjects::PathObject::addRoundedRectangle(var area, var cornerSize)
+{
+	auto rect = ApiHelpers::getRectangleFromVar(area);
+	
+	p.addRoundedRectangle(rect, cornerSize);
+}
+
+void ScriptingObjects::PathObject::addRoundedRectangleCustomisable(var area, var cornerSizeXY, var boolCurves)
+{
+	auto rect = ApiHelpers::getRectangleFromVar(area);
+	
+	p.addRoundedRectangle(rect.getX(), rect.getY(), rect.getWidth(), rect.getHeight(), cornerSizeXY[0], cornerSizeXY[1], boolCurves[0], boolCurves[1], boolCurves[2], boolCurves[3]);
+}
+
+void ScriptingObjects::PathObject::addTriangle(var xy1, var xy2, var xy3)
+{
+	p.addTriangle(xy1[0], xy1[1], xy2[0], xy2[1], xy3[0], xy3[1]);
+}
+
+void ScriptingObjects::PathObject::addPolygon(var center, var numSides, var radius, var angle)
+{
+    Point<float> c = ApiHelpers::getPointFromVar(center);
+
+	p.addPolygon(c, numSides, radius, angle);
+}
+
+void ScriptingObjects::PathObject::addArrow(var start, var end, var thickness, var headWidth, var headLength)
+{
+    Point<float> p1 = ApiHelpers::getPointFromVar(start);
+    Point<float> p2 = ApiHelpers::getPointFromVar(end);
+
+    auto l = Line<float>(p1, p2);
+
+	p.addArrow(l, thickness, headWidth, headLength);
+}
+
+void ScriptingObjects::PathObject::addStar(var center, var numPoints, var innerRadius, var outerRadius, var angle)
+{
+    Point<float> c = ApiHelpers::getPointFromVar(center);
+
+	p.addStar(c, numPoints, innerRadius, outerRadius, angle);
+}
+
+void ScriptingObjects::PathObject::scaleToFit(var x, var y, var width, var height, bool preserveProportions)
+{
+	p.applyTransform(p.getTransformToScaleToFit(x, y, width, height, preserveProportions));
+}
+
+void ScriptingObjects::PathObject::roundCorners(var radius)
+{
+	p = p.createPathWithRoundedCorners(radius);
+}
+
+var ScriptingObjects::PathObject::getIntersection(var start, var end, bool keepSectionOutsidePath)
+{
+	Point<float> p1 = ApiHelpers::getPointFromVar(start);
+	Point<float> p2 = ApiHelpers::getPointFromVar(end);
+
+	Line<float> l(p1.getX(), p1.getY() - 0.001f, p2.getX(), p2.getY()); // -0.001f ensures the line starts inside the path boundaries... Hmmm...
+
+	if (p.intersectsLine(l))
+	{
+		Line<float> clippedLine = p.getClippedLine(l, keepSectionOutsidePath);
+
+		Array<var> a;
+
+		if (keepSectionOutsidePath)
+		{
+			a.add(clippedLine.getStartX());
+			a.add(clippedLine.getStartY());
+		}
+		else
+		{
+			a.add(clippedLine.getEndX());
+			a.add(clippedLine.getEndY());
+		}
+
+		return var(a);
+	}
+
+	return false;
+}
+
+var ScriptingObjects::PathObject::getPointOnPath(var distanceFromStart)
+{
+	Point<float> point = p.getPointAlongPath((float)distanceFromStart);
+
+	Array<var> a;
+
+	a.add(point.getX());
+	a.add(point.getY());
+
+	return var(a);
+}
+
+var ScriptingObjects::PathObject::contains(var point)
+{
+	Point<float> pt = ApiHelpers::getPointFromVar(point);
+
+	return p.contains(pt);
+}
+
+var ScriptingObjects::PathObject::getLength()
+{
+	return p.getLength(AffineTransform::scale(1.0f), 1.0f);
 }
 
 var ScriptingObjects::PathObject::getBounds(var scaleFactor)
@@ -1235,7 +1474,7 @@ struct ScriptingObjects::MarkdownObject::Wrapper
 
 ScriptingObjects::MarkdownObject::MarkdownObject(ProcessorWithScriptingContent* pwsc) :
 	ConstScriptingObject(pwsc, 0),
-	obj(new DrawActions::MarkdownAction())
+	obj(new DrawActions::MarkdownAction(std::bind(&MainController::getStringWidthFloat, pwsc->getMainController_(), std::placeholders::_1, std::placeholders::_2)))
 {
 	ADD_API_METHOD_1(setText);
 	ADD_API_METHOD_1(setStyleData);
@@ -1327,6 +1566,7 @@ struct ScriptingObjects::GraphicsObject::Wrapper
 	API_VOID_METHOD_WRAPPER_2(GraphicsObject, drawEllipse);
 	API_VOID_METHOD_WRAPPER_1(GraphicsObject, fillEllipse);
 	API_VOID_METHOD_WRAPPER_4(GraphicsObject, drawImage);
+	API_VOID_METHOD_WRAPPER_1(GraphicsObject, drawRepaintMarker);
 	API_VOID_METHOD_WRAPPER_3(GraphicsObject, drawDropShadow);
 	API_VOID_METHOD_WRAPPER_5(GraphicsObject, drawDropShadowFromPath);
 	API_VOID_METHOD_WRAPPER_2(GraphicsObject, addDropShadowFromAlpha);
@@ -1334,6 +1574,7 @@ struct ScriptingObjects::GraphicsObject::Wrapper
 	API_VOID_METHOD_WRAPPER_2(GraphicsObject, fillTriangle);
 	API_VOID_METHOD_WRAPPER_2(GraphicsObject, fillPath);
 	API_VOID_METHOD_WRAPPER_3(GraphicsObject, drawPath);
+	API_VOID_METHOD_WRAPPER_2(GraphicsObject, drawFFTSpectrum);
 	API_VOID_METHOD_WRAPPER_2(GraphicsObject, rotate);
 	API_VOID_METHOD_WRAPPER_1(GraphicsObject, gaussianBlur);
 	API_VOID_METHOD_WRAPPER_1(GraphicsObject, boxBlur);
@@ -1390,6 +1631,7 @@ ScriptingObjects::GraphicsObject::GraphicsObject(ProcessorWithScriptingContent *
 	ADD_API_METHOD_2(fillPath);
 	ADD_API_METHOD_3(drawPath);
 	ADD_API_METHOD_2(rotate);
+	ADD_API_METHOD_2(drawFFTSpectrum);
 
 	ADD_API_METHOD_1(beginLayer);
 	ADD_API_METHOD_1(gaussianBlur);
@@ -1410,6 +1652,7 @@ ScriptingObjects::GraphicsObject::GraphicsObject(ProcessorWithScriptingContent *
 	ADD_API_METHOD_0(endLayer);
 	ADD_API_METHOD_2(beginBlendLayer);
 	ADD_API_METHOD_1(getStringWidth);
+	ADD_API_METHOD_1(drawRepaintMarker);
 
 	WeakReference<Processor> safeP(dynamic_cast<Processor*>(p));
 
@@ -1698,6 +1941,9 @@ void ScriptingObjects::GraphicsObject::setFont(String fontName, float fontSize)
 	MainController *mc = getScriptProcessor()->getMainController_();
 	auto f = mc->getFontFromString(fontName, SANITIZED(fontSize));
 	currentFont = f;
+	currentFontName = fontName;
+	currentKerningFactor = 0.0f;
+	currentFontHeight = fontSize;
 	drawActionHandler.addDrawAction(new ScriptedDrawActions::setFont(f));
 }
 
@@ -1708,6 +1954,9 @@ void ScriptingObjects::GraphicsObject::setFontWithSpacing(String fontName, float
 
 	f.setExtraKerningFactor(spacing);
 	currentFont = f;
+	currentFontName = fontName;
+	currentFontHeight = fontSize;
+	currentKerningFactor = spacing;
 	drawActionHandler.addDrawAction(new ScriptedDrawActions::setFont(f));
 }
 
@@ -1766,6 +2015,17 @@ void ScriptingObjects::GraphicsObject::drawMarkdownText(var markdownRenderer)
 	}
 	else
 		reportScriptError("not a markdown renderer");
+}
+
+void ScriptingObjects::GraphicsObject::drawFFTSpectrum(var fftObject, var area)
+{
+	if (auto obj = dynamic_cast<ScriptingObjects::ScriptFFT*>(fftObject.getObject()))
+	{
+		auto b = ApiHelpers::getRectangleFromVar(area);
+		drawActionHandler.addDrawAction(new ScriptedDrawActions::drawFFTSpectrum(obj->getSpectrum(false), b, obj->getParameters()->quality));
+	}
+	else
+        reportScriptError("not a SVG object");
 }
 
 void ScriptingObjects::GraphicsObject::drawSVG(var svgObject, var bounds, float opacity)
@@ -1942,6 +2202,11 @@ void ScriptingObjects::GraphicsObject::addDropShadowFromAlpha(var colour, int ra
 	drawActionHandler.addDrawAction(new ScriptedDrawActions::addDropShadowFromAlpha(shadow));
 }
 
+void ScriptingObjects::GraphicsObject::drawRepaintMarker(const String& label)
+{
+	drawActionHandler.addDrawAction(new ScriptedDrawActions::drawRepaintMarker(label));
+}
+
 bool ScriptingObjects::GraphicsObject::applyShader(var shader, var area)
 {
 	if (auto obj = dynamic_cast<ScriptingObjects::ScriptShader*>(shader.getObject()))
@@ -1956,7 +2221,8 @@ bool ScriptingObjects::GraphicsObject::applyShader(var shader, var area)
 
 float ScriptingObjects::GraphicsObject::getStringWidth(String text)
 {
-	return currentFont.getStringWidthFloat(text);
+	auto mc = getScriptProcessor()->getMainController_();
+	return mc->getStringWidthFromEmbeddedFont(text, currentFontName, currentFontHeight, currentKerningFactor);
 }
 
 void ScriptingObjects::GraphicsObject::fillPath(var path, var area)
@@ -2069,6 +2335,8 @@ struct ScriptingObjects::ScriptedLookAndFeel::Wrapper
 	API_VOID_METHOD_WRAPPER_2(ScriptedLookAndFeel, registerFunction);
 	API_VOID_METHOD_WRAPPER_2(ScriptedLookAndFeel, setGlobalFont);
 	API_VOID_METHOD_WRAPPER_2(ScriptedLookAndFeel, loadImage);
+	API_VOID_METHOD_WRAPPER_0(ScriptedLookAndFeel, unloadAllImages);
+	API_METHOD_WRAPPER_1(ScriptedLookAndFeel, isImageLoaded);
 };
 
 
@@ -2082,6 +2350,8 @@ ScriptingObjects::ScriptedLookAndFeel::ScriptedLookAndFeel(ProcessorWithScriptin
 	ADD_API_METHOD_2(registerFunction);
 	ADD_API_METHOD_2(setGlobalFont);
 	ADD_API_METHOD_2(loadImage);
+	ADD_API_METHOD_0(unloadAllImages);
+	ADD_API_METHOD_1(isImageLoaded);
 
 	if(isGlobal)
 		getScriptProcessor()->getMainController_()->setCurrentScriptLookAndFeel(this);
@@ -2132,6 +2402,8 @@ Array<Identifier> ScriptingObjects::ScriptedLookAndFeel::getAllFunctionNames()
 		"drawPresetBrowserListItem",
 		"drawPresetBrowserSearchBar",
 		"drawPresetBrowserTag",
+		"drawWavetableBackground",
+		"drawWavetablePath",
 		"drawTableBackground",
 		"drawTablePath",
 		"drawTablePoint",
@@ -2175,13 +2447,25 @@ Array<Identifier> ScriptingObjects::ScriptedLookAndFeel::getAllFunctionNames()
 
 bool ScriptingObjects::ScriptedLookAndFeel::callWithGraphics(Graphics& g_, const Identifier& functionname, var argsObject, Component* c)
 {
+#if PERFETTO
+
+	dispatch::StringBuilder n;
+
+	if(c != nullptr)
+		n << c->getName() << ".";
+
+	n << functionname << "()";
+
+	TRACE_SCRIPTING(DYNAMIC_STRING_BUILDER(n));
+
+#endif
+
     // If this hits, you need to add that id to the array above.
 	jassert(getAllFunctionNames().contains(functionname));
 
+
 	if (!lastResult.wasOk())
 		return false;
-
-    
     
 	auto f = functions.getProperty(functionname, {});
 
@@ -2220,11 +2504,38 @@ bool ScriptingObjects::ScriptedLookAndFeel::callWithGraphics(Graphics& g_, const
 		{
 			if (auto sl = SimpleReadWriteLock::ScopedTryReadLock(getScriptProcessor()->getMainController_()->getJavascriptThreadPool().getLookAndFeelRenderLock()))
 			{
+				TRACE_SCRIPTING("executing script function");
+
 				if (c != nullptr && c->getParentComponent() != nullptr)
 				{
 					var n = c->getParentComponent()->getName();
 					argsObject.getDynamicObject()->setProperty("parentName", n);
 				}
+                
+                static const StringArray hiddenProps = {"jcclr"};
+                
+                if(c != nullptr)
+                {
+                    for(auto& nv: c->getProperties())
+                    {
+                        if(!argsObject.hasProperty(nv.name))
+                        {
+                            bool hidden = false;
+                            
+                            for(const auto& hp: hiddenProps)
+                            {
+                                if(nv.name.toString().contains(hp))
+                                {
+                                    hidden = true;
+                                    break;
+                                }
+                            }
+                            
+                            if(!hidden)
+                                argsObject.getDynamicObject()->setProperty(nv.name, nv.value);
+                        }
+                    }
+                }
 
 				var::NativeFunctionArgs arg(thisObject, args, 2);
 				auto engine = dynamic_cast<JavascriptProcessor*>(getScriptProcessor())->getScriptEngine();
@@ -2233,11 +2544,13 @@ bool ScriptingObjects::ScriptedLookAndFeel::callWithGraphics(Graphics& g_, const
 				engine->callExternalFunction(f, arg, &lastResult, true);
 
 				if (lastResult.wasOk())
-					g->getDrawHandler().flush();
+					g->getDrawHandler().flush(0);
 				else
 					debugToConsole(dynamic_cast<Processor*>(getScriptProcessor()), lastResult.getErrorMessage());
 			}
 		}
+
+		TRACE_SCRIPTING("rendering draw actions");
 
 		DrawActions::Handler::Iterator it(&g->getDrawHandler());
 
@@ -2248,7 +2561,16 @@ bool ScriptingObjects::ScriptedLookAndFeel::callWithGraphics(Graphics& g_, const
 		else
 		{
 			while (auto action = it.getNextAction())
+			{
+#if PERFETTO
+			dispatch::StringBuilder b;
+			b << "g." << action->getDispatchId() << "()";
+			TRACE_EVENT("drawactions", DYNAMIC_STRING_BUILDER(b));
+#endif
+
 				action->perform(g_);
+			}
+				
 		}
         
 		return true;
@@ -2332,6 +2654,98 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::setColourOrBlack(DynamicObject*
 		obj->setProperty(id, c.findColour(colourId).getARGB());
 	else
 		obj->setProperty(id, 0);
+}
+
+ScriptingObjects::ScriptedLookAndFeel::Laf::Laf(MainController* mc):
+	ControlledObject(mc)
+{}
+
+ScriptingObjects::ScriptedLookAndFeel::Laf::~Laf()
+{}
+
+ScriptingObjects::ScriptedLookAndFeel* ScriptingObjects::ScriptedLookAndFeel::Laf::get()
+{
+	return dynamic_cast<ScriptedLookAndFeel*>(getMainController()->getCurrentScriptLookAndFeel());
+}
+
+Font ScriptingObjects::ScriptedLookAndFeel::Laf::getFont()
+{
+	if (auto l = get())
+		return l->f;
+	else
+		return GLOBAL_BOLD_FONT();
+}
+
+Font ScriptingObjects::ScriptedLookAndFeel::Laf::getAlertWindowMessageFont()
+{ return getFont(); }
+
+Font ScriptingObjects::ScriptedLookAndFeel::Laf::getAlertWindowTitleFont()
+{ return getFont(); }
+
+Font ScriptingObjects::ScriptedLookAndFeel::Laf::getTextButtonFont(TextButton& textButton, int i)
+{ return getFont(); }
+
+Font ScriptingObjects::ScriptedLookAndFeel::Laf::getComboBoxFont(ComboBox& comboBox)
+{ return getFont(); }
+
+Font ScriptingObjects::ScriptedLookAndFeel::Laf::getPopupMenuFont()
+{ return getFont(); }
+
+Font ScriptingObjects::ScriptedLookAndFeel::Laf::getAlertWindowFont()
+{ return getFont(); }
+
+Identifier ScriptingObjects::ScriptedLookAndFeel::getObjectName() const
+{ return "ScriptLookAndFeel"; }
+
+int ScriptingObjects::ScriptedLookAndFeel::getNumChildElements() const
+{
+	if (auto dyn = functions.getDynamicObject())
+		return dyn->getProperties().size();
+            
+	return 0;
+}
+
+DebugInformationBase* ScriptingObjects::ScriptedLookAndFeel::getChildElement(int index)
+{
+	WeakReference<ScriptedLookAndFeel> safeThis(this);
+
+	auto vf = [safeThis, index]()
+	{
+		if (safeThis != nullptr)
+		{
+			if (auto dyn = safeThis->functions.getDynamicObject())
+			{
+				if(isPositiveAndBelow(index, dyn->getProperties().size()))
+					return dyn->getProperties().getValueAt(index);
+			}
+		}
+
+		return var();
+	};
+
+	String id = "%PARENT%.";
+
+	auto mid = functions.getDynamicObject()->getProperties().getName(index);
+
+	id << mid;
+
+	Location l = getLocation();
+
+
+	return new LambdaValueInformation(vf, id, {}, (DebugInformation::Type)getTypeNumber(), l);
+}
+
+Image ScriptingObjects::ScriptedLookAndFeel::getLoadedImage(const String& prettyName)
+{
+	for (auto& img : loadedImages)
+	{
+		if (img.prettyName == prettyName)
+		{
+			return img.image ? *img.image.getData() : Image();
+		}
+	}
+
+	return Image();
 }
 
 void ScriptingObjects::ScriptedLookAndFeel::Laf::drawAlertBox(Graphics& g_, AlertWindow& w, const Rectangle<int>& ta, TextLayout& tl)
@@ -2627,6 +3041,7 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawPopupMenuItem(Graphics& g_,
 		auto obj = new DynamicObject();
 		obj->setProperty("area", ApiHelpers::getVarRectangle(area.toFloat()));
 		obj->setProperty("isSeparator", isSeparator);
+        obj->setProperty("isSectionHeader", false);
 		obj->setProperty("isActive", isActive);
 		obj->setProperty("isHighlighted", isHighlighted);
 		obj->setProperty("isTicked", isTicked);
@@ -2651,6 +3066,27 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawPopupMenuItem(Graphics& g_,
 	GlobalHiseLookAndFeel::drawPopupMenuItem(g_, area, isSeparator, isActive, isHighlighted, isTicked, hasSubMenu, text, shortcutKeyText, icon, textColourToUse);
 }
 
+void ScriptingObjects::ScriptedLookAndFeel::Laf::drawPopupMenuSectionHeader (Graphics& g_, const Rectangle<int>& area, const String& sectionName)
+{
+    if (functionDefined("drawPopupMenuItem"))
+    {
+        auto obj = new DynamicObject();
+        obj->setProperty("area", ApiHelpers::getVarRectangle(area.toFloat()));
+        obj->setProperty("isSeparator", false);
+        obj->setProperty("isSectionHeader", true);
+        obj->setProperty("isActive", false);
+        obj->setProperty("isHighlighted", false);
+        obj->setProperty("isTicked", false);
+        obj->setProperty("hasSubMenu", false);
+        obj->setProperty("text", sectionName);
+
+        if (get()->callWithGraphics(g_, "drawPopupMenuItem", var(obj), nullptr))
+            return;
+    }
+
+    GlobalHiseLookAndFeel::drawPopupMenuSectionHeader(g_, area, sectionName);
+}
+
 void setColourOrBlack(DynamicObject* obj, const Identifier& id, Component& c, int colourId)
 {
 	if (c.isColourSpecified(colourId))
@@ -2664,6 +3100,7 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawToggleButton(Graphics &g_, 
 	if (functionDefined("drawToggleButton"))
 	{
 		auto obj = new DynamicObject();
+		obj->setProperty("id", b.getComponentID());
 		obj->setProperty("area", ApiHelpers::getVarRectangle(b.getLocalBounds().toFloat()));
 		obj->setProperty("enabled", b.isEnabled());
 		obj->setProperty("text", b.getButtonText());
@@ -2904,7 +3341,7 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawButtonBackground(Graphics& 
 		GlobalHiseLookAndFeel::drawButtonBackground(g_, button, bg, isMouseOverButton, isButtonDown);
 }
 
-void ScriptingObjects::ScriptedLookAndFeel::Laf::drawNumberTag(Graphics& g_, Colour& c, Rectangle<int> area, int offset, int size, int number)
+void ScriptingObjects::ScriptedLookAndFeel::Laf::drawNumberTag(Graphics& g_, Component& comp, Colour& c, Rectangle<int> area, int offset, int size, int number)
 {
 	if (auto l = get())
 	{
@@ -2914,12 +3351,17 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawNumberTag(Graphics& g_, Col
 			obj->setProperty("area", ApiHelpers::getVarRectangle(area.toFloat()));
 			obj->setProperty("macroIndex", number - 1);
 
+            setColourOrBlack(obj, "bgColour",    comp, HiseColourScheme::ComponentOutlineColourId);
+            setColourOrBlack(obj, "itemColour1", comp, HiseColourScheme::ComponentFillTopColourId);
+            setColourOrBlack(obj, "itemColour2", comp, HiseColourScheme::ComponentFillBottomColourId);
+            setColourOrBlack(obj, "textColour",  comp, HiseColourScheme::ComponentTextColourId);
+            
 			if (l->callWithGraphics(g_, "drawNumberTag", var(obj), nullptr))
 				return;
 		}
 	}
 
-	NumberTag::LookAndFeelMethods::drawNumberTag(g_, c, area, offset, size, number);
+	NumberTag::LookAndFeelMethods::drawNumberTag(g_, comp, c, area, offset, size, number);
 }
 
 juce::Path ScriptingObjects::ScriptedLookAndFeel::Laf::createPresetBrowserIcons(const String& id)
@@ -3365,6 +3807,8 @@ HiseAudioThumbnail::RenderOptions ScriptingObjects::ScriptedLookAndFeel::Laf::ge
         obj->setProperty("displayGain", defaultOptions.displayGain);
         obj->setProperty("useRectList", defaultOptions.useRectList);
         obj->setProperty("forceSymmetry", defaultOptions.forceSymmetry);
+		obj->setProperty("multithreadThreshold", defaultOptions.multithreadThreshold);
+		obj->setProperty("dynamicOptions", defaultOptions.dynamicOptions);
 
         var x = var(obj);
 
@@ -3381,7 +3825,9 @@ HiseAudioThumbnail::RenderOptions ScriptingObjects::ScriptedLookAndFeel::Laf::ge
             newOptions.displayGain = nObj.getProperty("displayGain", defaultOptions.displayGain);
             newOptions.useRectList = nObj.getProperty("useRectList", defaultOptions.useRectList);
             newOptions.forceSymmetry = nObj.getProperty("forceSymmetry", defaultOptions.forceSymmetry);
-            
+			newOptions.multithreadThreshold = (int)nObj.getProperty("multithreadThreshold", defaultOptions.multithreadThreshold);
+			newOptions.dynamicOptions = nObj.getProperty("dynamicOptions", defaultOptions.dynamicOptions);
+
             FloatSanitizers::sanitizeFloatNumber(newOptions.manualDownSampleFactor);
             FloatSanitizers::sanitizeFloatNumber(newOptions.displayGain);
             
@@ -3601,7 +4047,7 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawSliderPackTextPopup(Graphic
 	SliderPack::LookAndFeelMethods::drawSliderPackTextPopup(g_, s, textToDraw);
 }
 
-void ScriptingObjects::ScriptedLookAndFeel::Laf::drawTableRowBackground(Graphics& g_, const ScriptTableListModel::LookAndFeelData& d, int rowNumber, int width, int height, bool rowIsSelected)
+void ScriptingObjects::ScriptedLookAndFeel::Laf::drawTableRowBackground(Graphics& g_, const ScriptTableListModel::LookAndFeelData& d, int rowNumber, int width, int height, bool rowIsSelected, bool rowIsHovered)
 {
 	if (functionDefined("drawTableRowBackground"))
 	{
@@ -3614,6 +4060,7 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawTableRowBackground(Graphics
 
 		obj->setProperty("rowIndex", rowNumber);
 		obj->setProperty("selected", rowIsSelected);
+		obj->setProperty("hover", rowIsHovered);
 
 		Rectangle<int> a(0, 0, width, height);
 
@@ -3623,7 +4070,7 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawTableRowBackground(Graphics
 			return;
 	}
 
-	ScriptTableListModel::LookAndFeelMethods::drawTableRowBackground(g_, d, rowNumber, width, height, rowIsSelected);
+	ScriptTableListModel::LookAndFeelMethods::drawTableRowBackground(g_, d, rowNumber, width, height, rowIsSelected, rowIsHovered);
 }
 
 void ScriptingObjects::ScriptedLookAndFeel::Laf::drawTableCell(Graphics& g_, const ScriptTableListModel::LookAndFeelData& d, const String& text, int rowNumber, int columnId, int width, int height, bool rowIsSelected, bool cellIsClicked, bool cellIsHovered)
@@ -3696,6 +4143,9 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawTableHeaderColumn(Graphics&
 		obj->setProperty("hover", isMouseOver);
 		obj->setProperty("down", isMouseDown);
 
+		obj->setProperty("sortColumnId", d.sortColumnId);
+		obj->setProperty("sortForwards", d.sortForward);
+
 		Rectangle<int> a(0, 0, width, height);
 
 		obj->setProperty("area", ApiHelpers::getVarRectangle(a.toFloat()));
@@ -3748,6 +4198,71 @@ void ScriptingObjects::ScriptedLookAndFeel::Laf::drawMatrixPeakMeter(Graphics& g
     }
 
     MatrixPeakMeter::LookAndFeelMethods::drawMatrixPeakMeter(g_, peakValues, maxPeaks, numChannels, isVertical, segmentSize, paddingSize, c);
+}
+
+void ScriptingObjects::ScriptedLookAndFeel::Laf::drawWavetableBackground(Graphics& g_, WaterfallComponent& wc, bool isEmpty)
+{
+	if (functionDefined("drawWavetableBackground"))
+	{
+		auto obj = new DynamicObject();
+
+		obj->setProperty("area", ApiHelpers::getVarRectangle(wc.getLocalBounds().toFloat()));
+
+		obj->setProperty("isEmpty", isEmpty);
+		
+		if (auto pc = wc.findParentComponentOfClass<PanelWithProcessorConnection>())
+			obj->setProperty("processorId", pc->getConnectedProcessor()->getId());
+
+		addParentFloatingTile(wc, obj);
+
+		setColourOrBlack(obj, "bgColour", wc, HiseColourScheme::ComponentBackgroundColour);
+		setColourOrBlack(obj, "itemColour", wc, HiseColourScheme::ComponentFillTopColourId);
+		setColourOrBlack(obj, "itemColour2", wc, HiseColourScheme::ComponentOutlineColourId);
+		setColourOrBlack(obj, "textColour", wc, HiseColourScheme::ComponentTextColourId);
+
+		if (get()->callWithGraphics(g_, "drawWavetableBackground", var(obj), &wc))
+			return;
+	}
+
+	WaterfallComponent::LookAndFeelMethods::drawWavetableBackground(g_, wc, isEmpty);
+}
+
+void ScriptingObjects::ScriptedLookAndFeel::Laf::drawWavetablePath(Graphics& g_, WaterfallComponent& wc, const Path& p, int tableIndex, bool isStereo, int currentTableIndex, int numTables)
+{
+	if (functionDefined("drawWavetablePath"))
+	{
+		auto obj = new DynamicObject();
+
+		obj->setProperty("area", ApiHelpers::getVarRectangle(p.getBounds().toFloat()));
+
+		auto pat = new ScriptingObjects::PathObject(get()->getScriptProcessor());
+
+		var keeper(pat);
+
+		pat->getPath() = p;
+
+		obj->setProperty("path", keeper);
+
+		obj->setProperty("tableIndex", tableIndex);
+		obj->setProperty("isStereo", isStereo);
+		obj->setProperty("currentTableIndex", currentTableIndex);
+		obj->setProperty("numTables", numTables);
+
+		if (auto pc = wc.findParentComponentOfClass<PanelWithProcessorConnection>())
+			obj->setProperty("processorId", pc->getConnectedProcessor()->getId());
+
+		addParentFloatingTile(wc, obj);
+
+		setColourOrBlack(obj, "bgColour", wc, HiseColourScheme::ComponentBackgroundColour);
+		setColourOrBlack(obj, "itemColour", wc, HiseColourScheme::ComponentFillTopColourId);
+		setColourOrBlack(obj, "itemColour2", wc, HiseColourScheme::ComponentOutlineColourId);
+		setColourOrBlack(obj, "textColour", wc, HiseColourScheme::ComponentTextColourId);
+
+		if (get()->callWithGraphics(g_, "drawWavetablePath", var(obj), &wc))
+			return;
+	}
+
+	WaterfallComponent::LookAndFeelMethods::drawWavetablePath(g_, wc, p, tableIndex, isStereo, currentTableIndex, numTables);
 }
 
 juce::Image ScriptingObjects::ScriptedLookAndFeel::Laf::createIcon(PresetHandler::IconType type)
@@ -3881,9 +4396,21 @@ void ScriptingObjects::ScriptedLookAndFeel::loadImage(String imageName, String p
 	}
 }
 
+void ScriptingObjects::ScriptedLookAndFeel::unloadAllImages()
+{
+	loadedImages.clear();
+}
 
-
-
+bool ScriptingObjects::ScriptedLookAndFeel::isImageLoaded(String prettyName)
+{
+	for (auto& img : loadedImages)
+	{
+		if (img.prettyName == prettyName)
+			return true;
+	}
+	
+	return false;
+}
 
 ScriptingObjects::ScriptedLookAndFeel::LocalLaf::LocalLaf(ScriptedLookAndFeel* l) :
 	Laf(l->getScriptProcessor()->getMainController_()),

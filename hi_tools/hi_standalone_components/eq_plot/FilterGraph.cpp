@@ -54,6 +54,7 @@ FilterGraph::FilterGraph (int numFiltersInit, int drawType_):
     setSize (500, 300);
     lowFreq = 20;
     highFreq = 20000;
+	
     fs = 44100;
     maxdB = 18;
     maxPhas = 1;
@@ -327,6 +328,12 @@ void FilterGraph::setFreqRange (float newLowFreq, float newHighFreq)
 }
 
 
+void FilterGraph::setGainRange(float maxGain)
+{
+	maxdB = maxGain-6.0;
+	setNumHorizontalLines(roundToInt(maxdB / 3)+1);
+}
+
 void FilterGraph::setBypassed(bool shouldBeBypassed)
 {
 	if (shouldBeBypassed != bypassed)
@@ -383,13 +390,13 @@ void FilterGraph::setCustom (int filterNum, double sampleRate, std::vector <doub
 	}
 }
 
-void FilterGraph::setCoefficients(int filterNum, double sampleRate, IIRCoefficients newCoefficients)
+void FilterGraph::setCoefficients(int filterNum, double sampleRate, std::pair<IIRCoefficients, int> newCoefficients)
 {
 	if (filterNum < filterVector.size())
 	{
 		auto old = filterVector[filterNum]->getCoefficients();
 
-		if (memcmp(&old.coefficients, newCoefficients.coefficients, sizeof(IIRCoefficients::coefficients)) != 0)
+		if (memcmp(&old.coefficients, newCoefficients.first.coefficients, sizeof(IIRCoefficients::coefficients)) != 0)
 		{
 			filterVector[filterNum]->setSampleRate(sampleRate);
 			filterVector[filterNum]->setCoefficients(filterNum, sampleRate, newCoefficients);

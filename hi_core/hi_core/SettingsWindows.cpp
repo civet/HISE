@@ -43,7 +43,7 @@ public:
 		properties.setLookAndFeel(&pplaf);
 
         auto& sb = properties.getViewport().getVerticalScrollBar();
-        properties.getViewport().setScrollBarThickness(12);
+        properties.getViewport().setScrollBarThickness(13);
         
         sf.addScrollBarToAnimate(sb);
         
@@ -196,7 +196,8 @@ void SettingWindows::buttonClicked(Button* b)
 {
 	if (b == &allSettings)		   setContent(  settingsToShow );
 	if (b == &projectSettings)	   setContent({ HiseSettings::SettingFiles::ProjectSettings, 
-												HiseSettings::SettingFiles::UserSettings });
+												HiseSettings::SettingFiles::UserSettings,
+											    HiseSettings::SettingFiles::ExpansionSettings});
 	if (b == &developmentSettings) setContent({	HiseSettings::SettingFiles::CompilerSettings, 
 												HiseSettings::SettingFiles::ScriptingSettings, 
 												HiseSettings::SettingFiles::OtherSettings});
@@ -547,11 +548,12 @@ void SettingWindows::save(const Identifier& s)
 			c.setProperty("value", c.getProperty("value") ? "Yes" : "No", nullptr);
 	}
 
-	ScopedPointer<XmlElement> xml = HiseSettings::ConversionHelpers::getConvertedXml(getValueTree(s));
+	if(ScopedPointer<XmlElement> xml = HiseSettings::ConversionHelpers::getConvertedXml(getValueTree(s)))
+    {
+        auto f = dataObject.getFileForSetting(s);
 
-	auto f = dataObject.getFileForSetting(s);
-
-	xml->writeToFile(f, "");
+        xml->writeToFile(f, "");
+    }
 }
 
 

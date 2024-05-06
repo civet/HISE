@@ -338,7 +338,7 @@ namespace pimpl
 		DynamicObject::Ptr dynObj = new DynamicObject();
 
 		for (auto& nv : pObj->properties)
-			dynObj->setProperty(nv.name, nv.value);
+			dynObj->setProperty(nv.first, nv.second);
 
 		
 
@@ -357,6 +357,11 @@ namespace pimpl
 		});
 
 		c->findParentComponentOfClass<FloatingTile>()->showComponentInRootPopup(ed, c, {}, false);
+	}
+
+	Colour editor_base::getColourFromNodeComponent(NodeComponent* nc)
+	{
+		return nc->header.colour;
 	}
 
 	void complex_ui_laf::drawTableBackground(Graphics& g, TableEditor& te, Rectangle<float> area, double rulerPosition)
@@ -553,6 +558,8 @@ namespace pimpl
 		g.excludeClipRegion(b.removeFromRight(4));
 		g.excludeClipRegion(b.removeFromTop(4));
 		g.excludeClipRegion(b.removeFromBottom(4));
+
+		
 
 		g.setColour(c.withAlpha(0.1f));
 		g.fillPath(p);

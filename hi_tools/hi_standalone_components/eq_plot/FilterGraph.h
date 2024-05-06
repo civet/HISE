@@ -39,7 +39,7 @@
 namespace hise { using namespace juce;
 
 
-class FilterGraph    : public Component,
+class FilterGraph    : public ComponentWithMiddleMouseDrag,
                        public SettableTooltipClient,
 					   public SafeChangeListener,
 					   public ComplexDataUIUpdaterBase::EventListener,
@@ -120,6 +120,8 @@ public:
 
     void setNumHorizontalLines (int newValue);
     void setFreqRange (float newLowFreq, float newHighFreq);
+	void setGainRange(float maxGain);
+
 	void setBypassed(bool shouldBeBypassed);;
 
     void setFilterGain (int filterNum, double gain);
@@ -127,7 +129,8 @@ public:
     void setEqBand (int filterNum, double sampleRate, double frequency, double Q, float gain, BandType eqType);
     void setCustom (int filterNum, double sampleRate, std::vector <double> numCoeffs, std::vector <double> denCoeffs);
     
-	void setCoefficients(int filterNum, double sampleRate, IIRCoefficients newCoefficients);
+	void setCoefficients(int filterNum, double sampleRate, std::pair<IIRCoefficients, int> newCoefficients);
+
 
     float xToFreq (float xPos);
     float freqToX (float freq);
@@ -174,6 +177,11 @@ public:
 		}
 
 		repaint();
+	}
+
+	void setShowLines(bool shouldShowLines)
+	{
+		showLines = shouldShowLines;
 	}
 
 private:

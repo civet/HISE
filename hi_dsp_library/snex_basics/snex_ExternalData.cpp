@@ -259,6 +259,12 @@ void ExternalData::forEachType(const std::function<void(DataType)>& f)
 
 void ExternalData::referBlockTo(block& b, int channelIndex) const
 {
+	if(isEmpty())
+	{
+		b.referToNothing();
+		return;
+	}
+
 	if (dataType == DataType::AudioFile || dataType == DataType::DisplayBuffer)
 	{
 		channelIndex = jmin(channelIndex, numChannels-1);
@@ -358,6 +364,25 @@ hise::ComplexDataUIBase::EditorBase* ExternalData::createEditor(ComplexDataUIBas
 
 	return c;
 }
+
+juce::String InitialiserList::toString() const
+{
+	juce::String s;
+	s << "{ ";
+
+	for (auto l : root)
+	{
+		s << l->toString();
+
+		if (root.getLast().get() != l)
+			s << ", ";
+	}
+
+	s << " }";
+	return s;
+}
+
+
 
 juce::Result InitialiserList::getValue(int index, VariableStorage& v)
 {

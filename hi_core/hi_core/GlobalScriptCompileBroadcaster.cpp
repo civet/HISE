@@ -40,6 +40,175 @@ GlobalScriptCompileBroadcaster::GlobalScriptCompileBroadcaster() :
 	createDummyLoader();
 }
 
+GlobalScriptCompileBroadcaster::~GlobalScriptCompileBroadcaster()
+{
+	dummyLibraryLoader = nullptr;
+	globalEditBroadcaster = nullptr;
+    
+	clearIncludedFiles();
+}
+
+void GlobalScriptCompileBroadcaster::addScriptListener(GlobalScriptCompileListener* listener, bool insertAtBeginning)
+{
+	if (insertAtBeginning)
+	{
+		listenerListStart.addIfNotAlreadyThere(listener);
+	}
+	else
+	{
+		listenerListEnd.addIfNotAlreadyThere(listener);
+	}
+
+}
+
+void GlobalScriptCompileBroadcaster::removeScriptListener(GlobalScriptCompileListener* listener)
+{
+	listenerListStart.removeAllInstancesOf(listener);
+	listenerListEnd.removeAllInstancesOf(listener);
+}
+
+void GlobalScriptCompileBroadcaster::setShouldUseBackgroundThreadForCompiling(bool shouldBeEnabled) noexcept
+{ useBackgroundCompiling = shouldBeEnabled; }
+
+bool GlobalScriptCompileBroadcaster::isUsingBackgroundThreadForCompiling() const noexcept
+{ return useBackgroundCompiling; }
+
+void GlobalScriptCompileBroadcaster::setEnableCompileAllScriptsOnPresetLoad(bool shouldBeEnabled) noexcept
+{ enableGlobalRecompile = shouldBeEnabled; }
+
+bool GlobalScriptCompileBroadcaster::isCompilingAllScriptsOnPresetLoad() const noexcept
+{ return enableGlobalRecompile; }
+
+int GlobalScriptCompileBroadcaster::getNumExternalScriptFiles() const
+{ return includedFiles.size(); }
+
+ExternalScriptFile::Ptr GlobalScriptCompileBroadcaster::getExternalScriptFile(int index) const
+{
+	return includedFiles[index];
+}
+
+void GlobalScriptCompileBroadcaster::clearIncludedFiles()
+{
+	includedFiles.clear();
+}
+
+void GlobalScriptCompileBroadcaster::restoreIncludedScriptFilesFromSnippet(const ValueTree& snippetTree)
+{
+#if USE_BACKEND
+	auto mc = dynamic_cast<MainController*>(this);
+	auto scriptRootFolder = mc->getActiveFileHandler()->getSubDirectory(FileHandlerBase::Scripts);
+	auto snexRootFolder = BackendDllManager::getSubFolder(mc, BackendDllManager::FolderSubType::CodeLibrary);
+
+	auto restoreFromChild = [&](const Identifier& id, const File& rootDirectory)
+	{
+		auto v = snippetTree.getChildWithName(id);
+		jassert(v.isValid());
+		
+		auto chain = dynamic_cast<const MainController*>(this)->getMainSynthChain();
+
+		for(auto c: v)
+		{
+			debugToConsole(const_cast<ModulatorSynthChain*>(chain), "loaded embedded file " + c["filename"].toString() + " from HISE snippet");
+			auto n = new ExternalScriptFile(rootDirectory, c);
+			includedFiles.add(n);
+		}
+	};
+	
+	restoreFromChild("embeddedScripts", scriptRootFolder);
+	restoreFromChild("embeddedSnexFiles", snexRootFolder);
+#endif
+}
+
+ValueTree GlobalScriptCompileBroadcaster::collectIncludedScriptFilesForSnippet(const Identifier& id, const File& root) const
+{
+#if USE_BACKEND
+	ValueTree d(id);
+	
+	auto chain = dynamic_cast<const MainController*>(this)->getMainSynthChain();
+
+	auto scriptProcessorList = ProcessorHelpers::getListOfAllProcessors<JavascriptProcessor>(chain);
+
+	for(auto f: includedFiles)
+	{
+		if(!f->getFile().isAChildOf(root))
+			continue;
+
+		bool included = false;
+
+		auto extension = f->getFile().getFileExtension();
+
+		// Include faust & snex files but check the others
+		// whether they are actually used or "(detached)"
+		if(extension == ".dsp" || extension == ".h" || extension == ".xml")
+			included = true;
+
+		for(auto jp: scriptProcessorList)
+		{
+			for(int i = 0; i < jp->getNumWatchedFiles(); i++)
+			{
+				if(jp->getWatchedFile(i) == f->getFile())
+				{
+					included = true;
+					break;
+				}
+			}
+
+			if(included)
+				break;
+		}
+
+		auto c = f->toEmbeddableValueTree(root);
+
+		if(!included)
+		{
+			debugToConsole(const_cast<ModulatorSynthChain*>(chain), "skip detached file " + c["filename"].toString() + " from embedding into HISE snippet");
+			continue;
+		}
+		
+		debugToConsole(const_cast<ModulatorSynthChain*>(chain), "embedded " + c["filename"].toString() + " into HISE snippet");
+		d.addChild(c, -1, nullptr);
+	}
+
+	return d;
+#else
+	jassertfalse;
+	return {};
+#endif
+}
+
+ScriptComponentEditBroadcaster* GlobalScriptCompileBroadcaster::getScriptComponentEditBroadcaster()
+{
+	return globalEditBroadcaster;
+}
+
+const ScriptComponentEditBroadcaster* GlobalScriptCompileBroadcaster::getScriptComponentEditBroadcaster() const
+{
+	return globalEditBroadcaster;
+}
+
+ReferenceCountedObject* GlobalScriptCompileBroadcaster::getCurrentScriptLookAndFeel()
+{ return currentScriptLaf.get(); }
+
+void GlobalScriptCompileBroadcaster::setCurrentScriptLookAndFeel(ReferenceCountedObject* newLaf)
+{
+	currentScriptLaf = newLaf;
+}
+
+ReferenceCountedObject* GlobalScriptCompileBroadcaster::getGlobalRoutingManager()
+{ return routingManager.get(); }
+
+void GlobalScriptCompileBroadcaster::setGlobalRoutingManager(ReferenceCountedObject* newManager)
+{ routingManager = newManager; }
+
+void GlobalScriptCompileBroadcaster::clearWebResources()
+{
+	webviews.clear();
+}
+
+void GlobalScriptCompileBroadcaster::setWebViewRoot(File newRoot)
+{
+	webViewRoot = newRoot;
+}
 
 
 void GlobalScriptCompileBroadcaster::sendScriptCompileMessage(JavascriptProcessor *processorThatWasCompiled)
@@ -149,7 +318,7 @@ String GlobalScriptCompileBroadcaster::getExternalScriptFromCollection(const Str
 	return String();
 }
 
-ExternalScriptFile::Ptr GlobalScriptCompileBroadcaster::getExternalScriptFile(const File& fileToInclude)
+ExternalScriptFile::Ptr GlobalScriptCompileBroadcaster::getExternalScriptFile(const File& fileToInclude, bool createIfNotFound)
 {
 	for (int i = 0; i < includedFiles.size(); i++)
 	{
@@ -157,9 +326,106 @@ ExternalScriptFile::Ptr GlobalScriptCompileBroadcaster::getExternalScriptFile(co
 			return includedFiles[i];
 	}
 
-	includedFiles.add(new ExternalScriptFile(fileToInclude));
+	if(createIfNotFound)
+		return includedFiles.add(new ExternalScriptFile(fileToInclude));
 
-	return includedFiles.getLast();
+	return nullptr;
+}
+
+juce::ValueTree GlobalScriptCompileBroadcaster::exportWebViewResources()
+{
+	ValueTree v("WebViewResources");
+
+	for (const auto& wv : webviews)
+	{
+		auto projectRoot = dynamic_cast<MainController*>(this)->getCurrentFileHandler().getRootFolder();
+
+		auto data = std::get<1>(wv);
+
+		// We only embed file resources that are in the project directory (because then we'll assume
+		// that they are not likely to be installed on the end user's computer).
+		auto shouldEmbedResource = data->getRootDirectory().isAChildOf(projectRoot);
+
+		if (shouldEmbedResource)
+		{
+			auto id = std::get<0>(wv).toString();
+
+			auto poolDir = projectRoot.getChildFile("Images").getChildFile("exported_webviews");
+
+#if JUCE_WINDOWS
+			poolDir = poolDir.getChildFile("Windows");
+#else
+			poolDir = poolDir.getChildFile("macOS");
+#endif
+
+			poolDir.createDirectory();
+
+			auto wvFile = poolDir.getChildFile(id).withFileExtension(".dat");
+
+			zstd::ZDefaultCompressor comp;
+
+
+#if USE_BACKEND
+		if(CompileExporter::isExportingFromCommandLine())
+		{
+			if(wvFile.existsAsFile())
+			{
+				ValueTree c;
+				comp.expand(wvFile, c);
+				v.addChild(c, -1, nullptr);
+			}
+			else
+			{
+				throw Result::fail("Can't find preexported web resource for " + id);
+			}
+		}
+		else
+		{
+			auto c = data->exportAsValueTree();
+			c.setProperty("ID", id, nullptr);
+
+			comp.compress(c, wvFile);
+
+			v.addChild(c, -1, nullptr);
+		}
+#endif
+		}
+	}
+
+	return v;
+}
+
+void GlobalScriptCompileBroadcaster::restoreWebResources(const ValueTree& v)
+{
+    clearWebResources();
+
+	for (auto c : v)
+	{
+		auto d = getOrCreateWebView(c["ID"].toString());
+		d->restoreFromValueTree(c);
+	}
+}
+
+hise::WebViewData::Ptr GlobalScriptCompileBroadcaster::getOrCreateWebView(const Identifier& id)
+{
+	for (const auto& wv : webviews)
+	{
+		if (std::get<0>(wv) == id)
+			return std::get<1>(wv);
+	}
+
+	webviews.add({ id, new WebViewData(webViewRoot) });
+	return std::get<1>(webviews.getLast());
+}
+
+Array<juce::Identifier> GlobalScriptCompileBroadcaster::getAllWebViewIds() const
+{
+	Array<Identifier> ids;
+
+	for (const auto& wv : webviews)
+		ids.add(std::get<0>(wv));
+
+	return ids;
 }
 
 void ExternalScriptFile::setRuntimeErrors(const Result& r)
@@ -215,4 +481,39 @@ String ExternalScriptFile::RuntimeError::toString() const
 	return e;
 }
 
+ExternalScriptFile::RuntimeError::RuntimeError() = default;
+
+ExternalScriptFile::ExternalScriptFile(const File& file):
+	file(file),
+	resourceType(ResourceType::FileBased),
+	currentResult(Result::ok())
+{
+#if USE_BACKEND
+	content.replaceAllContent(file.loadFileAsString());
+	content.setSavePoint();
+	content.clearUndoHistory();
+#endif
+}
+
+ExternalScriptFile::~ExternalScriptFile()
+{
+
+}
+
+void ExternalScriptFile::setResult(Result r)
+{
+	currentResult = r;
+}
+
+CodeDocument& ExternalScriptFile::getFileDocument()
+{ return content; }
+
+Result ExternalScriptFile::getResult() const
+{ return currentResult; }
+
+File ExternalScriptFile::getFile() const
+{ return file; }
+
+ExternalScriptFile::RuntimeError::Broadcaster& ExternalScriptFile::getRuntimeErrorBroadcaster()
+{ return runtimeErrorBroadcaster; }
 } // namespace hise

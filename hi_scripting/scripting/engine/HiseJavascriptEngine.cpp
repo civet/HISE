@@ -54,7 +54,7 @@ X(rightShiftUnsigned, ">>>") X(rightShiftEquals, ">>=") X(rightShift,   ">>")   
     X(function, "function") X(return_, "return") X(true_,  "true")   X(false_,    "false")    X(new_,      "new") \
     X(typeof_,  "typeof")	X(switch_, "switch") X(case_, "case")	 X(default_,  "default")  X(register_var, "reg") \
 	X(in, 		"in")		X(inline_, "inline") X(const_, "const")	 X(global_,   "global")	  X(local_,	   "local") \
-	X(include_,  "include") X(rLock_,   "readLock") X(wLock_,"writeLock") 	X(extern_, "extern") X(namespace_, "namespace") \
+	X(include_,  "include") X(extern_, "extern") X(namespace_, "namespace") \
 	X(isDefined_, "isDefined");
 
 namespace TokenTypes
@@ -90,6 +90,23 @@ HiseJavascriptEngine::~HiseJavascriptEngine()
 	root->hiseSpecialData.clear();
 	root = nullptr;
 	breakpointListeners.clear();
+}
+
+HiseJavascriptEngine::TimeoutExtender::TimeoutExtender(HiseJavascriptEngine* e):
+	engine(e)
+{
+	start = Time::getMillisecondCounter();
+}
+
+HiseJavascriptEngine::TimeoutExtender::~TimeoutExtender()
+{
+#if USE_BACKEND
+	if (engine != nullptr)
+	{
+		auto delta = Time::getMillisecondCounter() - start;
+		engine->extendTimeout(delta);
+	}
+#endif
 }
 
 
@@ -1104,7 +1121,18 @@ var HiseJavascriptEngine::executeWithoutAllocation(const Identifier &function, c
 	return returnVal;
 }
 
-void HiseJavascriptEngine::checkValidParameter(int index, const var& valueToTest, const RootObject::CodeLocation& location)
+void HiseJavascriptEngine::sendBreakpointMessage(int breakpointIndex)
+{
+	for (int i = 0; i < breakpointListeners.size(); i++)
+	{
+		if (breakpointListeners[i].get() != nullptr)
+		{
+			breakpointListeners[i]->breakpointWasHit(breakpointIndex);
+		}
+	}
+}
+
+void HiseJavascriptEngine::checkValidParameter(int index, const var& valueToTest, const RootObject::CodeLocation& location, VarTypeChecker::VarTypes expectedType)
 {
 #if ENABLE_SCRIPTING_SAFE_CHECKS
 
@@ -1112,6 +1140,17 @@ void HiseJavascriptEngine::checkValidParameter(int index, const var& valueToTest
 	{
 		location.throwError("API call with undefined parameter " + String(index));
 	}
+    
+    if(expectedType != VarTypeChecker::Undefined)
+    {
+        auto ok = VarTypeChecker::checkType(valueToTest, expectedType, false);
+        
+        if(ok.failed())
+        {
+            location.throwError(ok.getErrorMessage());
+        }
+    }
+    
 #else
     ignoreUnused(location, index, valueToTest);
 #endif
@@ -1746,14 +1785,20 @@ struct TokenHelpers
 	}
 };
 
-
-
+bool HiseJavascriptEngine::TokenProvider::shouldAbortTokenRebuild(Thread* t) const
+{
+    return (t != nullptr && t->threadShouldExit()) ||
+           (jp == nullptr) ||
+           (jp != nullptr && jp->shouldReleaseDebugLock());
+}
 
 
 void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& tokens)
 {
 	if (jp != nullptr)
 	{
+		LockHelpers::SafeLock ssl(dynamic_cast<Processor*>(jp.get())->getMainController(), LockHelpers::Type::ScriptLock);
+
 		File scriptFolder = dynamic_cast<Processor*>(jp.get())->getMainController()->getCurrentFileHandler().getSubDirectory(FileHandlerBase::Scripts);
 		auto scriptFiles = scriptFolder.findChildFiles(File::findFiles, true, "*.js");
 
@@ -1785,7 +1830,7 @@ void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& 
 		}
 		
 
-		ScopedReadLock sl(jp->getDebugLock());
+		//ScopedReadLock sl(jp->getDebugLock());
 
 		auto holder = dynamic_cast<ApiProviderBase::Holder*>(jp.get());
 
@@ -1830,7 +1875,7 @@ void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& 
 
 			for (int i = 0; i < numObjects; i++)
 			{
-				if (Thread::currentThreadShouldExit() || jp->shouldReleaseDebugLock())
+				if (shouldAbortTokenRebuild(Thread::getCurrentThread()))
 					return;
 
 				if (e == nullptr)
@@ -1863,7 +1908,7 @@ void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& 
 
 						for (auto methodTree : classTree)
 						{
-							if (Thread::currentThreadShouldExit() || jp->shouldReleaseDebugLock())
+							if (shouldAbortTokenRebuild(Thread::getCurrentThread()))
 								return;
 
 							tokens.add(new ApiToken(cid, methodTree));
@@ -1915,6 +1960,17 @@ void HiseJavascriptEngine::TokenProvider::addTokens(mcl::TokenCollection::List& 
 	}
 }
 
+void HiseJavascriptEngine::TokenProvider::precompileCallback(TokenProvider& p, bool unused)
+{
+	p.signalClear(sendNotificationSync);
+}
+
+void HiseJavascriptEngine::TokenProvider::scriptWasCompiled(JavascriptProcessor* processor)
+{
+	if (jp == processor)
+		signalRebuild();
+}
+
 hise::HiseJavascriptEngine::RootObject::OptimizationPass::OptimizationResult HiseJavascriptEngine::RootObject::OptimizationPass::executePass(Statement* rootStatementToOptimize)
 {
 	OptimizationResult r;
@@ -1945,6 +2001,68 @@ hise::HiseJavascriptEngine::RootObject::OptimizationPass::OptimizationResult His
 	});
 
 	return r;
+}
+
+HiseJavascriptEngine::RootObject::Error HiseJavascriptEngine::RootObject::Error::fromBreakpoint(const Breakpoint& bp)
+{
+	Error e;
+
+	e.errorMessage = "Breakpoint " + String(bp.index + 1) + " was hit";
+	e.externalLocation = bp.externalLocation;
+	e.lineNumber = bp.lineNumber;
+	e.charIndex = bp.charIndex;
+	e.columnNumber = bp.colNumber;
+				
+	return e;
+}
+
+String HiseJavascriptEngine::RootObject::Error::getLocationString() const
+{
+	if (externalLocation.isEmpty() || externalLocation.contains("()"))
+		return "Line " + String(lineNumber) + ", column " + String(columnNumber);
+	else
+	{
+#if USE_BACKEND
+		File f(externalLocation);
+		const String fileName = f.getFileName();
+#else
+					const String fileName = externalLocation;
+#endif
+
+		return fileName + " (" + String(lineNumber) + ")"; 
+	}
+}
+
+String HiseJavascriptEngine::RootObject::Error::getEncodedLocation(Processor* p) const
+{
+	ignoreUnused(p);
+
+#if USE_BACKEND
+	String l;
+
+	l << p->getId() << "|";
+
+	if (externalLocation.contains("()"))
+		l << externalLocation;
+	else if (!externalLocation.isEmpty())
+		l << File(externalLocation).getRelativePathFrom(GET_PROJECT_HANDLER(p).getSubDirectory(ProjectHandler::SubDirectories::Scripts));
+
+	l << "|" << String(charIndex);
+	l << "|" << String(lineNumber) << "|" << String(columnNumber);
+
+	return "{" + Base64::toBase64(l) + "}";
+#else
+				return {};
+#endif
+}
+
+String HiseJavascriptEngine::RootObject::Error::toString(Processor* p) const
+{
+	String s;
+	s << getLocationString();
+	s << "\t" << getEncodedLocation(p);
+
+	return s;
 }
 
 bool HiseJavascriptEngine::RootObject::OptimizationPass::callForEach(Statement* root, const std::function<bool(Statement* child)>& f)

@@ -224,18 +224,29 @@ void DialogWindowWithBackgroundThread::stopThread()
 	thread = nullptr;
 }
 
-void DialogWindowWithBackgroundThread::runSynchronous()
+void DialogWindowWithBackgroundThread::runSynchronous(bool deleteAfterExecution)
 {
 	// Obviously only available in the message loop!
 	jassert(MessageManager::getInstance()->isThisTheMessageThread());
 
 	run();
 	threadFinished();
-	destroy();
+
+	if(deleteAfterExecution)
+		destroy();
 }
 
 void DialogWindowWithBackgroundThread::showStatusMessage(const String &message) const
 {
+#if USE_BACKEND
+	if (CompileExporter::isExportingFromCommandLine())
+	{
+		DBG(message);
+		std::cout << message << std::endl;
+		return;
+	}
+#endif
+
 	MessageManagerLock lock(thread);
 
 	if (lock.lockWasGained())
@@ -269,11 +280,143 @@ void DialogWindowWithBackgroundThread::reset()
 	}
 }
 
+DialogWindowWithBackgroundThread::AdditionalRow::AdditionalRow(DialogWindowWithBackgroundThread* parent_):
+	parent(parent_)
+{
+
+}
+
+DialogWindowWithBackgroundThread::AdditionalRow::~AdditionalRow()
+{
+	columns.clear();
+}
+
+void DialogWindowWithBackgroundThread::AdditionalRow::buttonClicked(Button* b)
+{
+	parent->buttonClicked(b);
+}
+
+
+
+
+void DialogWindowWithBackgroundThread::AdditionalRow::Column::buttonClicked(Button*)
+{
+				
+}
+
+DialogWindowWithBackgroundThread::AdditionalRow::Column::~Column()
+{
+	component = nullptr;
+	infoButton = nullptr;
+}
+
+void DialogWindowWithBackgroundThread::AdditionalRow::Column::paint(Graphics& g)
+{
+	if (name.isNotEmpty())
+	{
+		auto area = getLocalBounds().removeFromTop(16);
+		area.removeFromRight(18);
+		g.setFont(GLOBAL_BOLD_FONT());
+		g.setColour(Colours::white);
+		g.drawText(name, area, Justification::centredLeft);
+	}
+}
+
+void DialogWindowWithBackgroundThread::setProgress(double progressValue)
+{ logData.progress = progressValue; }
+
+double& DialogWindowWithBackgroundThread::getProgressCounter()
+{ return logData.progress; }
+
+void DialogWindowWithBackgroundThread::resultButtonClicked(const String&)
+{}
+
+bool DialogWindowWithBackgroundThread::checkConditionsBeforeStartingThread()
+{ return true; }
+
+void DialogWindowWithBackgroundThread::wait(int milliSeconds)
+{
+	if (thread != nullptr)
+	{
+		thread->wait(milliSeconds);
+	}
+}
+
+void DialogWindowWithBackgroundThread::setAdditionalLogFunction(const LogFunction& additionalLogFunction)
+{
+	logData.logFunction = additionalLogFunction;
+}
+
+void DialogWindowWithBackgroundThread::setAdditionalFinishCallback(const std::function<void()>& f)
+{
+	additionalFinishCallback = f;
+}
+
+void DialogWindowWithBackgroundThread::setDestroyWhenFinished(bool shouldBeDestroyed)
+{
+	destroyWhenFinished = shouldBeDestroyed;
+}
+
+Button* DialogWindowWithBackgroundThread::getButton(const String& name)
+{
+	for (int i = 0; i < getNumChildComponents(); i++)
+	{
+		if (auto b = dynamic_cast<Button*>(getChildComponent(i)))
+		{
+			if(b->getName() == name)
+				return b;
+		}
+	}
+
+	return nullptr;
+}
+
+void DialogWindowWithBackgroundThread::setTimeoutMs(int newTimeout)
+{
+	timeoutMs = newTimeout;
+}
+
+Thread* DialogWindowWithBackgroundThread::getCurrentThread()
+{
+	return thread;
+}
+
+DialogWindowWithBackgroundThread::LoadingThread::LoadingThread(DialogWindowWithBackgroundThread* parent_):
+	Thread(parent_->getName(), HISE_DEFAULT_STACK_SIZE),
+	parent(parent_)
+{}
+
+DialogWindowWithBackgroundThread::LoadingThread::~LoadingThread()
+{
+			
+}
+
+void DialogWindowWithBackgroundThread::LoadingThread::run()
+{
+	parent->run();
+	parent->triggerAsyncUpdate();
+}
+
 void DialogWindowWithBackgroundThread::runThread()
 {
 	stopThread();
 	thread = new LoadingThread(this);
 	thread->startThread();
+}
+
+void DialogWindowWithBackgroundThread::AdditionalRow::addTextEditor(const String& name, const String& initialText, const String& label, int width)
+{
+    auto* ed = new TextEditor (name, 0);
+    ed->setSelectAllWhenFocused (true);
+    ed->setEscapeAndReturnKeysConsumed (false);
+    
+    ed->setColour (TextEditor::outlineColourId, findColour (ComboBox::outlineColourId));
+    ed->setFont (getLookAndFeel().getAlertWindowMessageFont());
+    addAndMakeVisible (ed);
+    ed->setText (initialText);
+    ed->setCaretPosition (initialText.length());
+    
+    addCustomComponent(ed, label, width);
 }
 
 void DialogWindowWithBackgroundThread::AdditionalRow::addComboBox(const String& name, const StringArray& items, const String& label, int width/*=0*/)
@@ -460,17 +603,56 @@ hise::MainController* ModalBaseWindow::getMainController()
 #endif
 }
 
+ComponentWithHelp::GlobalHandler::~GlobalHandler()
+{}
+
+bool ComponentWithHelp::GlobalHandler::isHelpEnabled() const
+{ return helpEnabled; }
+
+void ComponentWithHelp::GlobalHandler::toggleHelp()
+{
+	helpEnabled = !helpEnabled;
+
+	for (auto c : registeredHelpers)
+	{
+		if (auto asComponent = dynamic_cast<Component*>(c.get()))
+		{
+			asComponent->repaint();
+		}
+	}
+}
+
+void ComponentWithHelp::GlobalHandler::registerHelper(ComponentWithHelp* c)
+{
+	registeredHelpers.addIfNotAlreadyThere(c);
+}
+
+void ComponentWithHelp::GlobalHandler::removeHelper(ComponentWithHelp* c)
+{
+	registeredHelpers.removeAllInstancesOf(c);
+}
+
+ComponentWithHelp::ComponentWithHelp(GlobalHandler* handler_):
+	handler(handler_)
+{
+	p.loadPathFromData(MainToolbarIcons::help, MainToolbarIcons::help_Size);
+
+	if (handler != nullptr)
+		handler->registerHelper(this);
+}
+
+ComponentWithHelp::~ComponentWithHelp()
+{
+	if (handler != nullptr)
+		handler->removeHelper(this);
+}
+
 SampleDataExporter::SampleDataExporter(MainController* mc) :
 	DialogWindowWithBackgroundThread("Export Samples for Installer"),
 	ControlledObject(mc),
 	synthChain(getMainController()->getMainSynthChain())
 {
-	StringArray sa;
-	sa.add("Export Monolith files only");
-
-	
-
-	addComboBox("file_selection", sa, "Select files to export");
+	addComboBox("format", { "HR Archive (custom FLAC)", "LWZ (Rhapsody Sample Archive)" }, "Output format");
 
 	StringArray sa2;
 
@@ -546,6 +728,10 @@ void SampleDataExporter::logVerboseMessage(const String& verboseMessage)
 #if USE_BACKEND
 	debugToConsole(synthChain, verboseMessage);
 
+	if (CompileExporter::isExportingFromCommandLine())
+	{
+		std::cout << verboseMessage << std::endl;
+	}
 #else
 	ignoreUnused(verboseMessage);
 #endif
@@ -555,12 +741,21 @@ void SampleDataExporter::logStatusMessage(const String& message)
 {
 	fullLog << message << "\n";
 
+	
+
 	showStatusMessage(message);
 }
 
 void SampleDataExporter::criticalErrorOccured(const String& message)
 {
 	criticalError = message; fullLog << "CRITICAL ERROR: " << criticalError;
+
+#if USE_BACKEND
+	if (CompileExporter::isExportingFromCommandLine())
+	{
+		std::cout << criticalError << std::endl;
+	}
+#endif
 }
 
 void SampleDataExporter::run()
@@ -569,7 +764,18 @@ void SampleDataExporter::run()
 
 	showStatusMessage("Exporting");
 
-	hlac::HlacArchiver compressor(getCurrentThread());
+	auto currentThread = getCurrentThread();
+
+#if USE_BACKEND
+	if (currentThread == nullptr)
+	{
+		jassert(CompileExporter::isExportingFromCommandLine());
+		currentThread = getMainController()->getSampleManager().getGlobalSampleThreadPool();
+		jassert(currentThread != nullptr);
+	}
+#endif
+
+	hlac::HlacArchiver compressor(currentThread);
 
 	compressor.setListener(this);
 
@@ -577,6 +783,7 @@ void SampleDataExporter::run()
 
 	data.targetFile = getTargetFile();
 	data.optionalHeaderFile = hxiFile->getCurrentFile();
+	data.additionalFiles = collectWavetableMonoliths();
 	data.metadataJSON = getMetadataJSON();
 	data.fileList = collectMonoliths();
 	data.progress = &logData.progress;
@@ -595,7 +802,51 @@ void SampleDataExporter::run()
 		break;
 	}
 
-	compressor.compressSampleData(data);
+	if (getComboBoxComponent("format")->getSelectedItemIndex() == 0)
+	{
+		compressor.compressSampleData(data);
+	}
+	else
+	{
+		int64 currentSize = 0;
+		ScopedPointer<ZipFile::Builder> b = new ZipFile::Builder();
+
+		auto zipFile = data.targetFile.getNonexistentSibling(false);
+		auto original = zipFile;
+
+		for (auto f : data.fileList)
+		{
+			auto thisSize = f.getSize();
+
+			if (currentThread->threadShouldExit())
+				break;
+
+			if (currentSize + thisSize > data.partSize)
+			{
+				zipFile.deleteFile();
+				FileOutputStream fos(zipFile);
+				showStatusMessage("Write " + f.getFileName());
+				b->writeToStream(fos, &getProgressCounter());
+
+				b = new ZipFile::Builder();
+				zipFile = original.getNonexistentSibling(true);
+				currentSize = 0;
+			}
+
+			b->addFile(f, 0);
+			currentSize += thisSize;
+		}
+
+		if (currentSize != 0)
+		{
+			zipFile.deleteFile();
+			FileOutputStream fos(zipFile);
+			b->writeToStream(fos, &getProgressCounter());
+			b = nullptr;
+		}
+	}
+
+	
 }
 
 void SampleDataExporter::threadFinished()
@@ -617,9 +868,27 @@ void SampleDataExporter::setTargetDirectory(const File& targetDirectory)
 	targetFile->setCurrentFile(targetDirectory, false, dontSendNotification);
 }
 
+Array<juce::File> SampleDataExporter::collectWavetableMonoliths()
+{
+	auto expName = getExpansionName();
+
+	FileHandlerBase* handler = &getMainController()->getCurrentFileHandler();
+
+	if (expName.isNotEmpty())
+	{
+		if (auto e = getMainController()->getExpansionHandler().getExpansionFromName(expName))
+			handler = e;
+	}
+
+	auto sampleDirectory = handler->getSubDirectory(FileHandlerBase::Samples);
+
+	return sampleDirectory.findChildFiles(File::findFiles, false, "*.hwm");
+}
+
 Array<File> SampleDataExporter::collectMonoliths()
 {
 	Array<File> sampleMonoliths;
+
 	auto expName = getExpansionName();
 
 	FileHandlerBase* handler = &getMainController()->getCurrentFileHandler();
@@ -638,6 +907,10 @@ Array<File> SampleDataExporter::collectMonoliths()
 		auto entry = smPool.loadFromReference(smPool.getReference(i), PoolHelpers::DontCreateNewEntry);
 
 		MonolithFileReference mref(entry->data);
+
+		if (!mref.isUsingMonolith())
+			continue;
+
 		mref.setFileNotFoundBehaviour(MonolithFileReference::FileNotFoundBehaviour::DoNothing);
 		mref.addSampleDirectory(sampleDirectory);
 
@@ -756,21 +1029,31 @@ File SampleDataExporter::getTargetFile() const
 {
 	auto currentFile = targetFile->getCurrentFile();
 
+	String fileName;
+
 	auto expName = getExpansionName();
 
-	if (expName.isEmpty())
+	if (getComboBoxComponent("format")->getSelectedItemIndex() == 0)
 	{
-		auto name = getProjectName();
-		auto version = getProjectVersion();
-		version = version.replaceCharacter('.', '_');
-		auto fileName = name + "_" + version + "_Samples.hr1";
-		return currentFile.getChildFile(fileName);
+		if (expName.isEmpty())
+		{
+			auto name = getProjectName();
+			auto version = getProjectVersion();
+			version = version.replaceCharacter('.', '_');
+			fileName = name + "_" + version + "_Samples.hr1";
+		}
+		else
+		{
+			fileName << expName + "_Samples.hr1";
+		}
 	}
 	else
 	{
-		auto fileName = expName + "_Samples.hr1";
-		return currentFile.getChildFile(fileName);
+		fileName << getProjectName().toLowerCase().replaceCharacter(' ', '_') << "_samples_" << getProjectVersion().replaceCharacter('.', '_');
+		fileName << ".lwz";
 	}
+
+	return currentFile.getChildFile(fileName);
 }
 
 

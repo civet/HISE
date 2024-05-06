@@ -47,6 +47,34 @@ namespace hise { using namespace juce;
 
 class BackendProcessorEditor;
 
+class SuspendedOverlay: public Component
+{
+	void paint(Graphics& g) override;
+
+	void mouseDown(const MouseEvent& event) override;
+};
+
+struct SnippetBrowserHelpers
+{
+	enum class Category
+	{
+		Undefined,
+		Modules,
+		MIDI,
+		ScriptingApi,
+		Scriptnode,
+		UI,
+		numCategories
+	};
+
+	static std::map<Identifier, bool> getFoldConfiguration(Category c);
+
+	static StringArray getCategoryNames();
+};
+
+
+
+
 class BackendRootWindow : public TopLevelWindowWithOptionalOpenGL,
 						  public TopLevelWindowWithKeyMappings,
 						  public AudioProcessorEditor,
@@ -58,35 +86,56 @@ class BackendRootWindow : public TopLevelWindowWithOptionalOpenGL,
 						  public ComponentWithBackendConnection,
 						  public DragAndDropContainer,
 						  public ComponentWithHelp::GlobalHandler,
-						  public PeriodicScreenshotter::Holder,
                           public ProjectHandler::Listener,
+						  public GlobalScriptCompileListener,
 						  public MainController::LockFreeDispatcher::PresetLoadListener
 {
 public:
+
+	struct TooltipLookAndFeel: public LookAndFeel_V4
+	{
+		static TextLayout layoutTooltipText(const String& text, Colour colour) noexcept;
+
+		Rectangle< int > getTooltipBounds(const String& tipText, Point<int> screenPos, Rectangle<int> parentArea) override;
+
+		void drawTooltip(Graphics& g, const String& text, int width,int height) override;
+	} ttlaf;
+
+	struct TooltipWindowWithoutScriptContent: public juce::TooltipWindow
+	{
+		TooltipWindowWithoutScriptContent() :
+			TooltipWindow(nullptr, 900)
+		{};
+
+		String getTipFor(Component&component) override;
+	};
+
+	TooltipWindowWithoutScriptContent funkytooltips;
 
 	BackendRootWindow(AudioProcessor *ownerProcessor, var editorState);
 
 	~BackendRootWindow();
 
 	bool isFullScreenMode() const;
+	void deleteThisSnippetInstance(bool sync);
 
-    
-    
-	File getKeyPressSettingFile() const override
-	{
-		return ProjectHandler::getAppDataDirectory().getChildFile("KeyPressMapping.xml");
-	}
+	void toggleSnippetBrowser();
+
+	ScopedPointer<multipage::library::SnippetBrowser> snippetBrowser;
+
+	static mcl::TokenCollection::Ptr getJavascriptTokenCollection(Component* any);
+
+	void rebuildTokenProviders(const Identifier& languageId);
+
+	void scriptWasCompiled(JavascriptProcessor *processor) override;
+
+	File getKeyPressSettingFile() const override;
 
 	void initialiseAllKeyPresses() override;
 
-	void paint(Graphics& g) override
-	{
-		g.fillAll(HiseColourScheme::getColour(HiseColourScheme::ColourIds::EditorBackgroundColourIdBright));
+	void paint(Graphics& g) override;
 
-		//g.fillAll(Colour(0xFF333333));
-	}
-
-    void workbenchChanged(WorkbenchData::Ptr newWorkbench) override
+	void workbenchChanged(WorkbenchData::Ptr newWorkbench) override
     {
         if(newWorkbench != nullptr && newWorkbench->getCodeProvider()->providesCode())
         {
@@ -202,6 +251,8 @@ public:
 	{
 		popoutWindows.add(new FloatingTileDocumentWindow(this));
 
+        popoutWindows.getLast()->addKeyListener(mainCommandManager->getKeyMappings());
+        
 		return popoutWindows.getLast();
 	}
 
@@ -220,8 +271,6 @@ public:
 	}
 
 	MarkdownPreview* createOrShowDocWindow(const MarkdownLink& l);
-
-	PeriodicScreenshotter* getScreenshotter() override { return screenshotter; };
 
 	void paintOverChildren(Graphics& g) override;
 
@@ -244,7 +293,26 @@ public:
 		return false;
 	}
 
+	void setProjectIsBeingExtracted()
+	{
+		projectIsBeingExtracted = true;
+	}
+
+	Array<Component::SafePointer<BackendRootWindow>> allWindowsAndBrowsers;
+
+	void userTriedToCloseWindow() override;
+
+	void setCurrentlyActiveProcessor();
+
+	SnippetBrowserHelpers::Category currentCategory = SnippetBrowserHelpers::Category::Undefined;
+
 private:
+
+	mcl::TokenCollection::Ptr javascriptTokens;
+
+	bool projectIsBeingExtracted = false;
+
+	friend class ProjectImporter;
 
 	FloatingTabComponent* getCodeTabs();
 
@@ -262,7 +330,7 @@ private:
 
 	friend class BackendCommandTarget;
 
-	ScopedPointer<PeriodicScreenshotter::PopupGlassLookAndFeel> plaf;
+	PopupLookAndFeel plaf;
 
 	BackendProcessor *owner;
 
@@ -288,9 +356,9 @@ private:
 
 	bool resetOnClose = false;
 
-	ScopedPointer<PeriodicScreenshotter> screenshotter;
-
 	JUCE_DECLARE_WEAK_REFERENCEABLE(BackendRootWindow);
+
+	ScopedPointer<SuspendedOverlay> suspendedOverlay;
 };
 
 struct BackendPanelHelpers
@@ -344,7 +412,11 @@ struct BackendPanelHelpers
 
 	static bool isMainWorkspaceActive(FloatingTile* root);
 
-	
+#if JUCE_LINUX
+    // This might keep the fonts alive and increase the text
+    // rendering performance...
+    hise::LinuxFontHandler::Instance fontHandler;
+#endif
 
 };
 

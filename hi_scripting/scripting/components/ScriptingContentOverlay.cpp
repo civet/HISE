@@ -34,6 +34,27 @@
 
 namespace hise { using namespace juce;
 
+namespace OverlayIcons
+{
+	
+	namespace data
+	{
+		static const unsigned char lockShape[] = { 110,109,41,100,31,68,33,48,94,67,98,156,188,33,68,33,48,94,67,248,163,35,68,211,205,101,67,248,163,35,68,92,47,111,67,108,248,163,35,68,223,111,184,67,98,248,163,35,68,164,32,189,67,139,188,33,68,125,239,192,67,41,100,31,68,125,239,192,67,108,37,182,
+		213,67,125,239,192,67,98,96,5,209,67,125,239,192,67,135,54,205,67,164,32,189,67,135,54,205,67,223,111,184,67,108,135,54,205,67,92,47,111,67,98,135,54,205,67,211,205,101,67,96,5,209,67,33,48,94,67,37,182,213,67,33,48,94,67,108,41,100,31,68,33,48,94,67,
+		99,109,166,91,248,67,68,11,76,67,108,166,171,219,67,68,11,76,67,108,166,171,219,67,160,186,20,67,108,137,129,219,67,160,186,20,67,108,137,129,219,67,184,126,20,67,98,137,129,219,67,254,20,196,66,172,252,239,67,229,80,100,66,84,155,4,68,229,80,100,66,
+		98,98,56,17,68,229,80,100,66,227,117,27,68,254,20,196,66,227,117,27,68,184,126,20,67,108,227,117,27,68,160,186,20,67,108,49,112,27,68,160,186,20,67,108,49,112,27,68,193,234,76,67,108,41,28,13,68,193,234,76,67,108,41,28,13,68,160,186,20,67,108,229,24,
+		13,68,160,186,20,67,98,229,24,13,68,168,166,20,67,246,24,13,68,176,146,20,67,246,24,13,68,184,126,20,67,98,246,24,13,68,0,192,1,67,242,74,9,68,98,16,229,66,84,155,4,68,98,16,229,66,98,35,235,255,67,98,16,229,66,133,91,248,67,66,128,1,67,231,59,248,67,
+		180,8,20,67,108,166,91,248,67,180,8,20,67,108,166,91,248,67,68,11,76,67,99,101,0,0 };
+
+		static const unsigned char penShape[] = { 110,109,96,69,112,67,182,243,141,64,108,154,73,133,67,143,194,240,65,98,158,95,136,67,201,118,16,66,59,111,136,67,92,15,56,66,172,108,133,67,125,191,80,66,108,51,179,122,67,100,123,137,66,108,240,7,74,67,172,28,170,65,108,20,46,90,67,82,184,150,64,98,
+			51,51,96,67,12,2,187,191,88,25,106,67,131,192,202,191,96,69,112,67,182,243,141,64,99,109,14,173,62,67,164,240,1,66,108,113,29,111,67,213,120,159,66,108,127,42,171,66,0,32,109,67,108,117,147,20,66,190,223,61,67,108,14,173,62,67,164,240,1,66,99,109,236,
+			81,200,65,121,9,75,67,108,123,148,145,66,53,158,121,67,108,0,0,0,0,74,60,138,67,108,236,81,200,65,121,9,75,67,99,101,0,0 };
+	}
+
+	DEFINE_DATA(lockShape, 393);
+	DEFINE_DATA(penShape, 183);
+};
+
 ScriptEditHandler::ScriptEditHandler()
 {
 
@@ -58,6 +79,7 @@ void ScriptEditHandler::createNewComponent(ComponentType componentType, int x, i
 	case ComponentType::Panel:				componentName = "Panel"; break;
 	case ComponentType::AudioWaveform:		componentName = "AudioWaveform"; break;
 	case ComponentType::SliderPack:			componentName = "SliderPack"; break;
+	case ComponentType::WebView:			componentName = "WebView"; break;
 	case ComponentType::FloatingTile:		componentName = "FloatingTile"; break;
 	case ComponentType::duplicateComponent:
 	{
@@ -111,6 +133,9 @@ void ScriptEditHandler::createNewComponent(ComponentType componentType, int x, i
 		break;
 	case hise::ScriptEditHandler::ComponentType::SliderPack:
 		newComponent = content->createNewComponent<ScriptingApi::Content::ScriptSliderPack>(id, x, y);
+		break;
+	case hise::ScriptEditHandler::ComponentType::WebView:
+		newComponent = content->createNewComponent<ScriptingApi::Content::ScriptWebView>(id, x, y);
 		break;
 	case hise::ScriptEditHandler::ComponentType::FloatingTile:
 		newComponent = content->createNewComponent<ScriptingApi::Content::ScriptFloatingTile>(id, x, y);
@@ -185,7 +210,7 @@ ScriptingContentOverlay::ScriptingContentOverlay(ScriptEditHandler* handler_) :
 	lasso.setLookAndFeel(&llaf);
 
 	Path path;
-	path.loadPathFromData(OverlayIcons::lockShape, sizeof(OverlayIcons::lockShape));
+	path.loadPathFromData(OverlayIcons::lockShape, SIZE_OF_PATH(OverlayIcons::lockShape));
 
 	dragModeButton->setShape(path, true, true, false);
 
@@ -197,7 +222,8 @@ ScriptingContentOverlay::ScriptingContentOverlay(ScriptEditHandler* handler_) :
 
 	setWantsKeyboardFocus(true);
 
-	
+	auto p = dynamic_cast<Processor*>(handler->getScriptEditHandlerProcessor());
+	enableMouseDragging = GET_HISE_SETTING(p, HiseSettings::Scripting::EnableMousePositioning);
 }
 
 
@@ -247,13 +273,13 @@ void ScriptingContentOverlay::setEditMode(bool editModeEnabled)
 
 	if (dragMode == false)
 	{
-		p.loadPathFromData(OverlayIcons::lockShape, sizeof(OverlayIcons::lockShape));
+		p.loadPathFromData(OverlayIcons::lockShape, SIZE_OF_PATH(OverlayIcons::lockShape));
 		clearDraggers();
 		setInterceptsMouseClicks(false, true);
 	}
 	else
 	{
-		p.loadPathFromData(OverlayIcons::penShape, sizeof(OverlayIcons::penShape));
+		p.loadPathFromData(OverlayIcons::penShape, SIZE_OF_PATH(OverlayIcons::penShape));
 		setInterceptsMouseClicks(true, true);
 	}
 
@@ -271,6 +297,8 @@ Rectangle<float> getFloatRectangle(const Rectangle<int> &r)
 
 void ScriptingContentOverlay::paint(Graphics& g)
 {
+	
+
 	if (dragMode)
 	{
         const bool isInPopup = findParentComponentOfClass<ScriptingEditor>() == nullptr;
@@ -297,6 +325,25 @@ void ScriptingContentOverlay::paint(Graphics& g)
 		g.setFont(GLOBAL_BOLD_FONT().withHeight(24.0f));
 		g.drawText("DISABLED UNTIL UPDATE (Press F5)", getLocalBounds(), Justification::centred);
 	}
+
+	if(lassoActive)
+	{
+		auto b = lasso.getBoundsInParent().constrainedWithin(getLocalBounds());
+
+		auto tb = b.expanded(0, 20).constrainedWithin(getLocalBounds());
+		auto f = GLOBAL_MONOSPACE_FONT();
+		auto r = ApiHelpers::getVarRectangle(b.toFloat(), nullptr);
+		auto t = JSON::toString(r, true).replace(".0", "");
+
+		tb.setWidth(f.getStringWidth(t) + 20);
+		tb.setHeight(20);
+
+		g.setColour(Colours::black.withAlpha(0.1f));
+		g.fillRect(tb);
+		g.setColour(Colours::white.withAlpha(0.8f));
+		g.setFont(f);
+		g.drawText(t, tb.constrainedWithin(getLocalBounds()).toFloat(), Justification::centred);
+	}
 }
 
 
@@ -319,12 +366,8 @@ void ScriptingContentOverlay::scriptComponentSelectionChanged()
 
 		if (draggedComponent == nullptr)
 		{
-			PresetHandler::showMessageWindow("Can't select component", "The component " + c->getName() + " can't be selected", PresetHandler::IconType::Error);
-			clearDraggers();
 			return;
 		}
-
-		
 
 		auto d = new Dragger(c, draggedComponent);
 
@@ -425,6 +468,10 @@ bool ScriptingContentOverlay::keyPressed(const KeyPress &key)
 		getScriptComponentEditBroadcaster()->showJSONEditor(this);
 		return true;
 	}
+    else if (TopLevelWindowWithKeyMappings::matches(this, key, InterfaceDesignerShortcuts::id_show_panel_data_json))
+    {
+        return getScriptComponentEditBroadcaster()->showPanelDataJSON(this);
+    }
 	else if ((keyCode == 'C' || keyCode == 'c') && key.getModifiers().isCommandDown())
 	{
 		auto s = ScriptingApi::Content::Helpers::createScriptVariableDeclaration(b->getSelection());
@@ -496,32 +543,13 @@ void ScriptingContentOverlay::findLassoItemsInArea(Array<ScriptComponent*> &item
 
 void ScriptingContentOverlay::mouseDown(const MouseEvent& e)
 {
-	if (e.mods.isMiddleButtonDown())
-	{
-		if (auto zp = findParentComponentOfClass<ZoomableViewport>())
-		{
-			auto ze = e.getEventRelativeTo(zp);
-			setMouseCursor(MouseCursor::DraggingHandCursor);
-			zp->mouseDown(ze);
-			return;
-		}
-	}
+	CHECK_MIDDLE_MOUSE_DOWN(e);
 }
 
 void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 {
-	if (e.mods.isMiddleButtonDown())
-	{
-		if (auto zp = findParentComponentOfClass<ZoomableViewport>())
-		{
-			auto ze = e.getEventRelativeTo(zp);
-			setMouseCursor(MouseCursor::NormalCursor);
-			zp->mouseUp(ze);
-			return;
-		}
-	}
+	CHECK_MIDDLE_MOUSE_UP(e);
 		
-
 	if (isDisabledUntilUpdate)
 		return;
 
@@ -529,6 +557,8 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 	{
 		lasso.setVisible(false);
 		lasso.endLasso();
+		lassoActive = false;
+		repaint();
 	}
 	else
 	{
@@ -541,6 +571,7 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 			enum ComponentOffsets
 			{
 				createCallbackDefinition = 10000,
+                createLocalLookAndFeel,
 				addDefinition,
 				DeleteSelection,
 				showCallback,
@@ -569,6 +600,7 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 			m.addItem((int)ScriptEditHandler::ComponentType::Panel, "Add new Panel");
 			m.addItem((int)ScriptEditHandler::ComponentType::AudioWaveform, "Add new AudioWaveform");
 			m.addItem((int)ScriptEditHandler::ComponentType::SliderPack, "Add new SliderPack");
+			m.addItem((int)ScriptEditHandler::ComponentType::WebView, "Add new WebView");
 			m.addItem((int)ScriptEditHandler::ComponentType::FloatingTile, "Add new FloatingTile");
 
 			auto components = b->getSelection();
@@ -583,6 +615,7 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 
 				m.addItem(addDefinition, "Create script reference for selection");
 				m.addItem(createCallbackDefinition, "Create custom callback for selection");
+                m.addItem(createLocalLookAndFeel, "Create local LookAndFeel for selection");
 
 				auto first = components.getFirst();
 
@@ -601,9 +634,9 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 
 				m.addSeparator();
 
-				m.addItem(showDefinition, "Goto first Definition of " + first->getName().toString(), true);
+				m.addItem(showDefinition, "Goto first definition of " + first->getName().toString(), true);
 				m.addItem(showLookAndFeel, "Goto LookAndFeel for " + first->getName().toString(), first->getLookAndFeelObject().isObject());
-				m.addItem(showCallback, "Goto Callback for " + first->getName().toString(), first->getCustomControlCallback() != nullptr);
+				m.addItem(showCallback, "Goto callback for " + first->getName().toString(), first->getCustomControlCallback() != nullptr);
 			}
 
 			auto first = components.getFirst();
@@ -618,6 +651,14 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 
 				SystemClipboard::copyTextToClipboard(code);
 			}
+            else if (result == createLocalLookAndFeel)
+            {
+                auto code = ScriptingApi::Content::Helpers::createLocalLookAndFeelForComponents(components);
+                
+                debugToConsole(processor, "local look and feel was copied to clipboard");
+                
+                SystemClipboard::copyTextToClipboard(code);
+            }
 			else if (result == addDefinition)
 			{
 				auto code = ScriptingApi::Content::Helpers::createScriptVariableDeclaration(components);
@@ -635,6 +676,9 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 				int insertX = e.getEventRelativeTo(content).getMouseDownPosition().getX();
 				int insertY = e.getEventRelativeTo(content).getMouseDownPosition().getY();
 
+				insertX = jlimit(0, getLocalBounds().getWidth() - 100, insertX);
+				insertY = jlimit(0, getLocalBounds().getWidth() - 50, insertY);
+
 				auto parent = b->getNumSelected() == 1 ? b->getFirstFromSelection() : nullptr;
 
 				if (parent != nullptr)
@@ -649,6 +693,9 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 
 						insertX += bounds.getX();
 						insertY += bounds.getY();
+
+						insertX = jlimit(0, parentBounds.getWidth() - 100, insertX);
+						insertY = jlimit(0, parentBounds.getWidth() - 50, insertY);
 					}
 				}
 
@@ -719,15 +766,7 @@ void ScriptingContentOverlay::mouseUp(const MouseEvent &e)
 
 void ScriptingContentOverlay::mouseDrag(const MouseEvent& e)
 {
-	if (e.mods.isMiddleButtonDown())
-	{
-		if (auto zp = findParentComponentOfClass<ZoomableViewport>())
-		{
-			auto ze = e.getEventRelativeTo(zp);
-			zp->mouseDrag(ze);
-			return;
-		}
-	}
+	CHECK_MIDDLE_MOUSE_DRAG(e);
 		
 	if (isDisabledUntilUpdate)
 		return;
@@ -735,6 +774,7 @@ void ScriptingContentOverlay::mouseDrag(const MouseEvent& e)
 	if (lasso.isVisible())
 	{
 		lasso.dragLasso(e);
+		repaint();
 	}
 	else
 	{
@@ -744,6 +784,8 @@ void ScriptingContentOverlay::mouseDrag(const MouseEvent& e)
 
 			e.eventComponent->addAndMakeVisible(lasso);
 			lasso.beginLasso(e, this);
+			lassoActive = true;
+			repaint();
 		}
 	}
 }
@@ -818,11 +860,14 @@ void ScriptingContentOverlay::Dragger::paint(Graphics &g)
 
 void ScriptingContentOverlay::Dragger::mouseDown(const MouseEvent& e)
 {
+	CHECK_MIDDLE_MOUSE_DOWN(e);
+
 	if (e.mods.isLeftButtonDown())
 	{
 		auto parent = dynamic_cast<ScriptingContentOverlay*>(getParentComponent());
 
-		
+		if (!parent->enableMouseDragging)
+			return;
 
 		constrainer.setStartPosition(getBounds());
 		startBounds = getBounds();
@@ -841,10 +886,47 @@ void ScriptingContentOverlay::Dragger::mouseDown(const MouseEvent& e)
 
 void ScriptingContentOverlay::Dragger::mouseDrag(const MouseEvent& e)
 {
+	CHECK_MIDDLE_MOUSE_DRAG(e);
+
 	if (e.mods.isRightButtonDown() || e.mods.isMiddleButtonDown())
 		return;
 
-	constrainer.setRasteredMovement(!e.mods.isCommandDown());
+	auto parent = dynamic_cast<ScriptingContentOverlay*>(getParentComponent());
+
+	if (!parent->enableMouseDragging)
+	{
+		static const unsigned char pathData[] = { 110,109,0,128,38,68,192,255,63,67,98,192,156,55,68,192,255,63,67,0,128,69,68,240,143,119,67,0,128,69,68,32,0,158,67,98,0,128,69,68,160,57,192,67,192,156,55,68,40,0,220,67,0,128,38,68,40,0,220,67,98,12,100,21,68,40,0,220,67,2,128,7,68,160,57,192,67,2,
+128,7,68,32,0,158,67,98,2,128,7,68,240,143,119,67,12,100,21,68,192,255,63,67,0,128,38,68,192,255,63,67,99,109,132,215,55,68,72,73,136,67,108,12,164,27,68,40,175,192,67,98,238,201,30,68,24,162,196,67,160,130,34,68,64,235,198,67,0,128,38,68,64,235,198,
+67,98,116,202,49,68,64,235,198,67,140,245,58,68,8,149,180,67,140,245,58,68,32,0,158,67,98,140,245,58,68,96,5,150,67,252,208,57,68,8,149,142,67,132,215,55,68,72,73,136,67,99,109,220,22,21,68,136,125,179,67,108,180,62,49,68,48,91,118,67,98,92,31,46,68,
+160,159,110,67,84,112,42,68,0,41,106,67,0,128,38,68,0,41,106,67,98,76,53,27,68,0,41,106,67,48,10,18,68,64,107,135,67,48,10,18,68,32,0,158,67,98,48,10,18,68,200,224,165,67,248,39,19,68,216,62,173,67,220,22,21,68,136,125,179,67,99,101,0,0 };
+
+		Path path;
+		path.loadPathFromData(pathData, sizeof(pathData));
+
+		
+
+		int size = 22;
+
+		Image img(Image::PixelFormat::ARGB, size, size, true);
+		
+		Graphics g(img);
+
+		PathFactory::scalePath(path, { 1.0f, 1.0f, (float)size-2.0f, (float)size-2.0f });
+		g.setColour(Colour(0xFFEEEEEE));
+		g.fillPath(path);
+		g.setColour(Colours::black.withAlpha(0.5f));
+		g.strokePath(path, PathStrokeType(1.0f));
+
+		MouseCursor c(img, size / 2, size / 2);
+
+		setMouseCursor(c);
+		return;
+	}
+		
+
+    if(e.mouseWasDraggedSinceMouseDown())
+        constrainer.setRasteredMovement(!e.mods.isCommandDown());
+    
 	constrainer.setLockedMovement(e.mods.isShiftDown());
 
 	
@@ -853,10 +935,12 @@ void ScriptingContentOverlay::Dragger::mouseDrag(const MouseEvent& e)
 
 	setMouseCursor(copyMode ? MouseCursor::CopyingCursor : MouseCursor::DraggingHandCursor);
 
+    dragDistance = constrainer.getPosition().getTopLeft() - startBounds.getTopLeft();
+    
 	if (e.eventComponent == this)
 		dragger.dragComponent(this, e, &constrainer);
 
-	dragDistance = constrainer.getPosition().getTopLeft() - startBounds.getTopLeft();
+	
 
 	if (e.eventComponent != this)
 	{
@@ -864,6 +948,69 @@ void ScriptingContentOverlay::Dragger::mouseDrag(const MouseEvent& e)
 		resizeOverlayedComponent(newBounds.getWidth(), newBounds.getHeight());
 	}
 
+}
+
+void ScriptingContentOverlay::Dragger::mouseUp(const MouseEvent& e)
+{
+	CHECK_MIDDLE_MOUSE_UP(e);
+
+	setMouseCursor(MouseCursor::NormalCursor);
+
+	auto parent = dynamic_cast<ScriptingContentOverlay*>(getParentComponent());
+
+	if (!e.mouseWasDraggedSinceMouseDown())
+	{
+		if (e.mods.isShiftDown())
+		{
+			parent->getScriptComponentEditBroadcaster()->clearSelection();
+			return;
+		}
+
+		if (e.mods.isCommandDown())
+		{
+			parent->getScriptComponentEditBroadcaster()->updateSelectionBasedOnModifier(sc, e.mods, sendNotification);
+			return;
+		}
+	}
+
+	if (e.mods.isRightButtonDown())
+	{
+		getParentComponent()->mouseUp(e);
+		return;
+	}
+
+	if (!parent->enableMouseDragging)
+		return;
+
+	findParentComponentOfClass<ScriptingContentOverlay>()->smw.endDragging();
+
+	snapShot = Image();
+
+	Rectangle<int> newBounds = getBounds();
+
+	int deltaX = newBounds.getX() - startBounds.getX();
+	int deltaY = newBounds.getY() - startBounds.getY();
+
+	if (copyMode)
+	{
+		duplicateSelection(deltaX, deltaY);
+		return;
+	}
+
+	repaint();
+
+	const bool wasResized = newBounds.getWidth() != startBounds.getWidth() || newBounds.getHeight() != startBounds.getHeight();
+
+	if (wasResized)
+	{
+		resizeOverlayedComponent(newBounds.getWidth(), newBounds.getHeight());
+	}
+	else
+	{
+
+
+		moveOverlayedComponent(deltaX, deltaY);
+	}
 }
 
 hise::MarkdownLink ScriptingContentOverlay::Dragger::getLink() const
@@ -906,63 +1053,7 @@ void ScriptingContentOverlay::Dragger::setUseSnapShot(bool shouldUseSnapShot)
 	repaint();
 }
 
-void ScriptingContentOverlay::Dragger::mouseUp(const MouseEvent& e)
-{
-	setMouseCursor(MouseCursor::NormalCursor);
 
-	if (!e.mouseWasDraggedSinceMouseDown())
-	{
-		auto parent = dynamic_cast<ScriptingContentOverlay*>(getParentComponent());
-
-		if (e.mods.isShiftDown())
-		{
-			parent->getScriptComponentEditBroadcaster()->clearSelection();
-			return;
-		}
-
-		if (e.mods.isCommandDown())
-		{
-			parent->getScriptComponentEditBroadcaster()->updateSelectionBasedOnModifier(sc, e.mods, sendNotification);
-			return;
-		}
-	}
-
-	if (e.mods.isRightButtonDown())
-	{
-		getParentComponent()->mouseUp(e);
-		return;
-	}
-
-	findParentComponentOfClass<ScriptingContentOverlay>()->smw.endDragging();
-
-	snapShot = Image();
-
-	Rectangle<int> newBounds = getBounds();
-
-	int deltaX = newBounds.getX() - startBounds.getX();
-	int deltaY = newBounds.getY() - startBounds.getY();
-
-	if (copyMode)
-	{
-		duplicateSelection(deltaX, deltaY);
-		return;
-	}
-
-	repaint();
-
-	const bool wasResized = newBounds.getWidth() != startBounds.getWidth() || newBounds.getHeight() != startBounds.getHeight();
-
-	if (wasResized)
-	{
-		resizeOverlayedComponent(newBounds.getWidth(), newBounds.getHeight());
-	}
-	else
-	{
-		
-
-		moveOverlayedComponent(deltaX, deltaY);
-	}
-}
 
 void ScriptingContentOverlay::Dragger::moveOverlayedComponent(int deltaX, int deltaY)
 {

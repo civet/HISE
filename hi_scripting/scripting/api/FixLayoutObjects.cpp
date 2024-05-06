@@ -104,7 +104,73 @@ juce::uint32 LayoutBase::Helpers::getTypeSize(DataType type)
 	}
 }
 
+int LayoutBase::Helpers::createHash(MemoryLayoutItem::List list)
+{
+	String s;
 
+	for(auto l: list)
+	{
+		s << l->id;
+		s << (uint8)l->type;
+	}
+
+	return s.hashCode();
+}
+
+LayoutBase::~LayoutBase()
+{}
+
+size_t LayoutBase::getElementSizeInBytes() const
+{
+	size_t bytes = 0;
+
+	for (auto l : layout)
+		bytes += l->getByteSize();
+
+	return bytes;
+}
+
+
+uint8* Allocator::allocate(int numBytesToAllocate)
+{
+	jassert(numBytesToAllocate % 4 == 0);
+
+	auto b = new Block(numBytesToAllocate);
+
+	allocatedBlocks.add(b);
+
+	return b->getData();
+}
+
+bool Allocator::validMemoryAccess(uint8* ptr)
+{
+	bool found = false;
+
+	for (auto b : allocatedBlocks)
+		found |= b->contains(ptr);
+		
+	return found;
+}
+
+Allocator::Block::Block(size_t numBytes_):
+	numBytes(numBytes_)
+{
+	data.allocate(numBytes + 16, true);
+	offset = 16 - reinterpret_cast<uint64>(data.get()) % 16;
+}
+
+uint8* Allocator::Block::getData() const
+{
+	return data.get() + offset;
+}
+
+bool Allocator::Block::contains(uint8* ptr)
+{
+	auto s = reinterpret_cast<uint64>(getData());
+	auto e = s + numBytes;
+	auto p = reinterpret_cast<uint64>(ptr);
+	return Range<uint64>(s, e).contains(p);
+}
 
 LayoutBase::MemoryLayoutItem::MemoryLayoutItem(Allocator::Ptr allocator_, uint32 offset_, const Identifier& id_, var defaultValue_, Result* r) :
 	id(id_),
@@ -235,6 +301,14 @@ hise::fixobj::LayoutBase::MemoryLayoutItem::List LayoutBase::createLayout(Alloca
 	return items;
 }
 
+struct Factory::Wrapper
+{
+	API_METHOD_WRAPPER_0(Factory, create);
+	API_METHOD_WRAPPER_1(Factory, createArray);
+	API_METHOD_WRAPPER_1(Factory, createStack);
+	API_VOID_METHOD_WRAPPER_1(Factory, setCompareFunction);
+};
+
 Factory::Factory(ProcessorWithScriptingContent* s, const var& d) :
 	ConstScriptingObject(s, 0),
 	customCompareFunction(getScriptProcessor(), this, var(), 2)
@@ -248,6 +322,8 @@ Factory::Factory(ProcessorWithScriptingContent* s, const var& d) :
 
 	addConstant("prototype", d);
 	layout = createLayout(allocator, d, &initResult);
+
+	typeHash = Helpers::createHash(layout);
 
 	compareFunction = BIND_MEMBER_FUNCTION_2(Factory::compare);
 }
@@ -296,12 +372,104 @@ var Factory::createStack(int numElements)
     return var();
 }
 
+
+
 void Factory::setCompareFunction(var newCompareFunction)
 {
-	if (HiseJavascriptEngine::isJavascriptFunction(newCompareFunction))
+	if(newCompareFunction.isString())
+	{
+		auto text = newCompareFunction.toString();
+
+		if(text.contains(","))
+		{
+			auto tokens = StringArray::fromTokens(text, ",", "");
+
+			juce::Array<Identifier> ids;
+
+			for(auto& t: tokens)
+				ids.add(Identifier(t));
+			
+			juce::Array<ObjectReference::MultiComparator<1>::Item> items;
+
+			for(auto& id: ids)
+			{
+				for(auto l: layout)
+				{
+					if(l->id == id)
+					{
+						items.add(l);
+						break;
+					}
+				}
+			}
+			
+			if(items.size() != ids.size())
+				reportScriptError("unknown properties: " + text);
+
+			if(items.size() < 2)
+				reportScriptError("Redundant comma");
+
+			auto dataPtr = (void*)items.getRawDataPointer();
+
+			switch(items.size())
+			{
+			case 2: compareFunction = ObjectReference::MultiComparator<2>(dataPtr); break;
+			case 3: compareFunction = ObjectReference::MultiComparator<3>(dataPtr); break;
+			case 4: compareFunction = ObjectReference::MultiComparator<4>(dataPtr); break;
+			default: reportScriptError("At this point you might want to use a custom function");
+			}
+		}
+		else
+		{
+			auto id = Identifier(text);
+
+			bool found = false;
+
+			for(auto l: layout)
+			{
+				if(l->id == id)
+				{
+					bool isArray = l->elementSize > 1;
+
+					switch(l->type)
+					{
+					case DataType::Boolean:
+						if(isArray) compareFunction = ObjectReference::NumberComparator<bool, true>(l->offset, l->elementSize);
+						else        compareFunction = ObjectReference::NumberComparator<bool, false>(l->offset);
+						break;
+					case DataType::Integer:
+						if(isArray) compareFunction = ObjectReference::NumberComparator<int, true>(l->offset, l->elementSize);
+						else        compareFunction = ObjectReference::NumberComparator<int, false>(l->offset);
+						break;
+					case DataType::Float:
+						if(isArray) compareFunction = ObjectReference::NumberComparator<float, true>(l->offset, l->elementSize);
+						else        compareFunction = ObjectReference::NumberComparator<float, false>(l->offset);
+						break;
+					}					
+
+					found = true;
+					break;
+				}
+			}
+
+			if(!found)
+				reportScriptError("Can't find property " + newCompareFunction.toString());
+		}
+	}
+	else if (HiseJavascriptEngine::isJavascriptFunction(newCompareFunction))
 	{
 		customCompareFunction = WeakCallbackHolder(getScriptProcessor(), this, newCompareFunction, 2);
 		customCompareFunction.incRefCount();
+	}
+	else
+	{
+		compareFunction = BIND_MEMBER_FUNCTION_2(Factory::compare);
+	}
+
+	// update the compare function for all created arrays or stacks
+	for(auto& a: arrays)
+	{
+		a->compareFunction = compareFunction;
 	}
 }
 
@@ -374,6 +542,81 @@ bool ObjectReference::isValid() const
 	return layoutReference != nullptr && data != nullptr;
 }
 
+
+
+void ObjectReference::writeAsJSON (OutputStream& out, const int indentLevel, const bool allOnOneLine, int maximumDecimalPlaces)
+{
+	JSON_DECLARE_NL_IND;
+		
+	out << '{'; nl();
+
+	for(auto l: layout)
+	{
+		auto t = l->type == DataType::Float ? Types::ID::Double : Types::ID::Integer;
+		auto v = l->getData(data, nullptr);
+		ind(); out << l->id.toString().quoted() <<  ": " << snex::Types::Helpers::getCppValueString(v, t);
+
+		if(layout.getLast().get() != l)
+			out.writeByte(',');
+
+		nl();
+	}
+	
+	out << '}'; nl();
+}
+
+Identifier ObjectReference::getObjectName() const
+{ RETURN_STATIC_IDENTIFIER("FixObject"); }
+
+int ObjectReference::getNumChildElements() const
+{ 
+	return memberReferences.size();
+}
+
+Identifier ObjectReference::MemberReference::getObjectName() const
+{ RETURN_STATIC_IDENTIFIER("FixObjectMember"); }
+
+String ObjectReference::MemberReference::getDebugName() const
+{   
+	String s;
+	s << "%PARENT%.";
+	s << memberProperties->id.toString(); 
+	return s;
+}
+
+String ObjectReference::MemberReference::getDebugDataType() const
+{ 
+	String s;
+
+	switch (memberProperties->type)
+	{
+	case LayoutBase::DataType::Integer: s << "int"; break;
+	case LayoutBase::DataType::Float:   s << "float"; break;
+	case LayoutBase::DataType::Boolean: s << "bool"; break;
+	default:                            break;
+	}
+
+	if (!arrayMembers.isEmpty())
+		s << "[" << String(arrayMembers.size()) << "]";
+
+	return s;
+}
+
+int ObjectReference::MemberReference::getNumChildElements() const
+{
+	return arrayMembers.size();
+}
+
+ObjectReference::MemberReference::Ptr ObjectReference::MemberReference::operator[](int index) const
+{
+	return arrayMembers[index];
+}
+
+ObjectReference::MemberReference::Ptr ObjectReference::operator[](const Identifier& id) const
+{
+	return dynamic_cast<MemberReference*>(memberReferences[id].getObject());
+}
+
 hise::DebugInformationBase* ObjectReference::getChildElement(int index)
 {
 
@@ -397,6 +640,7 @@ void ObjectReference::init(LayoutBase* referencedLayout, uint8* preallocatedData
 
 	layoutReference = referencedLayout;
 	layout = referencedLayout->layout;
+	typeHash = Helpers::createHash(layout);
 
 	jassert(allocator->validMemoryAccess(data));
 	jassert(allocator->validMemoryAccess(data + getElementSizeInBytes() - 1));
@@ -584,6 +828,67 @@ hise::fixobj::ObjectReference::MemberReference& ObjectReference::MemberReference
 }
 
 
+Identifier Array::getObjectName() const
+{
+	RETURN_STATIC_IDENTIFIER("FixObjectArray");
+}
+
+int Array::getNumChildElements() const
+{ return items.size(); }
+
+struct Array::Wrapper
+{
+	API_METHOD_WRAPPER_1(Array, indexOf);
+	API_VOID_METHOD_WRAPPER_1(Array, fill);
+	API_VOID_METHOD_WRAPPER_0(Array, clear);
+	API_METHOD_WRAPPER_1(Array, contains);
+	API_METHOD_WRAPPER_2(Array, copy);
+	API_VOID_METHOD_WRAPPER_0(Array, sort);
+	API_METHOD_WRAPPER_0(Array, size);
+	API_METHOD_WRAPPER_0(Array, toBase64);
+	API_METHOD_WRAPPER_1(Array, fromBase64);
+};
+
+Array::Array(ProcessorWithScriptingContent* s, int numElements):
+	ConstScriptingObject(s, 1)
+{
+	addConstant("length", numElements);
+
+	ADD_API_METHOD_1(indexOf);
+	ADD_API_METHOD_1(contains);
+	ADD_API_METHOD_1(fill);
+	ADD_API_METHOD_0(clear);
+	ADD_API_METHOD_2(copy);
+	ADD_API_METHOD_0(size);
+	ADD_API_METHOD_0(sort);
+	ADD_API_METHOD_0(toBase64);
+	ADD_API_METHOD_1(fromBase64);
+}
+
+void Array::assign(const int index, var newValue)
+{
+	if (auto fo = dynamic_cast<ObjectReference*>(newValue.getObject()))
+	{
+		if (auto i = items[index])
+		{
+			*i = *fo;
+		}
+	}
+}
+
+var Array::getAssignedValue(int index) const
+{
+	if (isPositiveAndBelow(index, items.size()))
+	{
+		return var(items[index].get());
+	}
+
+	return var();
+}
+
+int Array::getCachedIndex(const var& indexExpression) const
+{ return (int)indexExpression; }
+
 hise::DebugInformationBase* Array::getChildElement(int index)
 {
 	if (isPositiveAndBelow(index, items.size()))
@@ -622,6 +927,8 @@ void Array::init(LayoutBase* parent)
 
 	elementSize = getElementSizeInBytes();
 	numAllocated = getElementSizeInBytes() * (numElements);
+
+	typeHash = Helpers::createHash(layout);
 
 	if (numAllocated > 0)
 	{
@@ -665,14 +972,14 @@ int Array::indexOf(var obj) const
 	{
 		int numToSearch = size();
 
+		if(numToSearch == 0)
+			return -1;
+
 		for (int i = 0; i < numToSearch; i++)
 		{
 			auto item = items[i];
 
 			if (compareFunction(item, o) == 0)
-				return i;
-
-			if (*item == *o)
 				return i;
 		}
 	}
@@ -701,8 +1008,6 @@ bool Array::copy(String propertyName, var target)
 		reportScriptError("Can't find property " + p.toString());
 
 	auto ptr = data + offset;
-
-
 
 	if (auto b = target.getBuffer())
 	{
@@ -735,14 +1040,268 @@ bool Array::copy(String propertyName, var target)
 	return false;
 }
 
+String Array::toBase64() const
+{
+	MemoryBlock mb(data, numAllocated);
+	return mb.toBase64Encoding();
+}
+
+bool Array::fromBase64(const String& b64)
+{
+	MemoryBlock mb;
+	mb.fromBase64Encoding(b64);
+
+	if(mb.getSize() == numAllocated)
+	{
+		memcpy(data, mb.getData(), numAllocated);
+		return true;
+	}
+
+	return false;
+}
+
 int Array::size() const
 {
 	return (int)numElements;
 }
 
+void Array::sort()
+{
+	struct Sorter
+	{
+		Sorter(Array& a):
+			parent(a)
+		{};
+
+		int compareElements(ObjectReference::Ptr p1, ObjectReference::Ptr p2) const
+		{
+			//ObjectReference::Ptr p1_(&p1);
+			//ObjectReference::Ptr p2_(&p2);
+
+			return parent.compareFunction(p1, p2);
+		}
+
+		Array& parent;
+	};
+
+	Sorter s(*this);
+	SortFunctionConverter<Sorter> converter (s);
+	
+	std::sort(items.begin(), items.begin() + size(), converter);
+}
+
+void Array::writeAsJSON(OutputStream& out, const int indentLevel, const bool allOnOneLine, int maximumDecimalPlaces)
+{
+	JSON_DECLARE_NL_IND;
+
+	ind(); out.writeByte('['); nl();
+
+	auto numToPrint = size();
+
+	for(int i = 0; i < numToPrint; i++)
+	{
+		auto item = items[i];
+
+		item->writeAsJSON(out, indentLevel+1, allOnOneLine, maximumDecimalPlaces);
+
+		if(i != (numToPrint-1))
+			out.writeByte(',');
+	}
+
+	ind(); out.writeByte(']'); nl();
+}
+
 bool Array::contains(var obj) const
 {
 	return indexOf(obj) != -1;
+}
+
+struct Stack::Viewer: public Component,
+					  public ComponentForDebugInformation,
+					  public PooledUIUpdater::SimpleTimer
+{
+	struct Row
+	{
+		static constexpr int IndexWidth = 32;
+		static constexpr int Height = 24;
+		static constexpr int ColumnWidth = 100;
+
+		Row(Stack* s, int index_):
+		  index(index_)
+		{
+			auto numColumns = s->layout.size();
+
+			for(int i = 0; i < numColumns; i++)
+			{
+				changeAlpha.add(0.0f);
+				values.add(s->layout[i]->defaultValue);
+				types.add(s->layout[i]->type);
+			}
+		}
+
+		void paint(Graphics& g, Rectangle<float> area)
+		{
+			g.setColour(Colours::white.withAlpha(0.2f));
+			g.setFont(GLOBAL_MONOSPACE_FONT());
+
+			g.drawText(String(index), area.removeFromLeft(IndexWidth).toFloat(), Justification::centred);
+
+			for(int i = 0; i < values.size(); i++)
+			{
+				auto cell = area.removeFromLeft(ColumnWidth);
+
+				g.setColour(Colours::white.withAlpha(used ? 0.05f : 0.02f));
+				g.fillRect(cell.reduced(1.0f));
+
+				if(used)
+				{
+					g.setColour(Colours::white.withAlpha(jlimit(0.0f, 1.0f, changeAlpha[i] * 0.4f)));
+					g.fillRect(cell);
+				}
+
+				float alpha = 0.1f;
+
+				if(used)
+					alpha += 0.7f;
+
+				g.setColour(Colours::white.withAlpha(alpha));
+				g.setFont(GLOBAL_MONOSPACE_FONT());
+
+				auto s = snex::Types::Helpers::getCppValueString(values[i], types[i] == DataType::Float ? Types::ID::Float : Types::ID::Integer);
+				g.drawText(s, cell, Justification::centred);
+			}
+		}
+
+		juce::Array<DataType> types;
+		bool used = false;
+		int index = 0;
+		juce::Array<var> values;
+		juce::Array<float> changeAlpha;
+	};
+
+	Viewer(Stack* s):
+	  ComponentForDebugInformation(s, dynamic_cast<JavascriptProcessor*>(s->getScriptProcessor())),
+	  SimpleTimer(s->getScriptProcessor()->getMainController_()->getGlobalUIUpdater())
+	{
+		setName("FixObjectStack Viewer");
+
+		const auto numColumns = s->layout.size();
+		const auto numRows = jmin<int>(16, static_cast<int>(s->numElements));
+
+		setSize(numColumns * Row::ColumnWidth + Row::IndexWidth, numRows * Row::Height);
+
+		for(int i = 0; i < numColumns; i++)
+		{
+			titles.add(s->layout[i]->id.toString());
+		}
+
+		for(int i = 0; i < s->numElements; i++)
+		{
+			rows.add(new Row(s, i));
+		}
+	};
+
+	StringArray titles;
+	OwnedArray<Row> rows;
+
+	void paint(Graphics& g) override
+	{
+		auto b = getLocalBounds();
+
+		auto header = b.removeFromTop(Row::Height);
+		header.removeFromLeft(Row::IndexWidth);
+
+		for(auto t: titles)
+		{
+			auto cell = header.removeFromLeft(Row::ColumnWidth).toFloat();
+			g.setColour(Colours::white.withAlpha(0.1f));
+			g.fillRect(cell.reduced(1.0f));
+			g.setColour(Colours::white.withAlpha(0.7f));
+			g.setFont(GLOBAL_BOLD_FONT());
+			g.drawText(t, cell, Justification::centred);
+		}
+
+		for(auto r: rows)
+		{
+			r->paint(g, b.removeFromTop(Row::Height).toFloat());
+		}
+	}
+
+	void timerCallback() override
+	{
+		if(auto obj = getObject<Stack>())
+		{
+			auto numColumns = obj->layout.size();
+
+			for(int i = 0; i < obj->numElements; i++)
+			{
+				auto r = rows[i];
+				r->used = i < obj->position;
+
+				if(r->used)
+				{
+					auto data = obj->items[i]->data;
+				
+					for(int j = 0; j < numColumns; j++)
+					{
+						auto nv = obj->layout[j]->getData(data, nullptr);
+						auto ov = r->values[j];
+						r->values.set(j, nv);
+						auto alpha = r->changeAlpha[j];
+
+						if(nv != ov)
+							alpha = 1.0f;
+						else
+							alpha = jmax(0.0f, alpha - 0.05f);
+
+						r->changeAlpha.set(j, alpha);
+					}
+				}
+			}
+			
+			repaint();
+		}
+	}
+};
+
+struct Stack::Wrapper
+{
+	API_METHOD_WRAPPER_1(Stack, insert);
+	API_METHOD_WRAPPER_1(Stack, remove);
+	API_METHOD_WRAPPER_1(Stack, removeElement);
+	API_METHOD_WRAPPER_0(Stack, size);
+	API_METHOD_WRAPPER_1(Stack, indexOf);
+	API_METHOD_WRAPPER_1(Stack, contains);
+	API_METHOD_WRAPPER_0(Stack, isEmpty);
+	API_VOID_METHOD_WRAPPER_1(Stack, set);
+	API_VOID_METHOD_WRAPPER_0(Stack, clear);
+	API_VOID_METHOD_WRAPPER_0(Stack, clearQuick);
+};
+
+Stack::Stack(ProcessorWithScriptingContent* s, int numElements):
+	Array(s, numElements)
+{
+	ADD_API_METHOD_1(insert);
+	ADD_API_METHOD_1(remove);
+	ADD_API_METHOD_1(removeElement);
+	ADD_API_METHOD_0(size);
+	ADD_API_METHOD_1(indexOf);
+	ADD_API_METHOD_1(contains);
+	ADD_API_METHOD_0(isEmpty);
+	ADD_API_METHOD_1(set);
+	ADD_API_METHOD_0(clear);
+	ADD_API_METHOD_0(clearQuick);
+}
+
+Identifier Stack::getObjectName() const
+{ RETURN_STATIC_IDENTIFIER("FixObjectStack"); }
+
+Component* Stack::createPopupComponent(const MouseEvent& e, Component* parent)
+{ return new Viewer(this); }
+
+ObjectReference* Stack::getRef(const var& obj)
+{
+	return dynamic_cast<ObjectReference*>(obj.getObject());
 }
 
 bool Stack::insert(var obj)
@@ -810,8 +1369,28 @@ bool Stack::isEmpty() const
 	return position == 0;
 }
 
+bool Stack::set(var obj)
+{
+	if(isEmpty())
+		assign(position++, obj);
+	else
+	{
+		auto idx = indexOf(obj);
 
+		if(idx == -1)
+		{
+			if(isPositiveAndBelow(position, (int)numElements - 1))
+				assign(position++, obj);
+			else
+				return false;
+		}
+			
+		else
+			assign(idx, obj);
+	}
 
+	return true;
+}
 }
 
 } // namespace hise

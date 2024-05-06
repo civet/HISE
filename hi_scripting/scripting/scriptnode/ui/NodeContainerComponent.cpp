@@ -159,6 +159,8 @@ void ContainerComponent::mouseExit(const MouseEvent& )
 
 void ContainerComponent::mouseDown(const MouseEvent& e)
 {
+	CHECK_MIDDLE_MOUSE_DOWN(e);
+
 	if (auto n = findParentComponentOfClass<DspNetworkGraph>())
 	{
 		if (e.mods.isShiftDown())
@@ -194,12 +196,16 @@ bool ContainerComponent::shouldPaintCable(CableLocation location) const
 
 void ContainerComponent::mouseDrag(const MouseEvent& e)
 {
+	CHECK_MIDDLE_MOUSE_DRAG(e);
+
 	if (lasso.isVisible())
 		lasso.dragLasso(e.getEventRelativeTo(findParentComponentOfClass<DspNetworkGraph>()));
 }
 
 void ContainerComponent::mouseUp(const MouseEvent& e)
 {
+	CHECK_MIDDLE_MOUSE_UP(e);
+
 	if (lasso.isVisible())
 	{
 		lasso.endLasso();
@@ -467,7 +473,8 @@ struct DuplicateComponent : public Component,
 
 		Path p;
 #if USE_BACKEND
-		p.loadPathFromData(BackendBinaryData::ToolbarIcons::viewPanel, sizeof(BackendBinaryData::ToolbarIcons::viewPanel));
+
+		p.loadPathFromData(BackendBinaryData::ToolbarIcons::viewPanel, SIZE_OF_PATH(BackendBinaryData::ToolbarIcons::viewPanel));
 #endif
 		PathFactory::scalePath(p, getLocalBounds().toFloat().withSizeKeepingCentre(32.0f, 32.0f));
 
@@ -1080,6 +1087,22 @@ void ParallelNodeComponent::paintCable(Graphics& g, int cableIndex)
 			}
 
 			p.addLineSegment({ start, end }, 2.0f);
+		}
+	}
+	else if (auto bn = dynamic_cast<BranchNode*>(node.get()))
+	{
+		if(auto cn = childNodeComponents[bn->currentIndex])
+		{
+			auto b = cn->getBounds().toFloat();
+
+			Point<float> p1(b.getCentreX() + xOffset, b.getY());
+			Point<float> p2(b.getCentreX() + xOffset, b.getBottom());
+
+            if(shouldPaintCable(CableLocation::Input))
+                p.addLineSegment({ start, p1 }, 2.0f);
+            
+            if(shouldPaintCable(CableLocation::Output))
+                p.addLineSegment({ p2, end }, 2.0f);
 		}
 	}
 	else if (auto sn = dynamic_cast<SerialNode*>(node.get()))

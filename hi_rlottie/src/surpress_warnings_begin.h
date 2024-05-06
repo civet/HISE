@@ -1,4 +1,4 @@
-#include <AppConfig.h>
+
 
 #if defined (__arm__) || defined (__arm64__)
   #define JUCE_ARM 1
@@ -21,9 +21,13 @@
 #pragma warning( push )
 #pragma warning( disable : 4267)
 #pragma warning( push )
+#pragma warning( disable : 4334)
+#pragma warning( push )
 #pragma warning( disable : 4456)
 #pragma warning( push )
 #pragma warning( disable : 4458)
+#pragma warning( push )
+#pragma warning( disable : 4505)
 #pragma warning( push )
 #pragma warning( disable : 4706)
 #pragma warning( push )

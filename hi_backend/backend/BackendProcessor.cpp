@@ -30,13 +30,106 @@
 *   ===========================================================================
 */
 
+// This is a helper tool to print out definitions for the extern const char* variables with the sizeof([]) operator
+#if 0
+#define PRINT_DATA(ns, x) DBG(juce::String("DECLARE_DATA(") + #x + ", " + juce::String(sizeof(ns::x)) + ");")
+
+void printData()
+{
+	PRINT_DATA(HiBinaryData::SpecialSymbols, midiData);
+	PRINT_DATA(HiBinaryData::SpecialSymbols, masterEffect);
+	PRINT_DATA(HiBinaryData::SpecialSymbols, macros);
+	PRINT_DATA(HiBinaryData::SpecialSymbols, globalCableIcon);
+	PRINT_DATA(HiBinaryData::SpecialSymbols, scriptProcessor);
+	PRINT_DATA(HiBinaryData::SpecialSymbols, routingIcon);
+}
+
+#undef PRINT_DATA
+#endif
+
 namespace hise { using namespace juce;
 
-BackendProcessor::BackendProcessor(AudioDeviceManager *deviceManager_/*=nullptr*/, AudioProcessorPlayer *callback_/*=nullptr*/) :
+
+	
+
+	void ExampleAssetManager::initialise()
+	{
+		if(!initialised)
+		{
+			initialised = true;
+
+			setWorkingProject(mainProjectHandler.getRootFolder());
+
+			auto snippetSettings = getAppDataDirectory(getMainController()).getChildFile("snippetBrowser.xml");
+
+			if(auto xml = XmlDocument::parse(snippetSettings))
+			{
+				if(auto sd = xml->getChildByName("snippetDirectory"))
+				{
+					auto snippetDirectory = sd->getStringAttribute("value");
+
+					if(File::isAbsolutePath(snippetDirectory))
+					{
+						auto assetDirectory = File(snippetDirectory).getChildFile("Assets");
+
+						if(!assetDirectory.getChildFile("SampleMaps").isDirectory())
+						{
+							debugError(getMainController()->getMainSynthChain(), "Uninitialised assets, please download the assets and reload the snippet");
+							initialised = false;
+							return;
+						}
+
+						if(assetDirectory.isDirectory())
+						{
+							rootDirectory = assetDirectory;
+
+							for(auto d: getSubDirectoryIds())
+								rootDirectory.getChildFile(getIdentifier(d)).createDirectory();
+
+							checkSubDirectories();
+
+							pool->getAudioSampleBufferPool().loadAllFilesFromProjectFolder();
+							pool->getImagePool().loadAllFilesFromProjectFolder();
+							pool->getMidiFilePool().loadAllFilesFromProjectFolder();
+							pool->getSampleMapPool().loadAllFilesFromProjectFolder();
+							return;
+						}
+					}
+				}
+			}
+
+			debugError(getMainController()->getMainSynthChain(), "You need to download the assets using the snippet browser");
+		}
+	}
+
+	File ExampleAssetManager::getSubDirectory(SubDirectories dir) const
+	{
+		auto redirected = getSubDirectoryIds();
+
+		if(redirected.contains(dir))
+			return ProjectHandler::getSubDirectory(dir);
+		else
+			return mainProjectHandler.getSubDirectory(dir);
+	}
+
+	Array<FileHandlerBase::SubDirectories> ExampleAssetManager::getSubDirectoryIds() const
+	{
+		return {
+			FileHandlerBase::SubDirectories::AudioFiles,
+			FileHandlerBase::SubDirectories::SampleMaps,
+			FileHandlerBase::SubDirectories::Samples,
+			FileHandlerBase::SubDirectories::Images,
+			FileHandlerBase::SubDirectories::MidiFiles
+		};
+	}
+
+	BackendProcessor::BackendProcessor(AudioDeviceManager *deviceManager_/*=nullptr*/, AudioProcessorPlayer *callback_/*=nullptr*/) :
 MainController(),
 AudioProcessorDriver(deviceManager_, callback_),
 scriptUnlocker(this)
 {
+	//printData();
+    
 	ExtendedApiDocumentation::init();
 
     synthChain = new ModulatorSynthChain(this, "Master Chain", NUM_POLYPHONIC_VOICES);
@@ -92,8 +185,52 @@ scriptUnlocker(this)
 			return SafeFunctionCall::OK;
 		};
 
-		getKillStateHandler().killVoicesAndCall(getMainSynthChain(), f, MainController::KillStateHandler::SampleLoadingThread);
+		getKillStateHandler().killVoicesAndCall(getMainSynthChain(), f, MainController::KillStateHandler::TargetThread::SampleLoadingThread);
 	}
+    
+    externalClockSim.bpm = dynamic_cast<GlobalSettingManager*>(this)->globalBPM;
+
+#if HISE_INCLUDE_LORIS && !HISE_USE_LORIS_DLL
+
+	lorisManager = new LorisManager(File(), [this](String message)
+    {
+        this->getConsoleHandler().writeToConsole(message, 1, getMainSynthChain(), Colour(HISE_ERROR_COLOUR));
+    });
+
+#else
+
+    if(GET_HISE_SETTING(getMainSynthChain(), HiseSettings::Compiler::EnableLoris))
+    {
+#if HISE_USE_LORIS_DLL
+        auto f = ProjectHandler::getAppDataDirectory(nullptr).getChildFile("loris_library");
+        
+        if(f.isDirectory())
+        {
+            lorisManager = new LorisManager(f, [this](String message)
+            {
+                this->getConsoleHandler().writeToConsole(message, 1, getMainSynthChain(), Colour(HISE_ERROR_COLOUR));
+            });
+        }
+        else
+        {
+            if(PresetHandler::showYesNoWindow("Install Loris library", "In order to use Loris, you need to install the dll libraries in the app data directory of HISE. Press OK to create the folder, then download the precompiled dlls and put it in this directory"))
+            {
+                f.createDirectory();
+                f.revealToUser();
+            }
+        }
+#endif
+    }
+    else
+    {
+        auto f = ProjectHandler::getAppDataDirectory(this).getChildFile("loris_library");
+        
+        if(f.isDirectory())
+            debugToConsole(getMainSynthChain(), "You seem to have installed the loris library, but you need to enable the setting `EnableLoris` in the HISE preferences");
+    }
+
+#endif
+    
 }
 
 
@@ -106,6 +243,10 @@ BackendProcessor::~BackendProcessor()
 #if JUCE_ENABLE_AUDIO_GUARD
 	AudioThreadGuard::setHandler(nullptr);
 #endif
+
+    getJavascriptThreadPool().stopThread(1000);
+	getJavascriptThreadPool().getGlobalServer()->cleanup();
+
 
 	getSampleManager().cancelAllJobs();
 
@@ -137,7 +278,7 @@ void BackendProcessor::projectChanged(const File& /*newRootDirectory*/)
 		return SafeFunctionCall::OK;
 	};
 
-	getKillStateHandler().killVoicesAndCall(getMainSynthChain(), f, MainController::KillStateHandler::SampleLoadingThread);
+	getKillStateHandler().killVoicesAndCall(getMainSynthChain(), f, MainController::KillStateHandler::TargetThread::SampleLoadingThread);
 
 	refreshExpansionType();
 	
@@ -186,8 +327,93 @@ void BackendProcessor::refreshExpansionType()
 	getExpansionHandler().resetAfterProjectSwitch();
 }
 
+void BackendProcessor::handleEditorData(bool save)
+{
+#if IS_STANDALONE_APP
+	File jsonFile = NativeFileHandler::getAppDataDirectory(nullptr).getChildFile("editorData.json");
+
+	if (save)
+	{
+		if (editorInformation.isObject())
+			jsonFile.replaceWithText(JSON::toString(editorInformation));
+		else
+			jsonFile.deleteFile();
+	}
+	else
+	{
+		editorInformation = JSON::parse(jsonFile);
+	}
+#else
+		ignoreUnused(save);
+#endif
+
+		
+}
+
 void BackendProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& midiMessages)
 {
+    TRACE_DSP();
+
+	if(externalClockSim.bypassed)
+	{
+		processBlockBypassed(buffer, midiMessages);
+		return;
+	}
+
+	
+	
+#if !HISE_BACKEND_AS_FX
+	buffer.clear();
+#endif
+
+    auto processChunk = [this](float** channels, AudioSampleBuffer& original, MidiBuffer& mb, int offset, int numThisTime)
+    {
+        for (int i = 0; i < original.getNumChannels(); i++)
+            channels[i] = original.getWritePointer(i, offset);
+
+        MidiBuffer chunkMidiBuffer;
+        chunkMidiBuffer.addEvents(mb, offset, numThisTime, -offset);
+
+        AudioSampleBuffer chunk(channels, original.getNumChannels(), numThisTime);
+
+#if IS_STANDALONE_APP
+		externalClockSim.addTimelineData(chunk, chunkMidiBuffer);
+#endif
+
+        getDelayedRenderer().processWrapped(chunk, chunkMidiBuffer);
+    };
+    
+#if IS_STANDALONE_APP
+    setPlayHead(&externalClockSim);
+    
+    auto numBeforeWrap = externalClockSim.getLoopBeforeWrap(buffer.getNumSamples());
+    
+	// we need to align the loop points to the raster 
+	numBeforeWrap -= numBeforeWrap % HISE_EVENT_RASTER;
+
+    if(numBeforeWrap != 0)
+    {
+        auto numAfterWrap = buffer.getNumSamples() - numBeforeWrap;
+        float* channels[HISE_NUM_PLUGIN_CHANNELS];
+
+        processChunk(channels, buffer, midiMessages, 0, numBeforeWrap);
+        
+        externalClockSim.process(numBeforeWrap);
+        
+        if(numAfterWrap > 0)
+            processChunk(channels, buffer, midiMessages, numBeforeWrap, numAfterWrap);
+        
+        externalClockSim.process(numAfterWrap);
+        
+		externalClockSim.sendLoopMessage();
+
+        return;
+    }
+    
+#endif
+    
+    
+    
 	if (isUsingDynamicBufferSize())
 	{
 		int numTodo = buffer.getNumSamples();
@@ -210,15 +436,9 @@ void BackendProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& midiM
 
 			float* channels[HISE_NUM_PLUGIN_CHANNELS];
 
-			for (int i = 0; i < buffer.getNumChannels(); i++)
-				channels[i] = buffer.getWritePointer(i, pos);
-
-			MidiBuffer chunkMidiBuffer;
-			chunkMidiBuffer.addEvents(midiMessages, pos, fruityLoopsBufferSize, -pos);
-
-			AudioSampleBuffer chunk(channels, buffer.getNumChannels(), fruityLoopsBufferSize);
-
-			getDelayedRenderer().processWrapped(chunk, chunkMidiBuffer);
+            
+            
+            processChunk(channels, buffer, midiMessages, pos, fruityLoopsBufferSize);
 
 			numTodo -= fruityLoopsBufferSize;
 			pos += fruityLoopsBufferSize;
@@ -226,17 +446,28 @@ void BackendProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& midiM
 	}
 	else
 	{
+#if IS_STANDALONE_APP
+		externalClockSim.addTimelineData(buffer, midiMessages);
+#endif
+
+		ScopedAnalyser sa(this, nullptr, buffer, buffer.getNumSamples());
+
 		getDelayedRenderer().processWrapped(buffer, midiMessages);
+		
+#if IS_STANDALONE_APP
+		externalClockSim.addPostTimelineData(buffer, midiMessages);
+#endif
 	}
 
-	
+#if IS_STANDALONE_APP
+    externalClockSim.process(buffer.getNumSamples());
+#endif
 };
 
 void BackendProcessor::processBlockBypassed(AudioSampleBuffer& buffer, MidiBuffer& midiMessages)
 {
 	buffer.clear();
 	midiMessages.clear();
-	//allNotesOff();
 }
 
 void BackendProcessor::handleControllersForMacroKnobs(const MidiBuffer &/*midiMessages*/)
@@ -247,6 +478,8 @@ void BackendProcessor::handleControllersForMacroKnobs(const MidiBuffer &/*midiMe
 
 void BackendProcessor::prepareToPlay(double newSampleRate, int samplesPerBlock)
 {
+    externalClockSim.prepareToPlay(newSampleRate);
+    
 	setRateAndBufferSizeDetails(newSampleRate, samplesPerBlock);
  
 	handleLatencyInPrepareToPlay(newSampleRate);
@@ -313,7 +546,7 @@ void BackendProcessor::setStateInformation(const void *data, int sizeInBytes)
 		return SafeFunctionCall::OK;
 	};
 
-	getKillStateHandler().killVoicesAndCall(getMainSynthChain(), f, MainController::KillStateHandler::SampleLoadingThread);
+	getKillStateHandler().killVoicesAndCall(getMainSynthChain(), f, MainController::KillStateHandler::TargetThread::SampleLoadingThread);
 }
 
 AudioProcessorEditor* BackendProcessor::createEditor()
@@ -327,20 +560,7 @@ AudioProcessorEditor* BackendProcessor::createEditor()
 #endif
 }
 
-void BackendProcessor::registerItemGenerators()
-{
-	AutogeneratedDocHelpers::addItemGenerators(*this);
-}
 
-void BackendProcessor::registerContentProcessor(MarkdownContentProcessor* processor)
-{
-	AutogeneratedDocHelpers::registerContentProcessor(processor);
-}
-
-juce::File BackendProcessor::getCachedDocFolder() const
-{
-	return AutogeneratedDocHelpers::getCachedDocFolder();
-}
 
 juce::File BackendProcessor::getDatabaseRootDirectory() const
 {
@@ -404,6 +624,92 @@ void BackendProcessor::setEditorData(var editorState)
 
 
 
+
+
+void BackendProcessor::pushToAnalyserBuffer(AnalyserInfo::Ptr info, bool post, const AudioSampleBuffer& buffer, int numSamples)
+{
+	jassert(info != nullptr);
+
+	if(auto sl = SimpleReadWriteLock::ScopedTryReadLock(postAnalyserLock))
+	{
+		auto rb = info->ringBuffer[(int)post];
+
+		if(rb != nullptr)
+		{
+			if(!post)
+			{
+				for(int i = 0; i < 127; i++)
+				{
+					if(getKeyboardState().isNoteOn(1, i))
+					{
+						currentNoteNumber = i;
+						break;
+					}
+				}
+			}
+
+			if(!post && (bool)rb->getPropertyObject()->getProperty(scriptnode::PropertyIds::IsProcessingHiseEvent))
+			{
+				if(currentNoteNumber != -1 && currentNoteNumber != info->lastNoteNumber)
+				{
+					info->lastNoteNumber = currentNoteNumber;
+					auto midiFreq = MidiMessage::getMidiNoteInHertz(info->lastNoteNumber);
+					auto cycleLength = getMainSynthChain()->getSampleRate() / midiFreq;
+					info->ringBuffer[0]->setMaxLength(cycleLength);
+					info->ringBuffer[1]->setMaxLength(cycleLength);
+				}
+			}
+
+			if(rb->getPropertyObject()->getProperty("ShowCpuUsage"))
+			{
+				auto numMsForBuffer = ((double)buffer.getNumSamples() / getMainSynthChain()->getSampleRate()) * 1000.0;
+				auto usage = jlimit(0.0, 1.0, info->duration / numMsForBuffer);
+
+				rb->write(post ? usage : (getCpuUsage() * 0.01), numSamples);
+			}
+			else
+			{
+				jassert(isPositiveAndBelow(info->currentlyAnalysedProcessor.second * 2, buffer.getNumChannels()+1));
+				const float* data[2] = { buffer.getReadPointer(info->currentlyAnalysedProcessor.second * 2), buffer.getReadPointer(info->currentlyAnalysedProcessor.second * 2 +1) };
+				rb->write(data, 2, buffer.getNumSamples());
+			}
+		}
+	}
+}
+
+AnalyserInfo::Ptr BackendProcessor::getAnalyserInfoForProcessor(Processor* p)
+{
+	if(auto sl = SimpleReadWriteLock::ScopedTryReadLock(postAnalyserLock))
+	{
+		for(auto i: currentAnalysers)
+		{
+			if(i->currentlyAnalysedProcessor.first == p)
+				return i;
+		}
+	}
+
+	return nullptr;
+}
+
+Result BackendProcessor::setAnalysedProcessor(AnalyserInfo::Ptr newInfo, bool add)
+{
+	SimpleReadWriteLock::ScopedWriteLock sl(postAnalyserLock);
+
+	if(add)
+	{
+		for(auto i: currentAnalysers)
+		{
+			if(i->currentlyAnalysedProcessor.first == newInfo->currentlyAnalysedProcessor.first)
+				return Result::fail("Another analyser is already assigned to the module " + i->currentlyAnalysedProcessor.first->getId());
+		}
+		currentAnalysers.add(newInfo);
+	}
+			
+	else
+		currentAnalysers.removeObject(newInfo);
+
+	return Result::ok();
+}
 } // namespace hise
 
 

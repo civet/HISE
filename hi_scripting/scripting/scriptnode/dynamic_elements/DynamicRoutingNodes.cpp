@@ -40,6 +40,90 @@ namespace routing
 {
 
 #if USE_BACKEND
+
+struct SelectorEditor: public ScriptnodeExtraComponent<selector>
+{
+    SelectorEditor(selector* s, PooledUIUpdater* u):
+        ScriptnodeExtraComponent<selector>(s, u)
+    {
+        setSize(256, 80);
+        
+        static const unsigned char pathData[] = { 110,109,233,38,145,63,119,190,39,64,108,0,0,0,0,227,165,251,63,108,0,0,0,0,20,174,39,63,108,174,71,145,63,0,0,0,0,108,174,71,17,64,20,174,39,63,108,174,71,17,64,227,165,251,63,108,115,104,145,63,119,190,39,64,108,115,104,145,63,143,194,245,63,98,55,137,
+    145,63,143,194,245,63,193,202,145,63,143,194,245,63,133,235,145,63,143,194,245,63,98,164,112,189,63,143,194,245,63,96,229,224,63,152,110,210,63,96,229,224,63,180,200,166,63,98,96,229,224,63,43,135,118,63,164,112,189,63,178,157,47,63,133,235,145,63,178,
+    157,47,63,98,68,139,76,63,178,157,47,63,84,227,5,63,43,135,118,63,84,227,5,63,180,200,166,63,98,84,227,5,63,14,45,210,63,168,198,75,63,66,96,245,63,233,38,145,63,143,194,245,63,108,233,38,145,63,119,190,39,64,99,101,0,0 };
+
+        p.loadPathFromData(pathData, sizeof(pathData));
+    }
+    
+    void paint(Graphics& g) override
+    {
+        ScriptnodeComboBoxLookAndFeel::drawScriptnodeDarkBackground(g, getLocalBounds().reduced(10).toFloat(), false);
+        
+        if(auto obj = getObject())
+        {
+            auto size = obj->numProcessingChannels;
+            
+            Array<Rectangle<float>> inputs, outputs;
+            
+            int w = 30;
+            
+            auto b = getLocalBounds().withSizeKeepingCentre(size * w, getHeight());
+            
+            for(int i = 0; i < size; i++)
+            {
+                auto r = b.removeFromLeft(w);
+                
+                inputs.add(r.removeFromTop(r.getHeight()/2).withSizeKeepingCentre(10, 10).toFloat());
+                outputs.add(r.withSizeKeepingCentre(10, 10).toFloat());
+            }
+            
+            auto c = Colour(0xFF999999);
+            
+            g.setColour(c);
+            
+            for(auto &r: inputs)
+            {
+                PathFactory::scalePath(p, r);
+                g.fillPath(p);
+            }
+            
+            for(auto &r: outputs)
+            {
+                PathFactory::scalePath(p, r);
+                g.fillPath(p);
+            }
+            
+            for(int i = 0; i < obj->numChannels; i++)
+            {
+                auto sourceIndex = jlimit(0, size-1, obj->channelIndex + i);
+                auto targetIndex = jlimit(0, size-1, i);
+                
+                if(obj->selectOutput)
+                    std::swap(sourceIndex, targetIndex);
+                
+                Line<float> l(inputs[sourceIndex].getCentre(), outputs[targetIndex].getCentre());
+                
+                g.setColour(Colour(0xFF444444));
+                g.drawLine(l, 2.5f);
+                g.setColour(Colour(0xFFAAAAAA));
+                g.drawLine(l, 2.0f);
+            }
+        }
+    }
+    
+    static Component* createExtraComponent(void* obj, PooledUIUpdater* updater)
+    {
+        return new SelectorEditor(static_cast<ObjectType*>(obj), updater);
+    }
+    
+    void timerCallback() override
+    {
+        
+    }
+    
+    Path p;
+};
+
 struct MatrixEditor : public ScriptnodeExtraComponent<matrix<dynamic_matrix>>
 {
 	MatrixEditor(matrix<dynamic_matrix>* r, PooledUIUpdater* updater) :
@@ -70,6 +154,7 @@ struct MatrixEditor : public ScriptnodeExtraComponent<matrix<dynamic_matrix>>
 };
 #else
 using MatrixEditor = HostHelpers::NoExtraComponent;
+using SelectorEditor = HostHelpers::NoExtraComponent;
 #endif
 
 
@@ -87,7 +172,8 @@ Factory::Factory(DspNetwork* n) :
 	registerNode<ms_encode>();
 	registerNode<ms_decode>();
 	registerNode<public_mod>();
-
+    registerNode<selector, SelectorEditor>();
+    
 	registerNodeRaw<GlobalSendNode>();
 	registerPolyNodeRaw<GlobalReceiveNode<1>, GlobalReceiveNode<NUM_POLYPHONIC_VOICES>>();
 	registerNodeRaw<GlobalCableNode>();
@@ -144,6 +230,8 @@ void dynamic::restoreConnections(Identifier id, var newValue)
 		if (safePtr.get() == nullptr)
 			return true;
 
+        auto ok = false;
+        
 		if (id == PropertyIds::Value && safePtr->parentNode != nullptr)
 		{
 			auto ids = StringArray::fromTokens(newValue.toString(), ";", "");
@@ -151,7 +239,6 @@ void dynamic::restoreConnections(Identifier id, var newValue)
 			ids.removeEmptyStrings(true);
 
 			auto network = safePtr->parentNode->getRootNetwork();
-
 			auto list = network->getListOfNodesWithPath(getReceiveId(), false);
 
 			for (auto n : list)
@@ -166,14 +253,14 @@ void dynamic::restoreConnections(Identifier id, var newValue)
 					{
 						source = safePtr.get();
 						source->connect(ro.as<dynamic_receive>());
-						return true;
+                        ok = true;
 					}
 					else
 					{
 						if (source == safePtr.get())
 						{
 							source = &(ro.as<dynamic_receive>().null);
-							return true;
+                            ok = true;
 						}
 							
 					}
@@ -181,7 +268,7 @@ void dynamic::restoreConnections(Identifier id, var newValue)
 			}
 		}
 
-		return false;
+		return ok;
 	};
 
 	parentNode->getRootNetwork()->addPostInitFunction(f);
@@ -598,6 +685,8 @@ void dynamic::editor::itemDropped(const SourceDetails& dragSourceDetails)
 
 void dynamic::editor::mouseDown(const MouseEvent& e)
 {
+	CHECK_MIDDLE_MOUSE_DOWN(e);
+
 	if (e.mods.isRightButtonDown())
 	{
 		if (auto rn = getAsReceiveNode())
@@ -632,6 +721,7 @@ void dynamic::editor::mouseDown(const MouseEvent& e)
 
 void dynamic::editor::mouseUp(const MouseEvent& e)
 {
+	CHECK_MIDDLE_MOUSE_UP(e);
 	auto root = dynamic_cast<Component*>(getDragAndDropContainer());
 
 	callForEach<editor>(root, [](editor* fc)
@@ -645,6 +735,7 @@ void dynamic::editor::mouseUp(const MouseEvent& e)
 
 void dynamic::editor::mouseDrag(const MouseEvent& event)
 {
+	CHECK_MIDDLE_MOUSE_DRAG(event);
 	findParentComponentOfClass<DspNetworkGraph>()->repaint();
 }
 

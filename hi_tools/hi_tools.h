@@ -52,7 +52,6 @@ END_JUCE_MODULE_DECLARATION
 
 #pragma once
 
-#include "AppConfig.h"
 
 
 
@@ -97,6 +96,14 @@ END_JUCE_MODULE_DECLARATION
 #endif
 
 
+/** Config: HISE_INCLUDE_RT_NEURAL
+ 
+   Includes the neural network framework RTNeural for inferencing networks in realtime.
+*/
+#ifndef HISE_INCLUDE_RT_NEURAL
+#define HISE_INCLUDE_RT_NEURAL 1
+#endif
+
 /** Config: HISE_USE_EXTENDED_TEMPO_VALUES
 
 If this is true, the tempo mode will contain lower values than 1/1. This allows eg. the LFO to run slower, however it 
@@ -126,8 +133,13 @@ will break compatibility with older projects / presets because the tempo indexes
 #include "../JUCE/modules/juce_gui_extra/juce_gui_extra.h"
 #include "../JUCE/modules/juce_opengl/juce_opengl.h"
 #include "../hi_rlottie/hi_rlottie.h"
+#include "../melatonin_blur/melatonin_blur.h"
 #endif
 
+// Include at least the thread controller to avoid compile errors...
+#if !HISE_INCLUDE_LORIS
+#include "../hi_loris/wrapper/ThreadController.h"
+#endif
 
 #include "../hi_streaming/hi_streaming.h"
 
@@ -177,9 +189,13 @@ will break compatibility with older projects / presets because the tempo indexes
 #define HISE_USE_ONLINE_DOC_UPDATER 0
 #endif
 
-#if !HISE_NO_GUI_TOOLS
-#include "hi_binary_data/hi_binary_data.h"
+/** Set this to 0 if you want to use the old Oxygen font. */
+#ifndef USE_LATO_AS_DEFAULT
+#define USE_LATO_AS_DEFAULT 1
 #endif
+
+#include "hi_binary_data/hi_binary_data.h"
+
 
 #include "Macros.h"
 
@@ -193,7 +209,11 @@ will break compatibility with older projects / presets because the tempo indexes
 #include "hi_tools/PathFactory.h"
 #include "hi_tools/HI_LookAndFeels.h"
 
+#include "hi_dispatch/hi_dispatch.h"
 
+#if HISE_INCLUDE_LORIS
+#include "hi_tools/LorisManager.h"
+#endif
 
 
 #include "hi_tools/PitchDetection.h"
@@ -201,6 +221,8 @@ will break compatibility with older projects / presets because the tempo indexes
 #include "hi_tools/Tables.h"
 
 #include "hi_tools/ValueTreeHelpers.h"
+
+#include "hi_tools/runtime_target.h"
 
 #if USE_IPP
 
@@ -224,35 +246,50 @@ will break compatibility with older projects / presets because the tempo indexes
 #include "hi_markdown/MarkdownDatabaseCrawler.h"
 #include "hi_markdown/MarkdownRenderer.h"
 
-#if USE_BACKEND // Only include this file in the GPL build configuration
-#include "hi_tools/FaustTokeniser.h"
-#endif
+
 
 #include "mcl_editor/mcl_editor.h"
 
 
 
 #include "hi_tools/JavascriptTokeniser.h"
-#include "hi_tools/JavascriptTokeniserFunctions.h"
 
+
+
+#include "hi_standalone_components/ChocWebView.h"
 #include "hi_standalone_components/CodeEditorApiBase.h"
 #include "hi_standalone_components/AdvancedCodeEditor.h"
 #include "hi_standalone_components/ScriptWatchTable.h"
 #include "hi_standalone_components/ComponentWithPreferredSize.h"
+#include "hi_standalone_components/ZoomableViewport.h"
+#if USE_BACKEND
+#include "hi_standalone_components/PerfettoWebViewer.h"
 #endif
+#else
+using ComponentWithMiddleMouseDrag = juce::Component;
+#define CHECK_MIDDLE_MOUSE_DOWN(e) ignoreUnused(e);
+#define CHECK_MIDDLE_MOUSE_UP(e) ignoreUnused(e);
+#define CHECK_MIDDLE_MOUSE_DRAG(e) ignoreUnused(e);
+#define CHECK_VIEWPORT_SCROLL(e, details) ignoreUnused(e, details);
+#endif
+
+
 
 #if HISE_INCLUDE_RLOTTIE
 #include "hi_standalone_components/RLottieDevComponent.h"
 #endif
 
-#include "hi_standalone_components/Plotter.h"
+
 
 #include "hi_standalone_components/RingBuffer.h"
+#include "hi_standalone_components/Plotter.h"
 
 #include "hi_standalone_components/SliderPack.h"
 #include "hi_standalone_components/TableEditor.h"
 
 #include "hi_standalone_components/VuMeter.h"
+
+
 #include "hi_standalone_components/SampleDisplayComponent.h"
 
 
@@ -261,4 +298,15 @@ will break compatibility with older projects / presets because the tempo indexes
 
 
 
+#if HISE_INCLUDE_RT_NEURAL
+#include "hi_neural/hi_neural.h"
+#endif
 
+#if !HISE_NO_GUI_TOOLS
+
+#include "simple_css/simple_css.h"
+#endif
+
+#if !HISE_NO_GUI_TOOLS
+#include "hi_multipage/multipage.h"
+#endif

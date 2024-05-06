@@ -86,7 +86,9 @@ private:
 
 		throwErrorAndQuit("`" + s + "` is not a valid path");
 
+#if JUCE_DEBUG
 		return File();
+#endif
 	}
 
 public:
@@ -110,6 +112,12 @@ public:
 		print(" - use a relative path for the project file" );
 		print(" - ignore the global HISE path and use the HISE repository folder from the");
 		print("   current HISE executable");
+		print("full_exp -p:PATH: exports the project as Full Instrument Expansion (aka HISE Player Library)");
+		print(" - you must supply the absolute path to the .XML file with the '-p:' argument.");
+		print("compress_samples -p:PATH: collects all HLAC files into a hr1 archive");
+		print(" - if an info.hxi file is found in the current work directory, it will embed it into the");
+		print("   archive. You must supply a XML project file with the `-p:` argument that will be");
+		print("   loaded during the export.");
 		print("Arguments: " );
 		print("FILE      The path to the project file (either .xml or .hip you want to export)." );
 		print("          In CI mode, this will be the relative path from the current project folder");
@@ -250,7 +258,7 @@ public:
 		else throwErrorAndQuit(pd.getFullPathName() + " is not a valid folder");
 	}
 	
-	static int loadPresetFile(const String& commandLine)
+	static int loadPresetFile(const String& commandLine, const std::function<Result(BackendProcessor*)>& additionalFunction = {})
 	{
 		auto args = getCommandLineArgs(commandLine);
 
@@ -270,6 +278,11 @@ public:
 		CompileExporter::setExportUsingCI(false);
 
 		File projectDirectory = presetFile.getParentDirectory().getParentDirectory();
+
+		if (currentProjectFolder != projectDirectory)
+		{
+			GET_PROJECT_HANDLER(mainSynthChain).setWorkingProject(projectDirectory);
+		}
 
 		std::cout << "Loading the preset...";
 
@@ -302,6 +315,19 @@ public:
 		}
 		
 		std::cout << "DONE" << std::endl << std::endl;
+
+		if (additionalFunction)
+		{
+			auto ok = additionalFunction(bp);
+
+			if (ok.failed())
+			{
+				processor = nullptr;
+				throwErrorAndQuit(ok.getErrorMessage());
+				return 1;
+			}
+		}
+
 		processor = nullptr;
 		
 		return 0;
@@ -328,15 +354,17 @@ public:
 		jsfx->getOrCreate("dsp");
 
 		CompileExporter::setExportingFromCommandLine();
+		CompileExporter::setExportUsingCI(true);
 
 		hise::DspNetworkCompileExporter exporter(nullptr, dynamic_cast<BackendProcessor*>(mc));
 
 		exporter.getComboBoxComponent("build")->setText(config, dontSendNotification);
 
 		exporter.run();
+		exporter.threadFinished();
 	}
 
-	static void setProjectFolder(const String& commandLine)
+	static void setProjectFolder(const String& commandLine, bool exitOnSuccess=true)
 	{
 		auto args = getCommandLineArgs(commandLine);
 		auto root = getFilePathArgument(args);
@@ -354,7 +382,8 @@ public:
 		mc = nullptr;
 		sp = nullptr;
 
-		exit(0);
+		if(exitOnSuccess)
+			exit(0);
 	}
 
 	static void getProjectFolder(const String& /*commandLine*/)
@@ -451,7 +480,7 @@ public:
 			throwErrorAndQuit(hisePath.getFullPathName() + " is not HISE source folder");
 		}
 
-		auto compilerSettings = NativeFileHandler::getAppDataDirectory().getChildFile("compilerSettings.xml");
+		auto compilerSettings = NativeFileHandler::getAppDataDirectory(nullptr).getChildFile("compilerSettings.xml");
 
 		ScopedPointer<XmlElement> xml;
 
@@ -513,6 +542,11 @@ REGISTER_STATIC_DSP_LIBRARIES()
 #endif
 }
 
+String hise::PresetHandler::getVersionString()
+{
+	return ProjectInfo::versionString;
+}
+
 AudioProcessor* hise::StandaloneProcessor::createProcessor()
 {
 	return new hise::BackendProcessor(deviceManager, callback);
@@ -566,6 +600,26 @@ public:
 			quit();
 			return;
 		}
+		else if (commandLine.startsWith("full_exp"))
+		{
+			auto ok = CommandLineActions::loadPresetFile(commandLine, BackendCommandTarget::Actions::exportInstrumentExpansion);
+
+			if (ok)
+				exit(ok);
+
+			quit();
+			return;
+		}
+		else if (commandLine.startsWith("compress_samples"))
+		{
+			auto ok = CommandLineActions::loadPresetFile(commandLine, BackendCommandTarget::Actions::createSampleArchive);
+
+			if (ok)
+				exit(ok);
+
+			quit();
+			return;
+		}
 		else if (commandLine.startsWith("clean"))
 		{
 			CommandLineActions::cleanBuildFolder(commandLine);
@@ -594,7 +648,7 @@ public:
 		{
 #if HI_RUN_UNIT_TESTS
 			UnitTestRunner runner;
-			runner.setAssertOnFailure(false);
+			runner.setAssertOnFailure(true);
             
             // If you're working on a unit test, just add the "Current" category
             // and then uncomment this line.
@@ -775,6 +829,135 @@ public:
 private:
     ScopedPointer<MainWindow> mainWindow;
 };
+
+
+
+//==============================================================================
+MainContentComponent::MainContentComponent(const String &commandLine)
+{
+    standaloneProcessor = new hise::StandaloneProcessor();
+
+    if(auto mc = dynamic_cast<MainController*>(standaloneProcessor->getCurrentProcessor()))
+    {
+        auto& ph = mc->getSampleManager().getProjectHandler();
+        ph.addListener(this);
+
+        auto root = ph.getRootFolder();
+
+        Component::SafePointer<MainContentComponent> safeThis(this);
+
+        auto f = [safeThis, root]()
+        {
+            if(safeThis.getComponent() != nullptr && safeThis->findParentComponentOfClass<DocumentWindow>() != nullptr)
+                safeThis->projectChanged(root);
+        };
+
+        Timer::callAfterDelay(500, f);
+
+        
+    }
+
+    addAndMakeVisible(editor = standaloneProcessor->createEditor());
+
+    setSize(editor->getWidth(), editor->getHeight());
+
+    
+
+    handleCommandLineArguments(commandLine);
+}
+
+void MainContentComponent::handleCommandLineArguments(const String& args)
+{
+    if (args.isNotEmpty())
+    {
+        String presetFilename = args.trimCharactersAtEnd("\"").trimCharactersAtStart("\"");
+
+        if (File::isAbsolutePath(presetFilename))
+        {
+            File presetFile(presetFilename);
+
+
+            if (presetFile.getFileExtension() == ".hiseproject")
+            {
+                if (!presetFile.existsAsFile())
+                    return;
+
+                auto newFolder = presetFile.getParentDirectory().getChildFile(presetFile.getFileNameWithoutExtension());
+                
+                if (newFolder.isDirectory())
+                {
+                    PresetHandler::showMessageWindow("The folder already exists", "The directory " + newFolder.getFullPathName() + " already exists. Aborting project extraction.");
+                    return;
+                }
+
+                newFolder.createDirectory();
+
+                auto bpe = dynamic_cast<hise::BackendRootWindow*>(editor.get());
+
+                bpe->setProjectIsBeingExtracted();
+
+                auto f = [bpe, newFolder, presetFile]()
+                {
+                    BackendCommandTarget::Actions::extractProject(bpe, newFolder, presetFile);
+                };
+
+                MessageManager::callAsync(f);
+
+                return;
+            }
+
+            File projectDirectory = File(presetFile).getParentDirectory().getParentDirectory();
+            auto bpe = dynamic_cast<hise::BackendRootWindow*>(editor.get());
+            auto mainSynthChain = bpe->getBackendProcessor()->getMainSynthChain();
+            const File currentProjectFolder = GET_PROJECT_HANDLER(mainSynthChain).getWorkDirectory();
+
+            if ((currentProjectFolder != projectDirectory) &&
+                hise::PresetHandler::showYesNoWindow("Switch Project", "The file you are about to load is in a different project. Do you want to switch projects?", hise::PresetHandler::IconType::Question))
+            {
+                GET_PROJECT_HANDLER(mainSynthChain).setWorkingProject(projectDirectory);
+            }
+
+            if (presetFile.getFileExtension() == ".hip")
+            {
+                mainSynthChain->getMainController()->loadPresetFromFile(presetFile, editor);
+            }
+            else if (presetFile.getFileExtension() == ".xml")
+            {
+                hise::BackendCommandTarget::Actions::openFileFromXml(bpe, presetFile);
+            }
+        }
+    }
+}
+
+MainContentComponent::~MainContentComponent()
+{
+    
+    root = nullptr;
+    editor = nullptr;
+
+    standaloneProcessor = nullptr;
+}
+
+void MainContentComponent::paint (Graphics& g)
+{
+    g.fillAll(Colour(0xFF222222));
+}
+
+void MainContentComponent::resized()
+{
+
+#if SCALE_2
+    editor->setSize(getWidth()*2, getHeight()*2);
+#else
+    editor->setSize(getWidth(), getHeight());
+#endif
+
+}
+
+void MainContentComponent::requestQuit()
+{
+    standaloneProcessor->requestQuit();
+}
 
 
 

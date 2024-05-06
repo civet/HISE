@@ -42,7 +42,7 @@ BEGIN_JUCE_MODULE_DECLARATION
   website:          http://hise.audio
   license:          GPL / Commercial
 
-  dependencies:      juce_audio_basics, juce_audio_devices, juce_audio_formats, juce_audio_processors, juce_core, juce_cryptography, juce_data_structures, juce_events, juce_graphics, juce_gui_basics, juce_gui_extra, hi_core, hi_dsp, hi_components, hi_dsp_library, hi_sampler
+  dependencies:      juce_audio_basics, juce_audio_devices, juce_audio_formats, juce_audio_processors, juce_core, juce_cryptography, juce_data_structures, juce_events, juce_graphics, juce_gui_basics, juce_gui_extra, hi_core, hi_dsp_library
 
 END_JUCE_MODULE_DECLARATION
 
@@ -68,28 +68,43 @@ compile / debug cycle and don't need all nodes in scriptnode you might want to t
 #define HISE_SCRIPT_SERVER_TIMEOUT 10000
 #endif
 
+/** This preprocessor will prevent throwing compilation errors when calling a dynamic function with a undefined parameter.
+    This is necessary because of a recent change that detects undefined parameters which went unnoticed before.
+ 
+    If you have a big project and you'll experience many of these errors popping up in the latest HISE build, you can enable
+    this preprocessor in order to keep the lights on - in that case it will only print a warning to the console but keep executing
+    the script so you can go through fixing these on a rainy day.
+ 
+    Be aware that this is just a temporar solution and I'll remove this sometime in the future.
+*/
+#ifndef HISE_WARN_UNDEFINED_PARAMETER_CALLS
+#define HISE_WARN_UNDEFINED_PARAMETER_CALLS 1
+#endif
+
+/** If this is set to 1, then a compiled node will also create a DSP network that you can freeze / unfreeze.
+ *  This was the default behaviour pre HISE 3.7.0, but it introduced a lot of subtle glitches and bugs just for the ability to toggle between
+ *  frozen and unfrozen network. 
+ */
+#ifndef HISE_CREATE_DSP_NETWORKS_FOR_HARDCODED_NODES
+#define HISE_CREATE_DSP_NETWORKS_FOR_HARDCODED_NODES 0
+#endif
+
 #define MAX_SCRIPT_HEIGHT 700
 
 #include "AppConfig.h"
 #include "../JUCE/modules/juce_osc/juce_osc.h"
-#include "../hi_sampler/hi_sampler.h"
+#include "../hi_core/hi_core.h"
 #include "../hi_dsp_library/hi_dsp_library.h"
 #include "../hi_snex/hi_snex.h"
 #include "../hi_rlottie/hi_rlottie.h"
 
-
-
 #include "scripting/api/ScriptMacroDefinitions.h"
 #include "scripting/engine/JavascriptApiClass.h"
 #include "scripting/api/ScriptingBaseObjects.h"
-#include "scripting/api/FixLayoutObjects.h"
 
-//#include "scripting/api/DspFactory.h"
+
 #include "scripting/engine/DebugHelpers.h"
 #include "scripting/api/DspInstance.h"
-
-
-#include "scripting/scripting_audio_processor/ScriptDspModules.h"
 
 #include "scripting/scriptnode/api/RangeHelpers.h"
 #include "scripting/scriptnode/api/DynamicProperty.h"
@@ -99,30 +114,23 @@ compile / debug cycle and don't need all nodes in scriptnode you might want to t
 #include "scripting/scriptnode/api/DspNetwork.h"
 
 #if USE_BACKEND
+#include "scripting/components/ScriptingCodeEditor.h"
+#include "scripting/scriptnode/node_library/BackendHostFactory.h"
+#if HISE_INCLUDE_SNEX
 #include "scripting/scriptnode/api/TestClasses.h"
 #endif
-
-#include "scripting/scriptnode/ui/NodeComponent.h"
-#include "scripting/scriptnode/ui/PropertyEditor.h"
-#include "scripting/scriptnode/api/ModulationSourceNode.h"
-#include "scripting/scriptnode/api/NodeProperty.h"
-
-#if HISE_INCLUDE_SNEX
-#include "scripting/scriptnode/snex_nodes/SnexSource.h"
 #endif
 
-#include "scripting/scriptnode/nodes/JitNode.h"
 #include "scripting/scriptnode/ui/ScriptNodeFloatingTiles.h"
-#include "scripting/scriptnode/ui/FeedbackNodeComponents.h"
 
 #include "scripting/engine/HiseJavascriptEngine.h"
+#include "scripting/api/ScriptExpansion.h"
 
 #include "scripting/api/XmlApi.h"
 #include "scripting/api/ScriptingApiObjects.h"
-#include "scripting/api/ScriptBroadcaster.h"
 #include "scripting/api/ScriptTableListModel.h"
 #include "scripting/api/ScriptingGraphics.h"
-#include "scripting/api/ScriptExpansion.h"
+
 #include "scripting/api/GlobalServer.h"
 #include "scripting/api/ScriptingApi.h"
 #include "scripting/api/ScriptingApiContent.h"
@@ -131,42 +139,25 @@ compile / debug cycle and don't need all nodes in scriptnode you might want to t
 #include "scripting/ScriptProcessor.h"
 #include "scripting/ScriptProcessorModules.h"
 #include "scripting/HardcodedScriptProcessor.h"
-#include "scripting/hardcoded_modules/Arpeggiator.h"
 
 #include "scripting/api/ScriptComponentWrappers.h"
 #include "scripting/components/ScriptingContentComponent.h"
 
-#include "scripting/scriptnode/dynamic_elements/DynamicParameterList.h"
-#include "scripting/scriptnode/dynamic_elements/DynamicComplexData.h"
-#include "scripting/scriptnode/dynamic_elements/DynamicEventNodes.h"
-#include "scripting/scriptnode/api/StaticNodeWrappers.h"
-
-#if HISE_INCLUDE_SNEX
-#include "scripting/scriptnode/snex_nodes/SnexShaper.h"
-#include "scripting/scriptnode/snex_nodes/SnexOscillator.h"
-
-#include "scripting/scriptnode/snex_nodes/SnexNode.h"
-#include "scripting/scriptnode/snex_nodes/SnexEnvelope.h"
-#include "scripting/scriptnode/snex_nodes/SnexDynamicExpression.h"
-#endif
-
-
-#include "scripting/scriptnode/snex_nodes/SnexTimer.h"
-#include "scripting/scriptnode/snex_nodes/SnexMidi.h"
-
-#include "scripting/scriptnode/dynamic_elements/DynamicFaderNode.h"
-#include "scripting/scriptnode/dynamic_elements/DynamicSmootherNode.h"
-#include "scripting/scriptnode/dynamic_elements/DynamicRoutingNodes.h"
-#include "scripting/scriptnode/dynamic_elements/GlobalRoutingNodes.h"
-
-#include "scripting/scriptnode/nodes/AudioFileNodeBase.h"
+#include "scripting/scriptnode/dynamic_elements/GlobalRoutingManager.h"
 
 #if USE_BACKEND
 #include "scripting/components/ScriptingPanelTypes.h"
-
 #include "scripting/components/PopupEditors.h"
-#include "scripting/components/ScriptingCodeEditor.h"
-#include "scripting/components/AutoCompletePopup.h"
 #include "scripting/components/ScriptingContentOverlay.h"
-#include "scripting/components/ScriptingEditor.h"
-#endif 
+#endif
+
+
+
+
+
+
+
+
+#include "scripting/scriptnode/api/NodeProperty.h"
+#include "scripting/scriptnode/api/ModulationSourceNode.h"
+#include "scripting/scriptnode/dynamic_elements/DynamicParameterList.h"

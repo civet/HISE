@@ -43,76 +43,33 @@ class TouchAndHoldComponent
 {
 public:
 
-	TouchAndHoldComponent():
-		updateTimer(this)
-	{
+	TouchAndHoldComponent();
 
-	}
-	
-	virtual ~TouchAndHoldComponent()
-	{
-		abortTouch();
-	}
-	
+	virtual ~TouchAndHoldComponent();
+
 	virtual void touchAndHold(Point<int> downPosition) = 0;
 	
-	void startTouch(Point<int> downPosition)
-	{
-		if (isTouchEnabled())
-		{
-			updateTimer.startTouch(downPosition);
-		}
-	}
+	void startTouch(Point<int> downPosition);
 
-	void setDragDistance(float newDistance)
-	{
-		updateTimer.setDragDistance(newDistance);
-	}
+	void setDragDistance(float newDistance);
 
-	void abortTouch()
-	{
-		updateTimer.stopTimer();
-	}
+	void abortTouch();
 
-	bool isTouchEnabled() const
-	{
-		return touchEnabled && HiseDeviceSimulator::isMobileDevice();
-	}
+	bool isTouchEnabled() const;
 
-	void setTouchEnabled(bool shouldBeEnabled)
-	{
-		touchEnabled = shouldBeEnabled;
-	}
+	void setTouchEnabled(bool shouldBeEnabled);
 
 private:
 
 	struct UpdateTimer : public Timer
 	{
-		UpdateTimer(TouchAndHoldComponent* parent_):
-			parent(parent_),
-			dragDistance(0.0f)
-		{}
+		UpdateTimer(TouchAndHoldComponent* parent_);
 
-		void startTouch(Point<int>& newDownPosition)
-		{
-			downPosition = newDownPosition;
-			startTimer(1000);
-		}
+		void startTouch(Point<int>& newDownPosition);
 
-		void setDragDistance(float newDistance)
-		{
-			dragDistance = newDistance;
-		}
+		void setDragDistance(float newDistance);
 
-		void timerCallback()
-		{
-			stopTimer();
-
-			if (dragDistance < 8.0f)
-			{
-				parent->touchAndHold(downPosition);
-			}
-		}
+		void timerCallback();
 
 	private:
 
@@ -173,10 +130,25 @@ private:
 *	
 */
 class MacroControlledObject: public MacroControlBroadcaster::MacroConnectionListener,
+							 public dispatch::ListenerOwner,
 						     public Learnable
 {
 public:
 	
+	struct ModulationPopupData: public ReferenceCountedObject
+	{
+		using Ptr = ReferenceCountedObjectPtr<ModulationPopupData>;
+
+		operator bool() const noexcept;
+
+		String modulationId;
+		StringArray sources;
+		std::function<bool(int, bool)> queryFunction;
+		std::function<void(int, bool)> toggleFunction;
+		std::function<void(double)> valueCallback;
+		std::function<void(String)> editCallback;
+	};
+
 	class UndoableControlEvent: public UndoableAction
 	{
 	public:
@@ -198,26 +170,16 @@ public:
 	*
 	*	You have to call setup() before you use the object!
 	*/
-	MacroControlledObject():
-        parameter(-1),
-		processor(nullptr),
-		macroIndex(-1),
-		name(""),
-		numberTag(new NumberTag(3, 14.0f, Colour(SIGNAL_COLOUR))),
-		macroControlledComponentEnabled(true)
-	{};
+	MacroControlledObject();;
     
     virtual ~MacroControlledObject();;
 
 	/** returns the name. */
-	const String getName() const noexcept { return name; };
+	const String getName() const noexcept;;
 
 	void setAttributeWithUndo(float newValue, bool useCustomOldValue=false, float customOldValue=-1.0f);
 
-	void setCanBeMidiLearned(bool shouldBe)
-	{
-		midiLearnEnabled = shouldBe;
-	}
+	void setCanBeMidiLearned(bool shouldBe);
 
 	void macroConnectionChanged(int macroIndex, Processor* p, int parameterIndex, bool wasAdded) override;
 
@@ -225,7 +187,7 @@ public:
 
 	bool isConnectedToModulator() const;
 
-	void setUseUndoManagerForEvents(bool shouldUseUndo) { useUndoManagerForEvents = shouldUseUndo; }
+	void setUseUndoManagerForEvents(bool shouldUseUndo);
 
 	/** Initializes the control element.
 	*
@@ -242,19 +204,9 @@ public:
 
 	void initMacroControl(NotificationType notify);
 
-	virtual void addToMacroController(int newMacroIndex)
-	{ 
-		numberTag->setNumber(newMacroIndex+1);
-		numberTag->setVisible(true);
-		macroIndex = newMacroIndex; 
-	};
+	virtual void addToMacroController(int newMacroIndex);;
 
-	virtual void removeFromMacroController() 
-	{ 
-		numberTag->setNumber(0);
-		numberTag->setVisible(false);
-		macroIndex = -1;	
-	}
+	virtual void removeFromMacroController();
 
 	/** overwrite this method and update the element to display the current value of the controlled attribute. */
 	virtual void updateValue(NotificationType sendAttributeChange = sendNotification) = 0;
@@ -265,19 +217,25 @@ public:
 	bool isLocked();
 
 	/** Since the original setEnabled() is overwritten in the updateValue, use this method instead to enable / disable MacroControlledComponents. */
-	void enableMacroControlledComponent(bool shouldBeEnabled) noexcept
-	{
-		macroControlledComponentEnabled = shouldBeEnabled;
-	}
+	void enableMacroControlledComponent(bool shouldBeEnabled) noexcept;
 
 	bool isReadOnly();
 
 	int getMacroIndex() const;
 	
-	int getParameter() const { return parameter; };
+	int getParameter() const;;
+
+	void setModulationData(ModulationPopupData::Ptr modData);
+
+
+	void onAttributeChange(dispatch::library::Processor* p, uint8 index);
 
 protected:
 
+	ScopedPointer<dispatch::library::Processor::AttributeListener> valueListener;
+
+    friend class SliderWithShiftTextBox;
+    
 	/** checks if the macro learn mode is active.
 	*
 	*	If it is active, it adds this control to the macro and returns true.
@@ -291,9 +249,9 @@ protected:
 	*/
 	bool checkLearnMode();
 	
-	Processor *getProcessor() {return processor.get(); };
+	Processor *getProcessor();;
 
-	const Processor *getProcessor() const {return processor.get(); };
+	const Processor *getProcessor() const;;
 
 	int parameter;
 
@@ -302,6 +260,8 @@ protected:
 	ScopedPointer<NumberTag> numberTag;
 
 private:
+
+	ModulationPopupData::Ptr modulationData;
 
 	Identifier customId;
 
@@ -320,104 +280,42 @@ private:
 	
 };
 
+
+
 /** A combobox which can be controlled by the macro system. */
-class HiComboBox: public ComboBox,
+class HiComboBox: public SubmenuComboBox,
 				  public ComboBox::Listener,
 				  public MacroControlledObject,
                   public TouchAndHoldComponent
 {
 public:
 
-	HiComboBox(const String &name):
-        ComboBox(name),
-		MacroControlledObject()
-	{
-		addChildComponent(numberTag);
-		font = GLOBAL_FONT();
+	HiComboBox(const String &name);;
 
-		addListener(this);
+    ~HiComboBox();
 
-        setWantsKeyboardFocus(false);
-        
-        setColour(HiseColourScheme::ComponentFillTopColourId, Colour(0x66333333));
-        setColour(HiseColourScheme::ComponentFillBottomColourId, Colour(0xfb111111));
-        setColour(HiseColourScheme::ComponentOutlineColourId, Colours::white.withAlpha(0.3f));
-        setColour(HiseColourScheme::ComponentTextColourId, Colours::white);
-	};
-
-    ~HiComboBox()
-    {
-        setLookAndFeel(nullptr);
-    }
-    
 	void setup(Processor *p, int parameter, const String &name) override;
 
 	void updateValue(NotificationType sendAttributeChange = sendNotification) override;
 
 	void comboBoxChanged(ComboBox *c) override;
                
-    void mouseUp(const MouseEvent& e) override
-    {
-        abortTouch();
-        ComboBox::mouseUp(e);
-    }
+    void mouseUp(const MouseEvent& e) override;
+
+	void touchAndHold(Point<int> downPosition) override;
     
-    void touchAndHold(Point<int> downPosition) override;
+	void resized() override;
+	
+    void mouseDown(const MouseEvent &e) override;
+	void mouseDrag(const MouseEvent& e) override;
+
+	
+
+	
     
-	void resized() override
-	{
-		ComboBox::resized();
-		numberTag->setBounds(getLocalBounds());
-	}
-
-#if 0
-	static void comboBoxPopupMenuFinishedCallback(int result, HiComboBox* combo)
-	{
-		if (combo != nullptr)
-		{
-            
-			combo->hidePopup();
-
-			if (result != 0)
-				combo->setSelectedId(result);
-
-			
-
-			//combo->addItemsToMenu(*combo->getRootMenu());
-		}
-	}
-
-
-	void showPopup() override
-	{
-		PopupMenu menu = *getRootMenu();
-
-		//addItemsToMenu(menu);
-
-		menu.setLookAndFeel(&getLookAndFeel());
-		
-
-		
-
-		menu.showMenuAsync(PopupMenu::Options().withTargetComponent(this)
-			.withItemThatMustBeVisible(getSelectedId())
-			.withMinimumWidth(getWidth())
-			.withMaximumNumColumns(1)
-			.withStandardItemHeight(28),
-			ModalCallbackFunction::forComponent(comboBoxPopupMenuFinishedCallback, this));
-	}
-#endif
-
-    void mouseDown(const MouseEvent &e);
-
-	NormalisableRange<double> getRange() const override 
-	{ 
-		NormalisableRange<double> r(1.0, (double)getNumItems()); 
-
-		r.interval = 1.0;
-
-		return r;
-	};
+    bool customPopup = false;
+    
+	NormalisableRange<double> getRange() const override;;
 	
 	Font font;
 };
@@ -426,45 +324,14 @@ class MomentaryToggleButton: public ToggleButton
 {
 public:
     
-    MomentaryToggleButton(const String& name):
-      ToggleButton(name)
-    {};
+    MomentaryToggleButton(const String& name);;
     
-    void setIsMomentary(bool shouldBeMomentary)
-    {
-        isMomentary = shouldBeMomentary;
-    }
-    
-    void mouseDown(const MouseEvent& e) override
-    {
-		if (e.mods.isRightButtonDown())
-			return;
+    void setIsMomentary(bool shouldBeMomentary);
 
-        if (isMomentary)
-        {
-            setToggleState(true, sendNotification);
-        }
-        else
-        {
-            ToggleButton::mouseDown(e);
-        }
-    }
-    
-    void mouseUp(const MouseEvent& e) override
-    {
-		if (e.mods.isRightButtonDown())
-			return;
+    void mouseDown(const MouseEvent& e) override;
 
-        if (isMomentary)
-        {
-            setToggleState(false, sendNotification);
-        }
-        else
-        {
-            ToggleButton::mouseUp(e);
-        }
-    }
-    
+    void mouseUp(const MouseEvent& e) override;
+
 private:
     
     bool isMomentary = false;
@@ -477,24 +344,9 @@ class HiToggleButton: public MomentaryToggleButton,
 {
 public:
 
-	HiToggleButton(const String &name):
-		MomentaryToggleButton(name),
-        MacroControlledObject(),
-		notifyEditor(dontSendNotification)
-	{
-		addChildComponent(numberTag);
-		addListener(this);
-		setWantsKeyboardFocus(false);
-        
-        setColour(HiseColourScheme::ComponentFillTopColourId, Colour(0x66333333));
-        setColour(HiseColourScheme::ComponentFillBottomColourId, Colour(0xfb111111));
-        setColour(HiseColourScheme::ComponentOutlineColourId, Colours::white.withAlpha(0.3f));
-	};
+	HiToggleButton(const String &name);;
 
-    ~HiToggleButton()
-    {
-        setLookAndFeel(nullptr);
-    }
+    ~HiToggleButton();
 
 	void setup(Processor *p, int parameter, const String &name) override;
 
@@ -502,18 +354,10 @@ public:
 
 	void buttonClicked(Button *b) override;
 
-	void setNotificationType(NotificationType notify)
-	{
-		notifyEditor = notify;
-	}
+	void setNotificationType(NotificationType notify);
 
-	
 
-	void setPopupData(const var& newPopupData, Rectangle<int>& newPopupPosition)
-	{
-		popupData = newPopupData;
-		popupPosition = newPopupPosition;
-	}
+	void setPopupData(const var& newPopupData, Rectangle<int>& newPopupPosition);
 
 	void setLookAndFeelOwned(LookAndFeel *fslaf);
 
@@ -521,21 +365,14 @@ public:
 
 	void mouseUp(const MouseEvent& e) override;
 
-    void touchAndHold(Point<int> downPosition) override;
+	void mouseDrag(const MouseEvent& event) override;
+	
+
+	void touchAndHold(Point<int> downPosition) override;
     
-	void resized() override
-	{
-		ToggleButton::resized();
-		numberTag->setBounds(getLocalBounds());
-	}
+	void resized() override;
 
-	NormalisableRange<double> getRange() const override 
-	{ 
-		NormalisableRange<double> r(0.0, 1.0); 
-		r.interval = 1.0;
-
-		return r;
-	};
+	NormalisableRange<double> getRange() const override;;
 	
 private:
 
@@ -551,7 +388,203 @@ private:
 };
 
 
+class SliderWithShiftTextBox : public TextEditor::Listener
+{
+public:
 
+    struct ModifierObject
+    {
+        static constexpr int doubleClickModifier = 512;
+        static constexpr int noKeyModifier = 1024;
+        
+        enum class Action
+        {
+            NoAction,
+            TextInput,
+            FineTune,
+            ResetToDefault,
+            ContextMenu,
+            numActions
+        };
+
+        ModifierKeys getModifiers(Action a)
+        {
+            auto f = mods1[(int)a];
+            f &= ~doubleClickModifier;
+            return ModifierKeys((int)f);
+        }
+        
+        void setFromObject(const var& obj)
+        {
+            auto setFromIntOrArray = [&](Action a, const Identifier& id)
+            {
+                if(!obj.hasProperty(id))
+                {
+                    mods1[(int)a] = getDefaultFlags(a);
+                    mods2[(int)a] = 0;
+                    mods3[(int)a] = 0;
+                    return;
+                }
+                
+                auto t = obj.getProperty(id, 0);
+                
+                if(t.isArray())
+                {
+                    mods1[(int)a] = (uint64)(int64)t[0];
+                    mods2[(int)a] = (uint64)(int64)t[1];
+                    
+                    if(t.size() > 2)
+                        mods3[(int)a] = (uint64)(int64)t[2];
+                    else
+                        mods3[(int)a] = 0;
+                }
+                else
+                {
+                    mods1[(int)a] = (uint64)(int64)t;
+                    mods2[(int)a] = 0;
+                    mods3[(int)a] = 0;
+                }
+            };
+            
+            setFromIntOrArray(Action::TextInput, "TextInput");
+            setFromIntOrArray(Action::ResetToDefault, "ResetToDefault");
+            setFromIntOrArray(Action::FineTune, "FineTune");
+            setFromIntOrArray(Action::ContextMenu, "ContextMenu");
+        }
+        
+        static uint64 getDefaultFlags(Action a)
+        {
+            switch(a)
+            {
+                case Action::TextInput:
+                    return ModifierKeys::shiftModifier;
+            case Action::ResetToDefault:
+                    return doubleClickModifier | ModifierKeys::altModifier;
+                case Action::FineTune:
+                    return  ModifierKeys::commandModifier |
+                            ModifierKeys::ctrlModifier |
+                            ModifierKeys::altModifier;
+                case Action::ContextMenu:
+                    return ModifierKeys::rightButtonModifier;
+                default: return 0;
+            }
+        }
+        
+        Action getActionForModifier(ModifierKeys m, bool isDoubleClick) const
+        {
+            auto flags = (uint64)m.getRawFlags();
+
+            if(isDoubleClick)
+                flags |= doubleClickModifier;
+
+            if(!m.isAnyModifierKeyDown())
+                flags |= noKeyModifier;
+            
+            for(auto i = (int)Action::TextInput; i < (int)Action::numActions; i++)
+            {
+                auto firstMatch = (mods1[i] & flags) != 0;
+                
+                if(mods2[i])
+                    firstMatch &= (flags & mods2[i]) != 0;
+                
+                if(mods3[i])
+                    firstMatch &= (flags & mods3[i]) != 0;
+                
+                if(firstMatch)
+                    return (Action)i;
+            }
+            
+            return Action::NoAction;
+        }
+
+        ModifierObject()
+        {
+            for(int i = 0; i < (int)Action::numActions; i++)
+            {
+                mods1[i] = getDefaultFlags((Action)i);
+                mods2[i] = 0;
+                mods3[i] = 0;
+            }
+            
+            // make sure it's only the no key modifier when double clicking...
+            mods2[(int)Action::ResetToDefault] = noKeyModifier;
+        }
+
+        uint64 mods1[(int)Action::numActions];
+        uint64 mods2[(int)Action::numActions];
+        uint64 mods3[(int)Action::numActions];
+        
+    } modObject;
+    
+    void setModifierObject(const var& obj)
+    {
+        modObject.setFromObject(obj);
+        
+        auto fineMods = modObject.getModifiers(ModifierObject::Action::FineTune);
+        
+        auto swappable = asSlider()->getVelocityModeIsSwappable();
+        auto threshold = asSlider()->getVelocityThreshold();
+        auto sensitivity = asSlider()->getVelocitySensitivity();
+        auto offset = asSlider()->getVelocityOffset();
+        
+        asSlider()->setVelocityModeParameters (sensitivity, threshold, offset, swappable, (ModifierKeys::Flags)fineMods.getRawFlags());
+    }
+    
+	bool enableShiftTextInput = true;
+
+    bool performModifierAction(const MouseEvent& e, bool isDoubleClick)
+    {
+        auto a = modObject.getActionForModifier(e.mods, isDoubleClick);
+        
+        if(a == ModifierObject::Action::TextInput)
+        {
+            onShiftClick(e);
+			return true;
+        }
+        if(a == ModifierObject::Action::ResetToDefault)
+        {
+            if(asSlider()->isDoubleClickReturnEnabled())
+            {
+                auto defaultValue = asSlider()->getDoubleClickReturnValue();
+                asSlider()->setValue(defaultValue, sendNotificationSync);
+                return true;
+            }
+        }
+        if(a == ModifierObject::Action::ContextMenu)
+        {
+            dynamic_cast<MacroControlledObject*>(this)->enableMidiLearnWithPopup();
+            return true;
+        }
+        
+        return false;
+    }
+    
+protected:
+
+	virtual ~SliderWithShiftTextBox();;
+
+	void init();
+
+	void cleanup();
+
+	virtual void onTextValueChange(double newValue);
+
+	void updateValueFromLabel(bool updateValue);
+
+	void textEditorFocusLost(TextEditor&) override;
+
+	void textEditorReturnKeyPressed(TextEditor&) override;
+
+	void textEditorEscapeKeyPressed(TextEditor&) override;
+
+	bool onShiftClick(const MouseEvent& e);
+
+	
+	ScopedPointer<TextEditor> inputLabel;
+
+	Slider* asSlider();
+	const Slider* asSlider() const;
+};
 
 /** A custom Slider class that automatically sets up its properties according to the specified mode.
 *
@@ -559,10 +592,10 @@ private:
 *	and its range, skew factor and suffix are specified.
 */
 class HiSlider: public juce::Slider,
+			    public SliderWithShiftTextBox,
 				public MacroControlledObject,
 				public SliderListener,
-				public TouchAndHoldComponent,
-				public TextEditor::Listener
+				public TouchAndHoldComponent
 {
 public:
 
@@ -580,55 +613,11 @@ public:
 		numModes
 	};
 
-	static void setRangeSkewFactorFromMidPoint(NormalisableRange<double>& range, const double midPoint)
-	{
-		const double length = range.end - range.start;
+	static void setRangeSkewFactorFromMidPoint(NormalisableRange<double>& range, const double midPoint);
 
-		if (range.end > range.start && range.getRange().contains(midPoint))
-			range.skew = std::log(0.5) / std::log((midPoint - range.start)
-				/ (length));
-	}
+	static double getMidPointFromRangeSkewFactor(const NormalisableRange<double>& range);
 
-	static double getMidPointFromRangeSkewFactor(const NormalisableRange<double>& range)
-	{
-		const double length = range.end - range.start;
-
-		return std::pow(2.0, -1.0 / range.skew) * length + range.start;
-	}
-
-	static NormalisableRange<double> getRangeForMode(HiSlider::Mode m)
-	{
-		NormalisableRange<double> r;
-
-		switch(m)
-		{
-		case Frequency:				r = NormalisableRange<double>(20.0, 20000.0, 1);
-									setRangeSkewFactorFromMidPoint(r, 1500.0);
-									break;
-		case Decibel:				r = NormalisableRange<double>(-100.0, 0.0, 0.1);
-									setRangeSkewFactorFromMidPoint(r, -18.0);
-									break;
-		case Time:					r = NormalisableRange<double>(0.0, 20000.0, 1);
-									setRangeSkewFactorFromMidPoint(r, 1000.0);
-									break;
-		case TempoSync:				r = NormalisableRange<double>(0, TempoSyncer::numTempos-1, 1);
-									break;
-		case Pan:					r = NormalisableRange<double>(-100.0, 100.0, 1);
-									break;
-		case NormalizedPercentage:	r = NormalisableRange<double>(0.0, 1.0, 0.01);									
-									break;
-		case Linear:				r = NormalisableRange<double>(0.0, 1.0, 0.01); 
-									break;
-		case Discrete:				r = NormalisableRange<double>();
-									r.interval = 1;
-									break;
-        case numModes: 
-		default:					jassertfalse; 
-									r = NormalisableRange<double>();
-		}
-
-		return r;
-	};
+	static NormalisableRange<double> getRangeForMode(HiSlider::Mode m);;
 
 	/** Creates a Slider. The name will be displayed. 
 	*
@@ -636,34 +625,11 @@ public:
 	*/
 	HiSlider(const String &name);;
 
-    ~HiSlider()
-    {
-        setLookAndFeel(nullptr);
-    }
-    
-	static String getFrequencyString(float input)
-	{
-		if (input < 30.0f)
-		{
-			return String(input, 1) + " Hz";
-		}
-		if (input < 1000.0f)
-		{
-			return String(roundToInt(input)) + " Hz";
-		}
-		else
-		{
-			return String(input / 1000.0, 1) + " kHz";
-		}
-	}
-	
-	static double getFrequencyFromTextString(const String& t)
-	{
-		if (t.contains("kHz"))
-			return t.getDoubleValue() * 1000.0;
-		else
-			return t.getDoubleValue();
-	}
+    ~HiSlider() override;
+
+	static String getFrequencyString(float input);
+
+	static double getFrequencyFromTextString(const String& t);
 
 	void mouseDown(const MouseEvent &e) override;
 
@@ -671,70 +637,28 @@ public:
 
 	void mouseUp(const MouseEvent&) override;
 
+	void mouseWheelMove(const MouseEvent& event, const MouseWheelDetails& wheel) override;
+    
+    void mouseDoubleClick(const MouseEvent& e) override;
+
 	void touchAndHold(Point<int> downPosition) override;
 
-	
-	void updateValueFromLabel(bool updateValue);
-	
-	void textEditorFocusLost(TextEditor&) override;
+	void onTextValueChange(double newValue) override;
 
-	void textEditorReturnKeyPressed(TextEditor&) override;
+	void setSendValueOnDrag(bool shouldSend) { sendValueOnDrag = shouldSend; }
 
-	void textEditorEscapeKeyPressed(TextEditor&) override;
-
-	void resized() override
-	{
-		Slider::resized();
-		numberTag->setBounds(getLocalBounds());
-	}
+	void resized() override;
 
 	String getModeId() const;
 
-	void setMode(Mode m)
-	{
-		if (mode != m)
-		{
-			mode = m;
-
-			normRange = getRangeForMode(m);
-
-			setTextValueSuffix(getModeSuffix());
-
-			setRange(normRange.start, normRange.end, normRange.interval);
-			setSkewFactor(normRange.skew);
-
-			setValue(modeValues[m], dontSendNotification);
-
-			repaint();
-		}
-	}
-
+	void setMode(Mode m);
 
 
 	/** sets the mode. */
-	void setMode(Mode m, double min, double max, double mid=DBL_MAX, double stepSize=DBL_MAX)
-	{ 
-		
+	void setMode(Mode m, double min, double max, double mid=DBL_MAX, double stepSize=DBL_MAX);;
 
-		if(mode != m)
-		{
-			mode = m; 
-			setModeRange(min, max, mid, stepSize);
-			setTextValueSuffix(getModeSuffix());
+	Mode getMode() const;
 
-			setValue(modeValues[m], dontSendNotification);
-
-			repaint();
-		}
-		else
-		{
-			setModeRange(min, max, mid, stepSize);
-		}
-	};
-
-	Mode getMode() const { return mode; }
-
-	
 
 	/* initialises the slider. You must call this after creation before you use this component! */
 	void setup(Processor *p, int parameter, const String &name) override;
@@ -745,110 +669,45 @@ public:
 
 	void sliderDragEnded(Slider* s) override;
 
+	bool changePluginParameter(AudioProcessor* p, int parameterIndex);
+
+	bool callWhenSingleMacro(const std::function<bool(AudioProcessor* p, int parameterIndex)>& f);
+
 	/** If the slider represents a modulated attribute (eg. LFO Frequency), this can be used to set the displayed value. 
 	*
 	*	In order to use this functionality, add a timer callback to your editor and update the value using the ModulatorChain's getOutputValue().
 	*/
-	void setDisplayValue(float newDisplayValue)
-	{
-        if(newDisplayValue != displayValue)
-        {
-            displayValue = newDisplayValue;
-            repaint();
-        }
-	}
+	void setDisplayValue(float newDisplayValue);
 
-	bool isUsingModulatedRing() const noexcept{ return useModulatedRing; };
+	bool isUsingModulatedRing() const noexcept;;
 
-	void setIsUsingModulatedRing(bool shouldUseModulatedRing) { useModulatedRing = shouldUseModulatedRing; };
+	void setIsUsingModulatedRing(bool shouldUseModulatedRing);;
 
-	float getDisplayValue() const
-	{
-		return useModulatedRing ? displayValue : 1.0f;
-	}
+	float getDisplayValue() const;
 
 	void updateValue(NotificationType sendAttributeChange=sendNotification) override;
 
 	/** Overrides the slider method to display the tempo names for the TempoSync mode. */
-	String getTextFromValue(double value) override
-	{
-		if(mode == Pan) setTextValueSuffix(getModeSuffix());
-
-		if (mode == Frequency) return getFrequencyString((float)value);
-		if(mode == TempoSync) return TempoSyncer::getTempoName((int)(value));
-		else if(mode == NormalizedPercentage) return String((int)(value * 100)) + "%";
-		else				  return Slider::getTextFromValue(value);
-	};
+	String getTextFromValue(double value) override;;
 
 	/** Overrides the slider method to set the value from the Tempo names */
-	double getValueFromText(const String &text) override
-	{
-		if (mode == Frequency) return getFrequencyFromTextString(text);
-		if(mode == TempoSync) return TempoSyncer::getTempoIndex(text);
-		else if (mode == NormalizedPercentage) return text.getDoubleValue() / 100.0;
-		else				  return Slider::getValueFromText(text);
-	};
+	double getValueFromText(const String &text) override;;
 
 	void setLookAndFeelOwned(LookAndFeel *fslaf);
 
-	NormalisableRange<double> getRange() const override { return normRange; };
+	NormalisableRange<double> getRange() const override;;
 
-	static double getSkewFactorFromMidPoint(double minimum, double maximum, double midPoint)
-	{
-		if (maximum > minimum)
-			return log(0.5) / log((midPoint - minimum) / (maximum - minimum));
-		
-		jassertfalse;
-		return 1.0;
-	}
+	static double getSkewFactorFromMidPoint(double minimum, double maximum, double midPoint);
 
-	static String getSuffixForMode(HiSlider::Mode mode, float panValue)
-	{
-		jassert(mode != numModes);
-
-
-
-		switch (mode)
-		{
-		case Frequency:		return " Hz";
-		case Decibel:		return " dB";
-		case Time:			return " ms";
-		case Pan:			return panValue > 0.0 ? "R" : "L";
-		case TempoSync:		return String();
-		case Linear:		return String();
-		case Discrete:		return String();
-		case NormalizedPercentage:	return "%";
-		default:			return String();
-		}
-	}
+	static String getSuffixForMode(HiSlider::Mode mode, float panValue);
 
 private:
 
-	ScopedPointer<TextEditor> inputLabel;
+	bool sendValueOnDrag = true;
 
-	String getModeSuffix()
-	{
-		return getSuffixForMode(mode, (float)modeValues[Pan]);
-	};
+	String getModeSuffix() const;;
 
-	void setModeRange(double min, double max, double mid, double stepSize)
-	{
-		jassert(mode != numModes);
-
-		normRange = NormalisableRange<double>();
-
-		normRange.start = min;
-		normRange.end = max;
-		
-		normRange.interval = stepSize != DBL_MAX ? stepSize : 0.01;
-			
-
-		if(mid != DBL_MAX)
-			setRangeSkewFactorFromMidPoint(normRange, mid);
-
-		setRange(normRange.start, normRange.end, normRange.interval);
-		setSkewFactor(normRange.skew);
-	};
+	void setModeRange(double min, double max, double mid, double stepSize);;
 	
 	Mode mode;
 

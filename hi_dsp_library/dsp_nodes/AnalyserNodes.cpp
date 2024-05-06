@@ -49,145 +49,144 @@ RingBufferComponentBase* Helpers::FFT::createComponent()
 
 void Helpers::FFT::transformReadBuffer(AudioSampleBuffer& b)
 {
-	ScopedLock sl(fftLock);
-
 	resizeBuffers(b.getNumSamples());
 
-	//const auto& b = buffer->getReadBuffer();
+	int size = removeOverlap(b.getNumSamples());
 
-	int size = b.getNumSamples();
+	auto delta = roundToInt(overlap * size);
+
 	auto order = log2(size);
 	auto fft = juce::dsp::FFT(order);
 
 	AudioSampleBuffer b2(2, size * 2);
-	b2.clear();
 
-	auto data = b2.getWritePointer(0);
-	FloatVectorOperations::copy(data, b.getReadPointer(0), size);
-
-	FloatVectorOperations::multiply(data, windowBuffer.getReadPointer(0), size);
-
-	fft.performRealOnlyForwardTransform(data, true);
-
-	auto useFreqDomain = true;
-
-	auto d = b.getWritePointer(0);
-	int sIndex = 0;
-
-	d[0] = 0.0f;
-	d[1] = 0.0f;
-
-	if (useFreqDomain)
+	for(int offset = 0; offset < b.getNumSamples() - (size-1); offset += delta)
 	{
-		for (int i = 2; i < size; i += 2)
+		b2.clear();
+
+		auto data = b2.getWritePointer(0);
+		FloatVectorOperations::copy(data, b.getReadPointer(0, offset), size);
+
+		FloatVectorOperations::multiply(data, windowBuffer.getReadPointer(0), size);
+
+		fft.performRealOnlyForwardTransform(data, true);
+
+		auto useFreqDomain = true;
+
+		auto d = b2.getWritePointer(1);
+		int sIndex = 0;
+
+		d[0] = 0.0f;
+		d[1] = 0.0f;
+
+		if (useFreqDomain)
 		{
-			auto re = data[i];
-			auto im = data[i + 1];
+			for (int i = 2; i < size; i += 2)
+			{
+				auto re = data[i];
+				auto im = data[i + 1];
 
-			d[sIndex++] = hmath::sqrt(re * re + im * im);
-			//data[i] = sqrt(data[i] * data[i] + data[i + 1] * data[i + 1]);
-			//data[i + 1] = data[i];
-		}
-	}
-	else
-	{
-		jassertfalse;
-		auto threshhold = FloatVectorOperations::findMaximum(data, size) / 10000.0;
-
-		data[0] = 0.0f;
-		data[1] = 0.0f;
-
-		for (int i = 2; i < size; i += 2)
-		{
-			auto real = data[i];
-			auto img = data[i + 1];
-
-			if (real < threshhold) real = 0.0f;
-			if (img < threshhold) img = 0.0f;
-
-			auto phase = atan2f(img, real);
-
-			data[i] = phase;
-			data[i + 1] = phase;
-		}
-	}
-
-	FloatVectorOperations::multiply(d, 1.0f / (float)size, size);
-
-	for (int i = 0; i < size; i++)
-	{
-		auto lastValue = lastBuffer.getSample(0, i);
-		auto thisValue = d[i];
-
-		float v;
-
-		if (usePeakDecay)
-		{
-			if (thisValue > lastValue)
-				v = thisValue;
-			else
-				v = lastValue * decay;
+				d[sIndex++] = hmath::sqrt(re * re + im * im);
+				//data[i] = sqrt(data[i] * data[i] + data[i + 1] * data[i + 1]);
+				//data[i + 1] = data[i];
+			}
 		}
 		else
 		{
-			v = lastValue * decay + thisValue * (1.0f - decay);
+			jassertfalse;
+			auto threshhold = FloatVectorOperations::findMaximum(data, size) / 10000.0;
+
+			data[0] = 0.0f;
+			data[1] = 0.0f;
+
+			for (int i = 2; i < size; i += 2)
+			{
+				auto real = data[i];
+				auto img = data[i + 1];
+
+				if (real < threshhold) real = 0.0f;
+				if (img < threshhold) img = 0.0f;
+
+				auto phase = atan2f(img, real);
+
+				data[i] = phase;
+				data[i + 1] = phase;
+			}
 		}
 
-		b.setSample(0, i, v);
-		lastBuffer.setSample(0, i, v);
+		auto decayToUse = decay;
+
+		if(overlap != 0.0)
+		{
+			auto of = 1.0 / (1.0 - overlap);
+
+			decayToUse = 1.0 - (1.0 - decay) / of;
+		}
+
+		FloatVectorOperations::multiply(d, 1.0f / (float)size, size);
+
+		for (int i = 0; i < size; i++)
+		{
+			auto lastValue = lastBuffer.getSample(0, i);
+			auto thisValue = d[i];
+
+			float v;
+
+			if (usePeakDecay)
+			{
+				if (thisValue > lastValue)
+					v = thisValue;
+				else
+					v = lastValue * decayToUse;
+			}
+			else
+			{
+				v = lastValue * decayToUse + thisValue * (1.0f - decayToUse);
+			}
+
+			
+			lastBuffer.setSample(0, i, v);
+		}
+		
+		
+
+		if(delta == 0)
+			break;
 	}
-	
-	FloatVectorOperations::copy(lastBuffer.getWritePointer(0, 0), b.getReadPointer(0, 0), size);
+
+	FloatVectorOperations::copy(b.getWritePointer(0, 0), lastBuffer.getWritePointer(0, 0), size);
 }
 
 
 juce::Path Helpers::FFT::createPath(Range<int> sampleRange, Range<float> valueRange, Rectangle<float> targetBounds, double) const
 {
-	ScopedLock sl(fftLock);
-
-	Path lPath;
+    Path lPath;
 
 	auto data = buffer->getReadBuffer().getReadPointer(0);
-	int size = buffer->getReadBuffer().getNumSamples();
+	int size = removeOverlap(buffer->getReadBuffer().getNumSamples());
 
 	int stride = roundToInt((float)size / targetBounds.getWidth());
 	stride *= 2;
-
-	lPath.clear();
-
-	lPath.startNewSubPath(0.0f, targetBounds.getY());
-	lPath.startNewSubPath(0.0f, targetBounds.getHeight());
+	
+	lPath.startNewSubPath(targetBounds.getX(), targetBounds.getY());
+	lPath.startNewSubPath(targetBounds.getX(), targetBounds.getHeight());
 
     auto cpy = (float*)alloca(sizeof(float)*size);
 
-    FloatVectorOperations::copy(cpy, data, size);
-    data = cpy;
+    {
+        ScopedLock sl(buffer->getReadBufferLock());
+        FloatVectorOperations::copy(cpy, data, size);
+        data = cpy;
+    }
+    
     
 	auto sampleRate = buffer->getSamplerate();
 
 	if (sampleRate <= 0.0)
 		sampleRate = 44100.0;
 
-	
-
-	for (float xPos = targetBounds.getX(); xPos < targetBounds.getWidth(); xPos += 2.0f)
+	auto getYValue = [&](double maxValue)
 	{
-		auto leftFreq = FFTHelpers::getFreqForLogX(xPos, targetBounds.getWidth());
-		auto rightFreq = FFTHelpers::getFreqForLogX(xPos + 2.0f, targetBounds.getWidth());
-
-		auto leftNorm = leftFreq / (sampleRate);
-		auto rightNorm = rightFreq / (sampleRate);
-
-		auto leftBinIndex = roundToInt(leftNorm * (float)size);
-		auto rightBinIndex = jmax(leftBinIndex + 1, roundToInt(rightNorm * (float)size));
-
-		float maxValue = 0.0f;
-
-		for (int i = leftBinIndex; i < rightBinIndex; i++)
-		{
-			maxValue = jmax(maxValue, data[i]);
-		}
-
 		if (!useDb)
 			maxValue = maxValue;
 		else if (!dbRange.isEmpty())
@@ -203,10 +202,193 @@ juce::Path Helpers::FFT::createPath(Range<int> sampleRange, Range<float> valueRa
 
 		yPos *= targetBounds.getHeight();
 
-		lPath.lineTo(xPos, yPos);
+		return yPos;
+	};
+
+	auto getBinRange = [targetBounds, sampleRate, size](double xPos)
+	{
+		auto leftFreq = FFTHelpers::getFreqForLogX(xPos - 1.0f, targetBounds.getWidth());
+		auto rightFreq = FFTHelpers::getFreqForLogX(xPos + 1.0f, targetBounds.getWidth());
+
+		auto leftNorm = leftFreq / (sampleRate);
+		auto rightNorm = rightFreq / (sampleRate);
+
+		auto leftBinIndex = roundToInt(leftNorm * (float)size);
+		auto rightBinIndex = jmax(leftBinIndex + 1, roundToInt(rightNorm * (float)size));
+
+		return Range<int>(leftBinIndex, rightBinIndex);
+	};
+
+	auto getPixelRangeForBin = [&](int binIndex)
+	{
+		auto leftFreq = jmax(0.0, sampleRate * (double)(binIndex) / (double)size);
+		auto rightFreq = sampleRate * (double)(binIndex + 1.0) / (double)size;
+
+		auto lPos = FFTHelpers::getPixelValueForLogXAxis(leftFreq, targetBounds.getWidth() + targetBounds.getX());
+		auto rPos = jmax(lPos + 1.0f, (FFTHelpers::getPixelValueForLogXAxis(rightFreq, targetBounds.getWidth() + targetBounds.getX())));
+
+		return Range<float>(lPos, rPos);
+	};
+
+	lPath.preallocateSpace(5 * size-1);
+
+	Array<Point<float>> dataPoints;
+
+	dataPoints.ensureStorageAllocated(size);
+
+	for(int i = 0; i < size; i++)
+	{
+		auto pr = getPixelRangeForBin(i);
+		auto xPos = pr.getStart() + pr.getLength() * 0.5f;
+		auto yPos = (float)getYValue(data[i]);
+
+		FloatSanitizers::sanitizeFloatNumber(xPos);
+		FloatSanitizers::sanitizeFloatNumber(yPos);
+
+		dataPoints.add({jmax(0.0f, xPos), yPos});
 	}
 
-	lPath.lineTo(targetBounds.getWidth(), targetBounds.getHeight());
+	auto lastX = -1000.0f;
+	auto lastRealIndex = 0;
+
+	
+
+	for(int i = 0; i < dataPoints.size(); i++)
+	{
+		auto x = dataPoints[i].getX();
+
+		if(x == 0.0f && dataPoints[i+1].getX() == 0.0f)
+		{
+			dataPoints.remove(i--);
+			continue;
+		}
+		
+		if(x - lastX < JUCE_LIVE_CONSTANT_OFF(2))
+		{
+			auto thisY = dataPoints[i].getY();
+			auto lastRealY = dataPoints[lastRealIndex].getY();
+			dataPoints.getReference(lastRealIndex).setY(jmin(thisY, lastRealY)); // jmin because of pixel domain
+			dataPoints.remove(i--);
+		}
+		else
+		{
+			lastX = x;
+			lastRealIndex = i;
+		}
+	}
+
+	auto tolerance = JUCE_LIVE_CONSTANT_OFF(0.4f);
+
+	for(int i = 1; i < dataPoints.size() -2; i++)
+	{
+		auto prev = dataPoints[i-1];
+		auto current = dataPoints[i];
+
+		if(current.getY() == targetBounds.getBottom())
+			continue;
+
+		auto next = dataPoints[i+1];
+
+		auto midY = (prev.getY() + next.getY()) * 0.5f;
+
+		auto deltaMax = jmax(1.0f, hmath::abs(prev.getY() - next.getY()));
+		 
+		auto deltaY = hmath::abs(current.getY() - midY);
+
+		auto deltaNorm = deltaY / deltaMax;
+
+		if(deltaNorm < tolerance)
+		{
+			dataPoints.remove(i--);
+		}
+	}
+
+
+	for(int i = dataPoints.size() - 1; i >= 0.0; i--)
+	{
+		if(dataPoints[i].getX() > targetBounds.getRight())
+			dataPoints.remove(i);
+		else
+			break;
+	}
+
+	if(dataPoints.isEmpty())
+	{
+		lPath.startNewSubPath(targetBounds.getX(), targetBounds.getBottom());
+	}
+	else
+	{
+		lPath.startNewSubPath(targetBounds.getX(), targetBounds.getBottom());
+		lPath.lineTo(dataPoints[0]);
+
+		for(int i = 1; i < dataPoints.size() - 1; i++)
+		{
+			auto prev = dataPoints[i-1];
+			auto current = dataPoints[i];
+			auto deltaX = current.getX() - prev.getX();
+			auto deltaY = current.getY() - prev.getY();
+			auto useCubic = hmath::abs(deltaY) > JUCE_LIVE_CONSTANT_OFF(10);
+
+			if(useCubic)
+				lPath.cubicTo(prev.translated(deltaX / 3.0f, 0.0f), current.translated(deltaX / -3.0f, 0.0f), current);
+			else
+				lPath.lineTo(current);
+		}
+
+		lPath.lineTo(targetBounds.getRight(), dataPoints.getLast().getY());
+	}
+	
+#if 0
+	for (int i = 1; i < size-1; i++)
+	{
+		auto pr = getPixelRangeForBin(i);
+		auto nextEnd = getPixelRangeForBin(i+1);
+
+		xPos = pr.getStart() + pr.getLength() * 0.5f;
+
+		if (xPos > 0.0f)
+		{
+			auto yp = (float)getYValue(data[i-1]);
+			auto y0 = (float)getYValue(data[i]);
+			auto y1 = (float)getYValue(data[++i]);
+
+			auto useQuad = pr.getLength() > 3.0f && (hmath::abs(y0 - y1) > 2.0f);
+
+			if (useQuad)
+			{
+				//lPath.quadraticTo(pr.getEnd(), y0, nextEnd.getEnd(), y1);
+			}
+				
+			else
+				lPath.lineTo(pr.getEnd(), y0);
+		}
+
+		if (pr.getLength() < 2.0f)
+			break;
+	}
+
+	for (; xPos < targetBounds.getWidth(); xPos += 2.0f)
+	{
+		auto binRange = getBinRange(xPos);
+
+		float maxValue = 0.0f;
+		float avg = 0.0f;
+
+		for (int i = binRange.getStart(); i < binRange.getEnd(); i++)
+		{
+			maxValue = jmax(maxValue, data[i]);
+			avg += data[i];
+		}
+			
+		avg /= (float)binRange.getLength();
+
+		auto y = Interpolator::interpolateLinear(maxValue, avg, 0.5f);
+
+		lPath.lineTo(xPos, getYValue(y));
+	}
+#endif
+
+	lPath.lineTo(targetBounds.getRight(), targetBounds.getBottom());
 	lPath.closeSubPath();
 
 	return lPath;
@@ -249,7 +431,10 @@ RingBufferComponentBase* Helpers::Oscilloscope::createComponent()
 
 void Helpers::Oscilloscope::drawPath(Path& p, Rectangle<float> bounds, int channelIndex) const
 {
-	int numSamples = buffer->getReadBuffer().getNumSamples();
+	int numSamples = buffer->getMaxLengthInSamples();// buffer->getReadBuffer().getNumSamples();
+
+	auto isUsingMaxLength = numSamples != buffer->getReadBuffer().getNumSamples();
+
 	auto width = (int)bounds.getWidth();
 
 	auto l_ = buffer->getReadBuffer().getReadPointer(channelIndex);
@@ -267,13 +452,17 @@ void Helpers::Oscilloscope::drawPath(Path& p, Rectangle<float> bounds, int chann
 
 		float x = 0.0f;
 
-		bool mirrorMode = stride > 100;
+		bool mirrorMode = !isUsingMaxLength && stride > 100;
 
 		for (int i = 0; i < numSamples; i += stride)
 		{
-			const int numToCheck = jmin<int>(stride, numSamples - i);
+			auto pos = i;
 
-			auto value = FloatVectorOperations::findMaximum(l_ + i, numToCheck);
+			const int numToCheck = jmin<int>(stride, numSamples - pos);
+
+			auto value = FloatVectorOperations::findMaximum(l_ + pos, numToCheck);
+
+			FloatSanitizers::sanitizeFloatNumber(value);
 
 			if (mirrorMode)
 				value = jmax(0.0f, value);

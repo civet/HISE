@@ -48,7 +48,7 @@ struct GlobalServer: public ControlledObject
 
 	struct Listener
 	{
-		virtual ~Listener() {};
+		virtual ~Listener();;
 
 		/** This callback is being executed synchronously when the queue has changed. */
 		virtual void queueChanged(int numItemsInQueue) = 0;
@@ -59,82 +59,32 @@ struct GlobalServer: public ControlledObject
 		JUCE_DECLARE_WEAK_REFERENCEABLE(Listener);
 	};
 
-	GlobalServer(MainController* mc):
-		ControlledObject(mc),
-		internalThread(*this)
-	{}
+	GlobalServer(MainController* mc);
 
 	~GlobalServer();
 
-	void setBaseURL(String url)
-	{
-		startTime = Time::getMillisecondCounter();
-		baseURL = URL(url);
-		internalThread.startThread();
-	}
+	void setBaseURL(String url);
 
 	uint32 startTime = 0;
 
-	void addListener(Listener* l)
-	{
-		listeners.addIfNotAlreadyThere(l);
-	}
+    bool resendLastCallback();
 
-	void removeListener(Listener* l)
-	{
-		listeners.removeAllInstancesOf(l);
-	}
+	void addListener(Listener* l);
 
-	void sendMessage(bool sendDownloadMessage)
-	{
-		int numThisTime = sendDownloadMessage ? internalThread.pendingDownloads.size() : internalThread.pendingCallbacks.size();
+	void removeListener(Listener* l);
 
-		for (auto l : listeners)
-		{
-			if (l != nullptr)
-			{
-				if (sendDownloadMessage)
-					l.get()->downloadQueueChanged(numThisTime);
-				else
-					l.get()->queueChanged(numThisTime);
-			}
-		}
-	}
+	void sendMessage(bool sendDownloadMessage);
 
-	State getServerState() const
-	{
-		if (!internalThread.isThreadRunning())
-			return State::Inactive;
-
-		if (!internalThread.running)
-			return State::Pause;
-
-		if (internalThread.pendingCallbacks.isEmpty())
-			return State::Idle;
-
-		return State::WaitingForResponse;
-	}
+	State getServerState() const;
 
 	struct PendingCallback : public ReferenceCountedObject
 	{
 		using Ptr = ReferenceCountedObjectPtr<PendingCallback>;
 		using WeakPtr = WeakReference<PendingCallback>;
 
-		PendingCallback(ProcessorWithScriptingContent* p, const var& function) :
-			f(p, nullptr, function, 2),
-			creationTimeMs(Time::getMillisecondCounter())
-		{
-			f.setHighPriority();
-			f.incRefCount();
-		}
+		PendingCallback(ProcessorWithScriptingContent* p, const var& function);
 
-		void reset()
-		{
-			requestTimeMs = 0;
-			completionTimeMs = 0;
-			responseObj = var();
-			status = 0;
-		}
+		void reset();
 
 		WeakCallbackHolder f;
 
@@ -150,13 +100,7 @@ struct GlobalServer: public ControlledObject
 		JUCE_DECLARE_WEAK_REFERENCEABLE(PendingCallback);
 	};
 
-	void addPendingCallback(PendingCallback::Ptr p)
-	{
-		p->extraHeader = extraHeader;
-		internalThread.pendingCallbacks.add(p);
-		internalThread.notify();
-		sendMessage(false);
-	}
+	void addPendingCallback(PendingCallback::Ptr p);
 
 	var addDownload(ScriptingObjects::ScriptDownloadObject::Ptr newDownload);
 
@@ -164,56 +108,37 @@ struct GlobalServer: public ControlledObject
 
 	var getPendingCallbacks();
 
-	int getNumPendingRequests() const { return internalThread.pendingCallbacks.size(); }
+	int getNumPendingRequests() const;
 
-	String getExtraHeader() const { return extraHeader; }
+	String getExtraHeader() const;
 
-	PendingCallback::WeakPtr getPendingCallback(int i) const
-	{
-		return internalThread.pendingCallbacks[i].get();
-	}
+	PendingCallback::WeakPtr getPendingCallback(int i) const;
 
-	void cleanFinishedDownloads()
-	{
-		internalThread.cleanDownloads = true;
-	}
+	void cleanFinishedDownloads();
 
 	Result resendCallback(PendingCallback* p);
 
+    
+    
 	/** Stops the execution of the request queue (pending tasks will be finished). */
-	void stop()
-	{
-		internalThread.running.store(false);
-	}
+	void stop();
 
-	void cleanup()
-	{
-		internalThread.stopThread(HISE_SCRIPT_SERVER_TIMEOUT);
-	}
+
+	void setTimeoutMessageString(String newTimeoutMessage);
+
+	void cleanup();
 
 	/** Resumes the execution of the request queue (if it was stopped with stop()). */
-	void resume()
-	{
-		internalThread.running.store(true);
-	}
+	void resume();
 
-	void setNumAllowedDownloads(int maxNumberOfParallelDownloads)
-	{
-		internalThread.numMaxDownloads = maxNumberOfParallelDownloads;
-	}
+	void setNumAllowedDownloads(int maxNumberOfParallelDownloads);
 
-	void setHttpHeader(String newHeader)
-	{
-		extraHeader = newHeader;
-	}
+	void setHttpHeader(String newHeader);
 
 	juce::URL getWithParameters(String subURL, var parameters);
 
-    void setInitialised()
-    {
-        initialised = true;
-    }
-    
+    void setInitialised();
+
 private:
 
 #if USE_BACKEND
@@ -224,10 +149,7 @@ private:
     
 	struct WebThread : public Thread
 	{
-		WebThread(GlobalServer& p) :
-			Thread("Server Thread"),
-			parent(p)
-		{};
+		WebThread(GlobalServer& p);;
 
 		GlobalServer& parent;
 
@@ -243,14 +165,22 @@ private:
 		ReferenceCountedArray<PendingCallback> pendingCallbacks;
 		ReferenceCountedArray<ScriptingObjects::ScriptDownloadObject> pendingDownloads;
 
+        var timeoutMessage;
+        
 	} internalThread;
 
-	
+    PendingCallback::Ptr lastCall;
 
+    
+    
 	URL baseURL;
 	String extraHeader;
 
 	Array<WeakReference<Listener>> listeners;
+    
+public:
+    
+    bool addTrailingSlashes = true;
 };
 
 
