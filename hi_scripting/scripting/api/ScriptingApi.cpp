@@ -909,6 +909,7 @@ struct ScriptingApi::Engine::Wrapper
 	API_METHOD_WRAPPER_0(Engine, getPreloadMessage);
 	API_METHOD_WRAPPER_0(Engine, getDeviceType);
 	API_METHOD_WRAPPER_0(Engine, getDeviceResolution);
+	API_METHOD_WRAPPER_0(Engine, getDeviceId);
 	API_METHOD_WRAPPER_0(Engine, getZoomLevel);
 	API_VOID_METHOD_WRAPPER_1(Engine, setZoomLevel);
 	API_VOID_METHOD_WRAPPER_1(Engine, setDiskMode);
@@ -1047,6 +1048,7 @@ parentMidiProcessor(dynamic_cast<ScriptBaseMidiProcessor*>(p))
 	ADD_API_METHOD_0(getSystemStats);
 	ADD_API_METHOD_0(getDeviceType);
 	ADD_API_METHOD_0(getDeviceResolution);
+	ADD_API_METHOD_0(getDeviceId);
 	ADD_API_METHOD_0(isPlugin);
 	ADD_API_METHOD_0(getPreloadProgress);
 	ADD_API_METHOD_0(getPreloadMessage);
@@ -1446,6 +1448,11 @@ var ScriptingApi::Engine::getDeviceResolution()
 
 	return a;
 
+}
+
+String ScriptingApi::Engine::getDeviceId()
+{
+	return OnlineUnlockStatus::MachineIDUtilities::getUniqueMachineID();
 }
 
 bool ScriptingApi::Engine::isPlugin() const

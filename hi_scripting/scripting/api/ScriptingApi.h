@@ -495,6 +495,9 @@ public:
 		/** Returns the full screen resolution for the current device. */
 		var getDeviceResolution();
 
+		/** Returns a unique machine ID of current device. */
+		String getDeviceId();
+
 		/** Returns true if running as VST / AU / AAX plugin. */
 		bool isPlugin() const;
 
