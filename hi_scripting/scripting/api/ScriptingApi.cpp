@@ -5296,7 +5296,8 @@ void ScriptingApi::Synth::playNoteFromUI(int channel, int noteNumber, int veloci
 {
     CustomKeyboardState& state = getScriptProcessor()->getMainController_()->getKeyboardState();
     
-    state.injectMessage(MidiMessage::noteOn(channel, noteNumber, (float)velocity * 127.0f));
+    // state.injectMessage(MidiMessage::noteOn(channel, noteNumber, (float)velocity * 127.0f));
+    state.injectMessage(MidiMessage::noteOn(channel, noteNumber, (uint8)velocity));
 }
 
 void ScriptingApi::Synth::noteOffFromUI(int channel, int noteNumber)

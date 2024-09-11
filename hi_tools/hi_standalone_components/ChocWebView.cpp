@@ -569,7 +569,7 @@ void WebViewWrapper::refreshBounds(float newScaleFactor)
     juce::String s;
 
 	if (useZoom)
-		s << "document.body.style.zoom = " << juce::String(newScaleFactor) << ";";
+		s << "document.documentElement.style.zoom = " << juce::String(newScaleFactor) << ";";
 	else
 		s << "window.resizeTo(" << String(currentBounds.getWidth()) << ", " << String(currentBounds.getHeight()) << ");";
 

@@ -425,7 +425,7 @@ struct choc::ui::WebView::Pimpl
     void resizeToFit(float scaleFactor)
     {
         juce::String s;
-        s << "document.body.style.zoom = " << juce::String(scaleFactor) << ";";
+        s << "document.documentElement.style.zoom = " << juce::String(scaleFactor) << ";";
         
         evaluateJavascript(s.toStdString());
         

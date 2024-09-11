@@ -404,11 +404,17 @@ namespace ScriptingObjects
 		/** Replaces the file content with the given text. */
 		bool writeString(String text);
 
+		/** Replaces the file content with the given base64 string. */
+		bool writeBase64String(String text);
+
 		/** Encrypts an JSON object using the supplied key. */
 		bool writeEncryptedObject(var jsonData, String key);
 
 		/** Loads the given file as text. */
 		String loadAsString() const;
+
+		/** Loads the given file as base64 string. */
+		String loadAsBase64String() const;
 
 		/** Loads the given file as object. */
 		var loadAsObject() const;

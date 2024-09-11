@@ -201,9 +201,11 @@ struct ScriptingObjects::ScriptFile::Wrapper
 	API_METHOD_WRAPPER_2(ScriptFile, writeAsXmlFile);
 	API_METHOD_WRAPPER_0(ScriptFile, loadFromXmlFile);
 	API_METHOD_WRAPPER_1(ScriptFile, writeString);
+    API_METHOD_WRAPPER_1(ScriptFile, writeBase64String);
 	API_METHOD_WRAPPER_2(ScriptFile, writeEncryptedObject);
 	API_METHOD_WRAPPER_3(ScriptFile, writeAudioFile);
 	API_METHOD_WRAPPER_0(ScriptFile, loadAsString);
+    API_METHOD_WRAPPER_0(ScriptFile, loadAsBase64String);
 	API_METHOD_WRAPPER_0(ScriptFile, loadAsObject);
 	API_METHOD_WRAPPER_0(ScriptFile, loadAsAudioFile);
 	API_METHOD_WRAPPER_0(ScriptFile, getNonExistentSibling);
@@ -262,9 +264,11 @@ ScriptingObjects::ScriptFile::ScriptFile(ProcessorWithScriptingContent* p, const
 	ADD_API_METHOD_0(hasWriteAccess);
 	ADD_API_METHOD_1(writeObject);
 	ADD_API_METHOD_1(writeString);
+    ADD_API_METHOD_1(writeBase64String);
 	ADD_API_METHOD_2(writeEncryptedObject);
 	ADD_API_METHOD_3(writeAudioFile);
 	ADD_API_METHOD_0(loadAsString);
+    ADD_API_METHOD_0(loadAsBase64String);
 	ADD_API_METHOD_0(loadAsObject);
 	ADD_API_METHOD_0(loadAsAudioFile);
 	ADD_API_METHOD_1(loadEncryptedObject);
@@ -702,6 +706,16 @@ bool ScriptingObjects::ScriptFile::writeString(String text)
 	#endif	
 }
 
+bool ScriptingObjects::ScriptFile::writeBase64String(String text)
+{
+	MemoryOutputStream mos;
+	Base64::convertFromBase64(mos, text);
+    
+    auto out = mos.getMemoryBlock();
+
+	return f.replaceWithData(out.getData(), out.getSize());
+}
+
 bool ScriptingObjects::ScriptFile::writeEncryptedObject(var jsonData, String key)
 {
 	auto data = key.getCharPointer().getAddress();
@@ -725,6 +739,17 @@ bool ScriptingObjects::ScriptFile::writeEncryptedObject(var jsonData, String key
 String ScriptingObjects::ScriptFile::loadAsString() const
 {
 	return f.loadFileAsString();
+}
+
+String ScriptingObjects::ScriptFile::loadAsBase64String() const
+{
+	MemoryBlock mb;
+	f.loadFileAsData(mb);
+
+	MemoryOutputStream out;
+	Base64::convertToBase64(out, mb.getData(), mb.getSize());
+
+	return out.toString();
 }
 
 var ScriptingObjects::ScriptFile::loadAsObject() const
