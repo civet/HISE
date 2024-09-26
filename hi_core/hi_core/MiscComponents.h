@@ -206,6 +206,8 @@ public:
 
 	void mouseDown(const MouseEvent& event) override;
 
+	ValueToTextConverter getValueToTextConverter() const override { return {}; }
+
 	void touchAndHold(Point<int> downPosition) override;
 
 	void fillPopupMenu(const MouseEvent &event);
@@ -617,7 +619,7 @@ public:
 
 	// ================================================================================================================
 
-	MultilineLabel(const String &name);;
+	MultilineLabel(const String &name={});;
 	~MultilineLabel() {};
 
 	void setMultiline(bool shouldBeMultiline);;

@@ -48,7 +48,10 @@ struct Dialog::TabTraverser: public ComponentTraverser
 
     Dialog& parent;
     
-    Component* getDefaultComponent (Component* parentComponent) override { return &parent; }
+    Component* getDefaultComponent (Component* parentComponent) override
+    {
+		return &parent;
+    }
 
     Component* getNextComponent (Component* current) override
     {
@@ -206,8 +209,10 @@ struct Dialog::PageBase::ModalHelp: public simple_css::FlexboxComponent
     HiseShapeButton closeButton;
 };
 
+
+
 Dialog::PageBase::PageBase(Dialog& rootDialog_, int width, const var& obj):
-  FlexboxComponent(simple_css::Selector("#" + obj[mpid::ID].toString())),
+  FlexboxComponent(getSelectorFromId(obj)),
   rootDialog(rootDialog_),
   infoObject(obj)
 {
@@ -247,6 +252,16 @@ DefaultProperties Dialog::PageBase::getDefaultProperties() const
 void Dialog::PageBase::setStateObject(const var& newStateObject)
 {
 	stateObject = newStateObject;
+}
+
+simple_css::Selector Dialog::PageBase::getSelectorFromId(const var& obj)
+{
+	auto id = obj[mpid::ID].toString();
+
+	if(id.isNotEmpty())
+		return simple_css::Selector("#" + id);
+	else
+		return simple_css::Selector(simple_css::ElementType::Panel);
 }
 
 void Dialog::PageBase::updateStyleSheetInfo(bool forceUpdate)
@@ -298,7 +313,11 @@ void Dialog::PageBase::updateStyleSheetInfo(bool forceUpdate)
 
 		// rebuild to allow resizing...
 		if(!rootDialog.getSkipRebuildFlag())
+		{
+			rootDialog.css.setAnimator(&rootDialog.animator);
 			rootDialog.body.setCSS(rootDialog.css);
+		}
+			
 	}
 }
 
@@ -313,6 +332,85 @@ void Dialog::PageBase::forwardInlineStyleToChildren()
 
 		simple_css::FlexboxComponent::Helpers::writeInlineStyle(*this, "");
 	}
+}
+
+bool Dialog::PageBase::updateInfoProperty(const Identifier& pid)
+{
+	auto updateType = multipage::mpid::Helpers::getUpdateType(Identifier(pid));
+
+	if(updateType == multipage::mpid::Helpers::RequiredUpdate::FullRebuild)
+	{
+		findParentComponentOfClass<multipage::Dialog>()->refreshCurrentPage();
+		return true;
+	}
+
+	if(updateType == multipage::mpid::Helpers::RequiredUpdate::UpdateCSS)
+	{
+		updateStyleSheetInfo(true);
+		findParentComponentOfClass<multipage::Dialog>()->css.clearCache(this);
+		return true;
+	}
+	if(updateType == multipage::mpid::Helpers::RequiredUpdate::UpdateVisibility)
+	{
+		if(auto c = findParentComponentOfClass<multipage::factory::Container>())
+		{
+			c->updateChildVisibility();
+		}
+		return true;
+	}
+	if(updateType == multipage::mpid::Helpers::RequiredUpdate::ResizeParent)
+	{
+		if(auto p = findParentComponentOfClass<multipage::Dialog::PageBase>())
+		{
+			p->postInit();
+		}
+				
+		return true;
+	}
+	if(updateType == multipage::mpid::Helpers::RequiredUpdate::PostInit)
+	{
+		postInit();
+		resized();
+		repaint();
+		return true;
+	}
+
+	return false;
+}
+
+simple_css::FlexboxComponent::VisibleState Dialog::PageBase::getVisibility() const
+{
+	auto visibility = infoObject[mpid::Visibility].toString();
+
+	auto idx = getVisibilityNames().indexOf(visibility);
+
+	VisibleState s;
+
+	if(idx == 0) // default
+	{
+		s.mustBeHidden = false;
+		s.mustBeVisible = false;
+		s.usePlaceHolder = false;
+	}
+	if(idx == 1) // Hidden
+	{
+		s.mustBeHidden = true;
+		s.mustBeVisible = false;
+		s.usePlaceHolder = false;
+	}
+	if(idx == 2) // placeholder
+	{
+		s.mustBeHidden = true;
+		s.mustBeVisible = false;
+		s.usePlaceHolder = true;
+	}
+
+	return s;
+}
+
+StringArray Dialog::PageBase::getVisibilityNames()
+{
+	return { "Default", "Hidden", "Placeholder" };
 }
 
 var Dialog::PageBase::getPropertyFromInfoObject(const Identifier& id) const
@@ -350,7 +448,16 @@ bool Dialog::PageBase::isEditModeAndNotInPopup() const
 
 void Dialog::PageBase::setModalHelp(const String& text)
 {
-    auto popup = getTopLevelComponent();
+	if(modalHelp != nullptr)
+	{
+		modalHelp = nullptr;
+		return;
+	}
+
+	auto popup = TopLevelWindowWithOptionalOpenGL::findRoot(this);
+
+	if(popup == nullptr)
+		popup = getTopLevelComponent();
 
 	Component::callRecursive<PageBase>(popup, [](PageBase* b)
 	{
@@ -376,7 +483,7 @@ void Dialog::PageBase::setModalHelp(const String& text)
 	auto thisBounds = popup->getLocalArea(this, getLocalBounds());
 
 	auto mb = thisBounds.withSizeKeepingCentre(jmax(500, modalHelp->getWidth()), modalHelp->getHeight());
-	mb.setY(thisBounds.getBottom() + 3);
+	mb.setY(thisBounds.getBottom() - 6);
 	
 	mb = mb.constrainedWithin(popup->getLocalBounds());
     
@@ -409,19 +516,38 @@ bool Dialog::PageBase::showDeletePopup(bool isRightClick)
 
 String Dialog::PageBase::evaluate(const Identifier& id) const
 {
-	return factory::MarkdownText::getString(infoObject[id].toString(), rootDialog);
+	return factory::MarkdownText::getString(infoObject[id].toString(), rootDialog.getState());
 }
 
 void Dialog::PageBase::callOnValueChange(const String& eventType, DynamicObject::Ptr thisObject)
 {
+	callAdditionalStateCallback();
+
 	auto state = &rootDialog.getState();
 		    
 	if(auto ms = findParentComponentOfClass<ComponentWithSideTab>())
 		state = ms->getMainState();
 
+	auto codeToExecute = infoObject[mpid::Code].toString();
+
+	if(codeToExecute.startsWith("{BIND::"))
+	{
+		auto callbackName = codeToExecute.fromFirstOccurrenceOf("{BIND::", false, false).upToLastOccurrenceOf("}", false, false);
+
+		var a[2];
+		a[0] = var(id.toString());
+		a[1] = getValueFromGlobalState();
+
+		var::NativeFunctionArgs args(state->globalState, a, 2);
+
+		state->callNativeFunction(callbackName, args, nullptr);
+
+		return;
+	}
+
 	engine = state->createJavascriptEngine();
 
-	if(engine != nullptr && (infoObject[mpid::UseOnValue] || !eventListeners.isEmpty()))
+	if(engine != nullptr && (infoObject[mpid::Code].toString().isNotEmpty() || !eventListeners.isEmpty()))
 	{
 		auto ok = Result::ok();
 		
@@ -429,7 +555,7 @@ void Dialog::PageBase::callOnValueChange(const String& eventType, DynamicObject:
 
 		auto code = infoObject[mpid::Code].toString();
 
-		if(code.isNotEmpty() && infoObject[mpid::UseOnValue])
+		if(code.trim().isNotEmpty())
 			engine->evaluate(code, &ok);
 
 		for(auto& v: eventListeners)
@@ -451,20 +577,8 @@ void Dialog::PageBase::callOnValueChange(const String& eventType, DynamicObject:
 
 Asset::Ptr Dialog::PageBase::getAsset(const Identifier& id) const
 {
-	auto assetId = infoObject[id].toString().trim();
-
-	if(assetId.startsWith("${"))
-	{
-		assetId = assetId.substring(2, assetId.length() - 1);
-
-		for(auto a: rootDialog.getState().assets)
-		{
-			if(a->id == assetId)
-				return a;
-		}
-	}
-
-	return nullptr;
+	return rootDialog.getState().getAsset(infoObject, id);
+	
 }
 
 void Dialog::PageBase::init()
@@ -607,7 +721,9 @@ var Dialog::PositionInfo::toJSON() const
     obj->setProperty(mpid::StyleSheet, styleSheet);
 	obj->setProperty(mpid::Style, additionalStyle);
     obj->setProperty(mpid::UseViewport, useViewport);
-    
+	obj->setProperty(mpid::ConfirmClose, confirmClose);
+	obj->setProperty(mpid::CloseMessage, closeMessage);
+
 	obj->setProperty("DialogWidth", fixedSize.getX());
 	obj->setProperty("DialogHeight", fixedSize.getY());
 	
@@ -620,7 +736,10 @@ void Dialog::PositionInfo::fromJSON(const var& obj)
 	additionalStyle = obj.getProperty(mpid::Style, additionalStyle).toString();
 
     useViewport = obj.getProperty(mpid::UseViewport, useViewport);
-    
+
+	confirmClose = obj.getProperty(mpid::ConfirmClose, confirmClose);
+	closeMessage = obj.getProperty(mpid::CloseMessage, closeMessage);
+
 	fixedSize.setX(obj.getProperty("DialogWidth", fixedSize.getX()));
 	fixedSize.setY(obj.getProperty("DialogHeight", fixedSize.getY()));
 }
@@ -727,6 +846,7 @@ Dialog::ModalPopup::ModalPopup(Dialog& parent_, PageInfo::Ptr info_, bool addBut
 	okButton("OK"),
 	cancelButton("Cancel")
 {
+	setWantsKeyboardFocus(true);
 	setDefaultStyleSheet("position: absolute; background: rgba(128,128,128, 0.8);");
 	content.setDefaultStyleSheet("background: #161616;display:flex;width: 100%;flex-direction: column;margin: 120px 90px;padding: 20px;");
 	contentViewport.setDefaultStyleSheet("display: flex;flex-direction: row;width: 100%;flex-grow: 1;");
@@ -760,6 +880,11 @@ void Dialog::ModalPopup::init()
 	{
 		contentComponent = info->create(parent, parent.getWidth());
 		contentViewport.addFlexItem(*contentComponent);
+
+		auto s = info->stateObject;
+
+		ScopedValueSetter<var> stateSwitcher(parent.getState().globalState, s);
+
 		contentComponent->postInit();
 	}
 }
@@ -890,14 +1015,16 @@ Dialog::Dialog(const var& obj, State& rt, bool addEmptyPage):
 	cancelButton("Cancel"),
 	nextButton("Next"),
 	prevButton("Previous"),
-	
+#if HISE_MULTIPAGE_INCLUDE_EDIT
+	mouseSelector(*this),
+#endif
 	//errorComponent(*this),
     runThread(&rt),
 	totalProgress(progressValue)
 {
-	jassert(runThread->currentDialog == nullptr);
+	
 
-    runThread->currentDialog = this;
+    runThread->currentDialogs.add(this);
 
 	if(auto sd = obj[mpid::StyleData].getDynamicObject())
 	{
@@ -983,8 +1110,10 @@ Dialog::Dialog(const var& obj, State& rt, bool addEmptyPage):
 	simple_css::FlexboxComponent::Helpers::writeSelectorsToProperties(nextButton, { "#next", ".nav-button" });
 	simple_css::FlexboxComponent::Helpers::writeSelectorsToProperties(prevButton, { "#prev", ".nav-button" });
 
+	
+
     setWantsKeyboardFocus(true);
-	setSize(700, 400);
+	setSize(positionInfo.fixedSize.getX(), positionInfo.fixedSize.getY());
 
 	nextButton.onClick = [this]()
 	{
@@ -998,20 +1127,41 @@ Dialog::Dialog(const var& obj, State& rt, bool addEmptyPage):
 
 	cancelButton.onClick = [this]()
 	{
-		auto l = createModalPopup<factory::List>();
-
-		auto& root = *l;
-        auto& md = root.addChild<factory::MarkdownText>();
-		md[mpid::Text] = "Do you want to close this popup?";
-
-		md.setCustomCheckFunction([this](PageBase*, var obj)
+		if(getPositionInfo({}).confirmClose)
 		{
+			auto l = createModalPopup<factory::List>();
+
+			auto& root = *l;
+	        auto& md = root.addChild<factory::MarkdownText>();
+			md[mpid::Text] = this->getPositionInfo({}).closeMessage;  ;
+
+			md.setCustomCheckFunction([this](PageBase*, var obj)
+			{
+				var v[2] = { var(false), getState().globalState };
+				var::NativeFunctionArgs args(var(), v, 2);
+				getState().callNativeFunction("onFinish", args, nullptr);
+
+				MessageManager::callAsync(finishCallback);
+				return Result::ok();
+			});
+			
+			showModalPopup(true, l);
+		}
+		else
+		{
+			var v[2] = { var(false), getState().globalState };
+			var::NativeFunctionArgs args(var(), v, 2);
+			getState().callNativeFunction("onFinish", args, nullptr);
 			MessageManager::callAsync(finishCallback);
-			return Result::ok();
-		});
-		
-		showModalPopup(true, l);
+		}
 	};
+
+#if HISE_MULTIPAGE_INCLUDE_EDIT
+	selectionUpdater.addListener(*this, [](Dialog& b, const Array<var>& list)
+	{
+		b.showEditor(list);
+	}, false);
+#endif
 
 	//setEditMode(true);
 	
@@ -1021,7 +1171,10 @@ Dialog::Dialog(const var& obj, State& rt, bool addEmptyPage):
 
 Dialog::~Dialog()
 {
-	runThread->currentDialog = nullptr;
+	finishCallback = {};
+
+	if(runThread != nullptr)
+		runThread->currentDialogs.removeAllInstancesOf(this);
 }
 
 
@@ -1048,9 +1201,14 @@ String Dialog::getStringFromModalInput(const String& message, const String& pref
 
 bool Dialog::refreshCurrentPage()
 {
+	
+	footer.setFlexChildVisibility(2, false, pages.size() <= 1);
+
 	popup = nullptr;
 
 	auto index = jlimit(0, pages.size()-1, getState().currentPageIndex);
+
+	prevButton.setEnabled(index != 0);
 
 	String pt;
 	pt << "Step " << String(index+1) << " / " << String(pages.size());
@@ -1064,6 +1222,10 @@ bool Dialog::refreshCurrentPage()
 	css.clearCache();
 
 	logMessage(MessageType::Navigation, "Goto page " + String(index+1));
+
+	var v[2] = { var(index), var(getState().globalState) };
+	var::NativeFunctionArgs args(var(), v, 2);
+	getState().callNativeFunction("onPageLoad", args, nullptr);
 
 	if((currentPage = pages[index]->create(*this, dynamic_cast<Component*>(content.get())->getWidth())))
 	{
@@ -1095,6 +1257,11 @@ void Dialog::createEditorInSideTab(const var& obj, PageBase* pb, const std::func
 		auto d = new Dialog(var(), * ns, true);
 
 		d->setFixStyleSheet(st->propertyStyleSheet);
+
+		d->additionalChangeCallback = [this]()
+		{
+			this->refreshCurrentPage();
+		};
 
 		d->useHelpBubble = true;
 
@@ -1184,6 +1351,9 @@ void Dialog::setCurrentErrorPage(PageBase* b)
 	if(currentErrorElement == b)
 		return;
 
+	if(b != nullptr && b->isInvisibleWrapper())
+		return;
+
 	if(currentErrorElement != nullptr)
 	{
 		currentErrorElement->changeClass(simple_css::Selector(".error"), false);
@@ -1201,16 +1371,8 @@ bool Dialog::keyPressed(const KeyPress& k)
 {
 	if(k.getKeyCode() == KeyPress::F5Key)
 	{
-		try
-		{
-			if(currentPage != nullptr)
-				currentPage->check(getState().globalState);
-		}
-		catch(State::CallOnNextAction& )
-		{
-			getState().jobs.clear();
-		}
-		
+		if(currentPage != nullptr)
+			currentPage->check(getState().globalState);
 
 		if(auto st = findParentComponentOfClass<ComponentWithSideTab>())
 		{
@@ -1219,9 +1381,20 @@ bool Dialog::keyPressed(const KeyPress& k)
 		
 		return true;
 	}
+	if(k.getKeyCode() == KeyPress::escapeKey)
+	{
+		if(popup != nullptr)
+		{
+			popup->dismiss();
+			return true;
+		}
+	}
 	if(k.getKeyCode() == KeyPress::returnKey)
 	{
-		if(nextButton.isEnabled())
+		if(this->popup != nullptr)
+			return this->popup->keyPressed(k);
+
+		if(nextButton.isEnabled() && nextButton.isVisible())
 		{
 			nextButton.triggerClick();
 			return true;
@@ -1303,6 +1476,10 @@ var Dialog::exportAsJSON() const
 
 		return false;
 	});
+
+#if HISE_MULTIPAGE_INCLUDE_EDIT
+	CodeGenerator::sanitizeData(copy);
+#endif
 
 	return copy;
 }
@@ -1568,11 +1745,127 @@ void Dialog::showMainPropertyEditor()
 	});
 }
 
+#if HISE_MULTIPAGE_INCLUDE_EDIT
+Dialog::MouseSelector::MouseSelector(Dialog& parent_):
+    parent(parent_)
+{
+	parent.addMouseListener(this, true);
+	
+
+	selection.addChangeListener(this);
+}
+
+Dialog::MouseSelector::~MouseSelector()
+{
+	selection.removeChangeListener(this);
+}
+
+void Dialog::MouseSelector::changeListenerCallback(ChangeBroadcaster* source)
+{
+	DBG("Rebuild!!!");
+
+	const auto& list = selection.getItemArray();
+
+	uint64 thisHash = 0;
+
+	for(auto& l: list)
+	{
+		thisHash += reinterpret_cast<uint64>(l.getObject());
+	}
+
+	if(thisHash != lastHash)
+	{
+		lastHash = thisHash;
+		parent.selectionUpdater.sendMessage(sendNotificationSync, list);
+	}
+}
+
+void Dialog::MouseSelector::findLassoItemsInArea(Array<var>& itemsFound, const Rectangle<int>& area)
+{
+	parent.currentPage->callRecursive<PageBase>(parent.currentPage, [&](PageBase* b)
+	{
+		auto la = parent.getLocalArea(b, b->getLocalBounds());
+
+		if(dynamic_cast<factory::Container*>(b) != nullptr)
+			return false;
+
+		if(area.intersectRectangle(la))
+		{
+			struct Sorter
+			{
+				static int compareElements(const var& b1, const var& b2)
+				{
+					return b1[mpid::ID].toString().compare(b2[mpid::ID].toString());
+				}
+			} sorter;
+
+			itemsFound.addSorted(sorter, b->getInfoObject());
+		}
+
+		return false;
+	});
+}
+
+void Dialog::MouseSelector::mouseDrag(const MouseEvent& e)
+{
+	if(parent.isEditModeEnabled())
+	{
+		lasso.dragLasso(e.getEventRelativeTo(&parent));
+	}
+}
+
+void Dialog::MouseSelector::mouseUp(const MouseEvent& e)
+{
+	if(parent.isEditModeEnabled())
+	{
+		lasso.endLasso();
+	}
+}
+
+void Dialog::MouseSelector::mouseDown(const MouseEvent& event)
+{
+	if(parent.isEditModeEnabled())
+	{
+		selection.deselectAll();
+
+		auto pb = event.eventComponent->findParentComponentOfClass<PageBase>();
+
+		if(pb != nullptr)
+		{
+			selection.addToSelectionBasedOnModifiers(pb->getInfoObject(), event.mods);
+		}
+
+		parent.addChildComponent(lasso);
+		lasso.beginLasso(event.getEventRelativeTo(&parent), this);
+	}
+}
+#endif
+
 void Dialog::loadStyleFromPositionInfo()
 {
 	auto css = getState().getStyleSheet(positionInfo.styleSheet, positionInfo.additionalStyle);
 	
 	update(css);
+}
+
+void Dialog::registerPlaceholder(const Identifier& typeId, const PlaceholderCreator& pc)
+{
+	placeholderFactory.add({typeId, pc});
+}
+
+PlaceholderContentBase* Dialog::createDynamicPlaceholder(const var& infoObject)
+{
+	auto classId = Identifier(infoObject[mpid::ContentType].toString());
+
+	for(const auto& pf: placeholderFactory)
+	{
+		if(pf.first == classId)
+		{
+			return pf.second(*this, infoObject);
+		}
+	}
+
+	return nullptr;
 }
 
 
@@ -1716,6 +2009,18 @@ Path Dialog::createPath(const String& url) const
 		p.loadPathFromData(mb.getData(), mb.getSize());
 		return p;
 	}
+
+	if(url == "stop")
+	{
+		static const unsigned char x[] = { 110,109,240,151,39,68,8,19,64,67,98,143,50,56,68,252,97,66,67,0,128,69,68,120,6,121,67,0,128,69,68,0,0,158,67,98,0,128,69,68,212,55,192,67,3,156,55,68,188,255,219,67,0,128,38,68,188,255,219,67,98,5,100,21,68,188,255,219,67,0,128,7,68,212,55,192,67,0,
+128,7,68,0,0,158,67,98,0,128,7,68,84,144,119,67,5,100,21,68,132,0,64,67,0,128,38,68,132,0,64,67,98,68,186,38,68,132,0,64,67,95,244,38,68,216,1,64,67,240,46,39,68,32,7,64,67,108,120,17,40,68,48,255,88,67,98,214,140,39,68,36,222,88,67,234,6,39,68,244,204,
+88,67,0,128,38,68,244,204,88,67,98,0,208,24,68,244,204,88,67,53,179,13,68,222,159,130,67,53,179,13,68,0,0,158,67,98,53,179,13,68,32,96,185,67,0,208,24,68,132,153,207,67,0,128,38,68,132,153,207,67,98,255,47,52,68,132,153,207,67,203,76,63,68,32,96,185,
+67,203,76,63,68,0,0,158,67,98,203,76,63,68,244,244,131,67,90,62,53,68,108,39,93,67,26,123,40,68,72,28,89,67,108,240,151,39,68,8,19,64,67,99,109,56,50,50,68,212,155,134,67,108,200,205,26,68,212,155,134,67,108,200,205,26,68,44,100,181,67,108,56,50,50,68,
+44,100,181,67,108,56,50,50,68,212,155,134,67,99,101,0,0 };
+
+		p.loadPathFromData(x, sizeof(x));
+        return p;
+	}
         
     if(url == "retry")
     {
@@ -1727,7 +2032,7 @@ Path Dialog::createPath(const String& url) const
         p.loadPathFromData(x, sizeof(x));
         return p;
     }
-    LOAD_EPATH_IF_URL("retry", EditorIcons::redoIcon);
+
 	LOAD_EPATH_IF_URL("close", HiBinaryData::ProcessorEditorHeaderIcons::closeIcon);
 	LOAD_EPATH_IF_URL("help", MainToolbarIcons::help);
     LOAD_EPATH_IF_URL("add", HiBinaryData::ProcessorEditorHeaderIcons::addIcon);
@@ -1768,24 +2073,31 @@ bool Dialog::navigate(bool forward)
 		{
 			if(!isEditModeEnabled())
 			{
-				try
+				auto hasOnSubmit = callRecursive<PageBase>(currentPage, [](PageBase* b)
 				{
-					auto ok = currentPage->check(runThread->globalState);
-					//errorComponent.setError(ok);
+					return b->hasOnSubmitEvent();
+				});
+
+				auto ok = currentPage->check(runThread->globalState);
 		                
-					if(!ok.wasOk())
+				if(!ok.wasOk())
+				{
+					if(currentErrorElement != nullptr)
 					{
-						if(currentErrorElement != nullptr)
-						{
-							currentErrorElement->setModalHelp(ok.getErrorMessage());
-						}
-							
-						return false;
+						currentErrorElement->setModalHelp(ok.getErrorMessage());
 					}
 						
+					return false;
 				}
-				catch(State::CallOnNextAction& )
+
+				hasOnSubmit = callRecursive<PageBase>(currentPage, [](PageBase* b)
 				{
+					return b->hasOnSubmitEvent();
+				});
+
+				if(hasOnSubmit)
+				{
+					getState().navigateOnFinish = true;
 					nextButton.setEnabled(false);
 					prevButton.setEnabled(false);
 					return false;
@@ -1795,6 +2107,10 @@ bool Dialog::navigate(bool forward)
 
 		if (newIndex == pages.size())
 		{
+			var v[2] = { var(true), getState().globalState };
+			var::NativeFunctionArgs args(var(), v, 2);
+			getState().callNativeFunction("onFinish", args, nullptr);
+
 			if(!editMode && finishCallback)
 				Timer::callAfterDelay(600, finishCallback);
 				
@@ -1809,6 +2125,26 @@ bool Dialog::navigate(bool forward)
 	
 
 	return false;
+}
+
+void Dialog::onStateDestroy(NotificationType mode)
+{
+	if(mode == sendNotificationSync)
+	{
+		std::function<void()> copy;
+		std::swap(copy, finishCallback);
+
+		if(copy)
+			copy();
+	}
+	if(mode == sendNotificationAsync)
+	SafeAsyncCall::callAsyncIfNotOnMessageThread<Dialog>(*this, [](Dialog& t)
+	{
+		std::function<void()> copy;
+		std::swap(copy, t.finishCallback);
+		if(copy)
+			copy();
+	});
 }
 
 void Dialog::paint(Graphics& g)
@@ -1837,14 +2173,13 @@ void Dialog::paint(Graphics& g)
 
 	if(auto ss = css.getWithAllStates(nullptr, simple_css::ElementType::Body))
 	{
-		auto c = ss->getColourOrGradient(getLocalBounds().toFloat(), { "background-color", {}}, Colour(0xFF222222));
+		simple_css::Renderer r(this, stateWatcher);
 
-		if(c.second.getNumColours() != 0)
-			g.setGradientFill(c.second);
-		else
-			g.setColour(c.first);
-
-		g.fillAll();
+		r.drawBackground(g, getLocalBounds().toFloat(), ss);
+	}
+	else
+	{
+		g.fillAll(Colours::red);
 	}
 
 	
@@ -1986,10 +2321,12 @@ void Dialog::containerPopup(const var& infoObject)
 	auto typeName = infoObject[mpid::Type].toString();
 
 	m.addSeparator();
-	m.addItem(90000, "Edit " + typeName, tp != nullptr, tp == currentlyEditedPage);
+	m.addItem(90000, "Edit " + typeName, tp != nullptr, currentlyEditedPage != nullptr && infoObject == currentlyEditedPage->getInfoObject());
 	
-	m.addItem(924, "Delete " + typeName, tp != nullptr && tp->findParentComponentOfClass<factory::Container>() != nullptr);
-	m.addItem(90001, "Copy info JSON", tp != nullptr);
+	m.addItem(924, "Delete " + typeName, tp != nullptr && pageListInfo->indexOf(infoObject) == -1);
+	m.addItem(90001, "Copy info JSON", infoObject.isObject());
+
+	m.addItem(90002, "Edit as XML", infoObject.isObject());
 
 	if(auto r = m.show())
 	{
@@ -2000,9 +2337,15 @@ void Dialog::containerPopup(const var& infoObject)
 				tp->createEditor(editorList);
 			});
 		}
+		
 		else if (r == 90001)
 		{
-			SystemClipboard::copyTextToClipboard(JSON::toString(tp->getInfoObject(), false));
+			SystemClipboard::copyTextToClipboard(JSON::toString(infoObject, false));
+		}
+		else if (r == 90002)
+		{
+			findParentComponentOfClass<ComponentWithSideTab>()->addCodeEditor(infoObject, "HTML");
+			return;
 		}
 		else if (r == 924)
 		{
@@ -2063,14 +2406,15 @@ void Dialog::containerPopup(const var& infoObject)
 
 bool Dialog::nonContainerPopup(const var& infoObject)
 {
-	auto tp = findPageBaseForInfoObject(infoObject);
+	
 
 	auto typeName = infoObject[mpid::Type].toString();
 
 	PopupLookAndFeel plaf;
 	PopupMenu m;
 	m.setLookAndFeel(&plaf);
-	m.addItem(2, "Edit " + typeName, true, currentlyEditedPage == tp);
+	m.addItem(2, "Edit " + typeName, true, currentlyEditedPage != nullptr && currentlyEditedPage->getInfoObject() == infoObject);
+	m.addItem(1235, "Edit Code", infoObject.hasProperty(mpid::Code), false);
 	m.addItem(1, "Delete " + typeName);
 	m.addSeparator();
 	m.addItem(3, "Duplicate " + typeName);
@@ -2086,20 +2430,36 @@ bool Dialog::nonContainerPopup(const var& infoObject)
 	if(r == 0)
 		return true;
 
-    if(r == 2 && tp != nullptr)
+    if(r == 2)
     {
         showEditor(infoObject);
         return true;
     }
-	if(r == 1 && tp != nullptr)
+	if(r == 1)
 	{
-		tp->deleteFromParent();
+		if(auto tp = findPageBaseForInfoObject(infoObject))
+		{
+			tp->deleteFromParent();
+			
+		}
+
 		return true;
 	}
 	if(r == 3)
 	{
-		tp->duplicateInParent();
+		if(auto tp = findPageBaseForInfoObject(infoObject))
+		{
+			tp->duplicateInParent();
+		}
+		
 		return true;
+	}
+	else if (r == 1235)
+	{
+		if(auto st = findParentComponentOfClass<ComponentWithSideTab>())
+		{
+			st->addCodeEditor(infoObject, mpid::Code);
+		}
 	}
 	if(r == 4)
 	{
@@ -2108,12 +2468,15 @@ bool Dialog::nonContainerPopup(const var& infoObject)
 	}
 	if(r == 5)
 	{
-		if(auto pc = tp->findParentComponentOfClass<factory::Container>())
+		if(auto tp = findPageBaseForInfoObject(infoObject))
 		{
-			auto l = pc-> getPropertyFromInfoObject(mpid::Children);
-			auto idx = l.indexOf(infoObject)+1;
-			getUndoManager().perform(new UndoableVarAction(l, idx, clipboard));
-			refreshCurrentPage();
+			if(auto pc = tp->findParentComponentOfClass<factory::Container>())
+			{
+				auto l = pc-> getPropertyFromInfoObject(mpid::Children);
+				auto idx = l.indexOf(infoObject)+1;
+				getUndoManager().perform(new UndoableVarAction(l, idx, clipboard));
+				refreshCurrentPage();
+			}
 		}
 
 		return true;
@@ -2122,8 +2485,124 @@ bool Dialog::nonContainerPopup(const var& infoObject)
 	return false;
 }
 
-bool Dialog::showEditor(const var& infoObject)
+bool Dialog::showEditor(const Array<var>& infoObjects)
 {
+	if(auto st = findParentComponentOfClass<ComponentWithSideTab>())
+	{
+		if(infoObjects.isEmpty())
+		{
+			st->setSideTab(nullptr, nullptr);
+		}
+		else
+		{
+			auto ns = new State(var());
+			ns->globalState = infoObjects[0];
+			auto d = new Dialog(var(), * ns, true);
+
+			d->setFixStyleSheet(st->propertyStyleSheet);
+
+			d->useHelpBubble = true;
+
+			auto sd = d->getStyleData();
+			sd.fontSize = 14.0f;
+			sd.f = GLOBAL_FONT();
+			sd.textColour = Colours::white.withAlpha(0.7f);
+			sd.backgroundColour = Colours::transparentBlack;
+			d->setStyleData(sd);
+
+			d->prevButton.setVisible(false);
+			
+
+			if(auto tp = findPageBaseForInfoObject(infoObjects[0]))
+			{
+				tp->createEditor(*d->pages.getFirst());
+			}
+
+			
+
+
+			d->additionalChangeCallback = [this]()
+			{
+				this->refreshCurrentPage();
+			};
+
+			d->setFinishCallback([this, st]()
+			{
+				this->refreshCurrentPage();
+				st->setSideTab(nullptr, nullptr);
+			});
+
+			d->refreshCurrentPage();
+
+			if(infoObjects.size() > 1)
+			{
+				Array<var> sameObjects;
+
+				auto initValues = infoObjects[0].getDynamicObject()->clone();
+				
+				auto firstType = infoObjects[0][mpid::Type].toString();
+
+				auto ud = &getUndoManager();
+
+				for(int i = 1; i < infoObjects.size(); i++)
+				{
+					sameObjects.add(infoObjects[i]);
+				}
+
+				if(!sameObjects.isEmpty())
+				{
+					Component::callRecursive<PageBase>(d, [ud, sameObjects, initValues](PageBase* b)
+					{
+						b->setCustomCheckFunction([ud, sameObjects, initValues](PageBase* b, const var& obj)
+						{
+							auto idToWrite = b->getId();
+
+							if(idToWrite.isNull())
+								return Result::ok();
+
+							auto valueToWrite = b->getValueFromGlobalState();
+
+							if(initValues->getProperty(idToWrite) == valueToWrite)
+								return Result::ok();
+
+							initValues->setProperty(idToWrite, valueToWrite);
+
+							ud->beginNewTransaction();
+
+							for(auto& v: sameObjects)
+							{
+								if(!v.getDynamicObject()->hasProperty(idToWrite))
+									continue;
+
+								ud->perform(new UndoableVarAction(v, idToWrite, valueToWrite));
+
+								//v.getDynamicObject()->setProperty(idToWrite, valueToWrite);
+							}
+
+							return Result::ok();
+						});
+
+						return false;
+					});
+				}
+
+				
+			}
+
+			
+
+			if(!st->setSideTab(ns, d))
+				currentlyEditedPage = nullptr;
+		}
+		
+
+		//currentlyEditedPage = pb;
+	}
+
+	repaint();
+
+	return false;
+#if 0
 	auto tp = findPageBaseForInfoObject(infoObject);
 
 	if(tp == nullptr)
@@ -2140,6 +2619,7 @@ bool Dialog::showEditor(const var& infoObject)
 	}
 
 	return true;
+#endif
 }
 #endif
 

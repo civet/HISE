@@ -97,6 +97,7 @@ void Autocomplete::Item::paint(Graphics& g)
 	g.setColour(token->c);
 	g.fillRect(bar);
 	
+	tBounds.removeFromLeft(3);
 
 	auto s = createDisplayText();
 	s.draw(g, tBounds);
@@ -114,6 +115,7 @@ Autocomplete::Autocomplete(TokenCollection::Ptr tokenCollection_, const String& 
 	SimpleDocumentTokenProvider::addTokensStatic(currentList, editor->docRef);
 
 	addAndMakeVisible(scrollbar);
+	fader.addScrollBarToAnimate(scrollbar);
 	setInput(input, previousToken, lineNumber);
 	scrollbar.addListener(this);
 }
@@ -254,13 +256,15 @@ void Autocomplete::setInput(const String& input, const String& previousToken, in
 	{
 		auto maxWidth = 0;
 
-		auto nf = Font(Font::getDefaultMonospacedFontName(), 16.0f * getScaleFactor(), Font::plain);
+		auto nf = Font(GLOBAL_MONOSPACE_FONT().getTypefaceName(), 16.0f * getScaleFactor(), Font::plain);
 
 		for (auto& i : items)
 		{
 
-			maxWidth = jmax(maxWidth, nf.getStringWidth(i->token->tokenContent) + 20);
+			maxWidth = jmax(maxWidth, nf.getStringWidth(i->token->tokenContent) + 30);
 		}
+
+		maxWidth = jmax(JUCE_LIVE_CONSTANT_OFF(500), maxWidth);
 
 		setSize(maxWidth, h);
 		resized();
@@ -307,11 +311,11 @@ bool TokenCollection::Token::operator==(const Token& other) const
 	return equals(&other) && other.equals(this);
 }
 
-Array<Range<int>> TokenCollection::Token::getSelectionRangeAfterInsert(const String& input) const
+Array<Range<int>> TokenCollection::getSelectionFromFunctionArgs(const String& input)
 {
 	Array<Range<int>> parameterRanges;
 
-	auto code = getCodeToInsert(input);
+	auto code = input;
 
 	auto ptr = code.getCharPointer();
 	auto start = ptr;
@@ -702,6 +706,102 @@ void SimpleDocumentTokenProvider::addTokensStatic(TokenCollection::List& tokens,
 	}
 }
 
+struct CodeSnippetProvider::CodeSnippetToken: public mcl::TokenCollection::Token
+{
+	CodeSnippetToken(const var& jsonData):
+	  Token(jsonData["name"])
+	{
+		priority = jsonData["priority"];
+		markdownDescription = jsonData["description"];
+		c = Colours::yellow;
+		snippetCode = jsonData["code"];
+
+		
+
+		auto start = snippetCode.begin();
+		auto end = snippetCode.end();
+		auto ptr = start;
+
+		Array<int> indexes;
+		codeToInsert.preallocateBytes(snippetCode.length());
+
+		while(ptr != end)
+		{
+			if(*ptr == '$')
+			{
+				indexes.add((ptr - start) - indexes.size());
+			}
+			else
+			{
+				codeToInsert << *ptr;
+			}
+
+			ptr++;
+		}
+
+		if(!indexes.isEmpty())
+		{
+			for(int i = 0; i < indexes.size(); i += 2)
+			{
+				selectionRange.add(Range<int>(indexes[i] , indexes[i+1]));
+			}
+		}
+	}
+
+	Array<Range<int>> getSelectionRangeAfterInsert(const String& input) const override
+	{
+		return selectionRange;
+	}
+
+	/** Override this method if you want to customize the code that is about to be inserted. */
+	String getCodeToInsert(const String& input) const override
+	{
+		return codeToInsert;
+	}
+
+	Array<Range<int>> selectionRange;
+	String snippetCode;
+	String codeToInsert;
+};
+
+void CodeSnippetProvider::addTokens(mcl::TokenCollection::List& tokens)
+{
+	for(auto f: getSnippetFiles())
+	{
+		var list;
+		auto ok = JSON::parse(f.loadFileAsString(), list);
+
+		if(ok.failed())
+		{
+			String em;
+			em << "Error parsing JSON file " << f.getFileName() << ": " << ok.getErrorMessage();
+			reportParsingError(em);
+			break;
+		}
+
+		if(list.isArray())
+		{
+			for(const auto& v: *list.getArray())
+			{
+				auto lid = v["language"].toString();
+
+				if(lid.isNotEmpty() && Identifier(lid) != getLanguageId())
+					continue;
+
+				auto ct = new CodeSnippetToken(v);
+
+				if(ct->tokenContent.isEmpty())
+					reportParsingError("Missing name for token " + JSON::toString(v));
+
+				if(ct->codeToInsert.isEmpty())
+					reportParsingError("Empty content for token " + JSON::toString(v));
+
+				tokens.add(ct);
+			}
+		}
+	}
+}
+
 Autocomplete::ParameterSelection::ParameterSelection(TextDocument& doc, int start, int end):
 	s(doc.getCodeDocument(), start),
 	e(doc.getCodeDocument(), end)
@@ -719,12 +819,13 @@ Selection Autocomplete::ParameterSelection::getSelection() const
 }
 
 Autocomplete::HelpPopup::HelpPopup(Autocomplete* p):
-	ac(p),
-	corner(this, nullptr)
+	ac(p)
 {
 	addAndMakeVisible(display);
+
+	display.setResizeToFit(true);
+
 	p->addComponentListener(this);
-	addAndMakeVisible(corner);
 }
 
 Autocomplete::HelpPopup::~HelpPopup()
@@ -759,7 +860,7 @@ void Autocomplete::HelpPopup::refreshText()
 void Autocomplete::HelpPopup::resized()
 {
 	display.setBounds(getLocalBounds().reduced(10));
-	corner.setBounds(getLocalBounds().removeFromRight(10).removeFromBottom(10));
+	
 }
 
 void Autocomplete::HelpPopup::paint(Graphics& g)
@@ -920,7 +1021,7 @@ void Autocomplete::paint(Graphics& g)
 void Autocomplete::paintOverChildren(Graphics& g)
 {
 	auto b = getLocalBounds();
-	g.setColour(Colour(0xFF222222));
+	g.setColour(JUCE_LIVE_CONSTANT_OFF(Colour(0xff434343)));
 	g.drawRect(b.toFloat(), 1.0f);
 }
 

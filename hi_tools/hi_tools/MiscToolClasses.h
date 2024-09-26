@@ -1441,6 +1441,11 @@ template <typename...Ps> struct LambdaBroadcaster final
 		return !listeners.isEmpty();
 	}
 
+	template <int P=0> auto getLastValue() const noexcept
+	{
+		return std::get<P>(lastValue);
+	}
+
 private:
     
 	void sendMessageInternal(NotificationType n, const std::tuple<Ps...>& value)
@@ -2374,7 +2379,13 @@ public:
 
     SemanticVersionChecker(const String& oldVersion_, const String& newVersion_);;
 
+	SemanticVersionChecker(const std::array<int, 3>& oldVersion_, const std::array<int, 3>& newVersion_);
+
     bool isUpdate() const;
+	bool isExactMatch() const
+	{
+		return newVersion.validVersion && newVersion == oldVersion;
+	}
 
     bool isMajorVersionUpdate() const;;
     bool isMinorVersionUpdate() const;;
@@ -2382,10 +2393,32 @@ public:
     bool oldVersionNumberIsValid() const;
     bool newVersionNumberIsValid() const;
 
+	String getErrorMessage(const String& oldVersionName, const String& newVersionName) const
+	{
+	    String m;
+		m << oldVersionName << ": " << oldVersion.toString();
+		m << ", " << newVersionName << ": " << newVersion.toString();
+		return m;
+	}
+
 private:
 
     struct VersionInfo
     {
+		bool operator== (const VersionInfo& other) const
+		{
+		    return majorVersion == other.majorVersion &&
+				   minorVersion == other.minorVersion &&
+				   patchVersion == other.patchVersion;
+		}
+
+		String toString() const
+		{
+		    String m;
+			m << String(majorVersion) << "." << String(minorVersion) << "." << String(patchVersion);
+			return m;
+		}
+
         bool validVersion = false;
         int majorVersion = 0;
         int minorVersion = 0;
@@ -2398,6 +2431,62 @@ private:
     VersionInfo newVersion;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SemanticVersionChecker);
+};
+
+struct AdditionalEventStorage
+{
+	using BroadcasterType = LambdaBroadcaster<uint16, uint8, double>;
+
+	static constexpr uint16 NumEventSlots = 1024;
+	static constexpr uint8 NumDataSlots = 16;
+	
+	void setValue(uint16 eventId, uint8 slotIndex, double newValue, NotificationType n)
+	{
+		auto i1 = eventId & (NumEventSlots -1);
+		auto i2 = slotIndex & (NumDataSlots - 1);
+
+		auto& element = data[i1][i2];
+
+		element.first = eventId;
+		element.second = newValue;
+
+		getBroadcaster().sendMessage(n, eventId, slotIndex, newValue);
+	}
+
+	std::pair<bool, double> getValue(uint16 eventId, uint8 slotIndex) const
+	{
+		auto i1 = eventId & (NumEventSlots -1);
+		auto i2 = slotIndex & (NumDataSlots - 1);
+
+		auto& element = data[i1][i2];
+
+		if(element.first == eventId)
+		{
+			return { true, element.second };
+		}
+
+		return { false, 0.0 };
+	}
+
+	bool changed(uint16 eventId, uint8 slotIndex, double& value) const
+	{
+		auto nv = getValue(eventId, slotIndex);
+
+		if(nv.first && nv.second != value)
+		{
+			value = nv.second;
+			return true;
+		}
+
+		return false;
+	}
+	
+	BroadcasterType& getBroadcaster() { return broadcaster; }
+
+private:
+
+	BroadcasterType broadcaster;
+	std::array<std::array<std::pair<uint16, double>, NumDataSlots>, NumEventSlots> data;
 };
 
 }

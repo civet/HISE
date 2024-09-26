@@ -86,9 +86,7 @@ private:
 
 		throwErrorAndQuit("`" + s + "` is not a valid path");
 
-#if JUCE_DEBUG
-		return File();
-#endif
+		RETURN_IF_NO_THROW(File());
 	}
 
 public:
@@ -778,6 +776,21 @@ public:
                                         Colours::lightgrey,
 										DocumentWindow::TitleBarButtons::closeButton | DocumentWindow::maximiseButton | DocumentWindow::TitleBarButtons::minimiseButton)
         {
+			auto sf = hise::ProjectHandler::getAppDataDirectory(nullptr).getChildFile("OtherSettings.xml");
+
+			if(auto xml = XmlDocument::parse(sf))
+			{
+				if(auto c = xml->getChildByName(HiseSettings::Other::GlobalHiseScaleFactor.toString()))
+				{
+					auto v = (double)c->getStringAttribute("value").getIntValue() / 100.0;
+
+					if(v >= 0.75 && v <= 1.5)
+					{
+						Desktop::getInstance().setGlobalScaleFactor(v);
+					}
+				}
+			}
+
             setContentOwned (new MainContentComponent(commandLine), true);
 
 #if JUCE_IOS
@@ -964,3 +977,5 @@ void MainContentComponent::requestQuit()
 //==============================================================================
 // This macro generates the main() routine that launches the app.
 START_JUCE_APPLICATION (HISEStandaloneApplication)
+
+

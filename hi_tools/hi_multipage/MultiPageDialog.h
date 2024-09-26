@@ -36,11 +36,12 @@ namespace hise {
 namespace multipage {
 using namespace juce;
 
-
+struct PlaceholderContentBase;
 
 namespace factory
 {
 	struct Container;
+    
 }
 
 struct ComponentWithSideTab
@@ -51,6 +52,8 @@ struct ComponentWithSideTab
 	virtual bool setSideTab(State* dialogState, Dialog* newDialog) = 0;
 
     virtual State* getMainState() { return nullptr; }
+
+    virtual void addCodeEditor(const var& infoObject, const Identifier& codeId) {};
 
     virtual void refreshDialog() = 0;
 
@@ -102,9 +105,11 @@ public:
         Rectangle<int> getBounds(Rectangle<int> fullBounds) const;
 
         Point<int> fixedSize = { 800, 600 };
-        
+
+        bool confirmClose = true;
         String styleSheet = "Dark";
         String additionalStyle;
+        String closeMessage = "Do you want to close this popup?";
         bool useViewport = true;
     } positionInfo;
 
@@ -123,9 +128,19 @@ public:
 	        initValue = var();
         }
 
+        static simple_css::Selector getSelectorFromId(const var& obj);
+
+        virtual bool hasOnSubmitEvent() const { return false; }
+
         void updateStyleSheetInfo(bool forceUpdate=false);
 
         void forwardInlineStyleToChildren();
+
+        bool updateInfoProperty(const Identifier& pid);
+
+        VisibleState getVisibility() const;
+
+        static StringArray getVisibilityNames();
 
 #if HISE_MULTIPAGE_INCLUDE_EDIT
         virtual void createEditor(PageInfo& infoList) {}
@@ -206,6 +221,17 @@ public:
         void setModalHelp(const String& text);
 
     protected:
+
+        void callAdditionalStateCallback()
+        {
+            if(rootDialog.additionalChangeCallback)
+            {
+	            if(cf)
+	                cf(this, getValueFromGlobalState());
+
+	            rootDialog.callAdditionalChangeCallback();
+            }
+        }
 
         Identifier id;
         Dialog& rootDialog;
@@ -298,9 +324,156 @@ public:
     Dialog(const var& obj, State& rt, bool addEmptyPage=true);
     ~Dialog();
 
+    bool getPathInternal(const var& parent, const var& objToFind, String& currentPath, std::vector<std::pair<String, var>>& matches) const
+    {
+        auto pid = parent[mpid::ID].toString();
+
+        if(pid.isNotEmpty())
+			currentPath << "." << pid;
+
+        if(parent == objToFind || (pid.isNotEmpty() && objToFind[mpid::ID].toString() == pid))
+        {
+	        matches.push_back({currentPath, parent});
+            return true;
+        }
+        
+        if(auto ar = parent[mpid::Children].getArray())
+        {
+            auto found = false;
+
+	        for(auto& c: *ar)
+	        {
+                String cp = currentPath;
+
+		        found |= getPathInternal(c, objToFind, cp, matches);
+	        }
+
+            return found;
+        }
+
+        return false;
+    }
+
+    String getPathForInfoObject(const var& obj) const
+    {
+        int idx = 0;
+
+	    for(auto p: *pageListInfo)
+	    {
+            String path;
+
+            path << "Page " << String(++idx);
+
+            std::vector<std::pair<String, var>> matches;
+
+		    if(getPathInternal(p, obj, path, matches))
+		    {
+                jassert(!matches.empty());
+
+			    if(matches.size() == 1)
+                    return matches[0].first;
+                else
+                {
+	                for(int i = 0; i < matches.size(); i++)
+	                {
+		                if(matches[i].second.getDynamicObject() == obj.getDynamicObject())
+		                {
+			                auto p = matches[i].first;
+
+                            p << "[" << String(i) << "]";
+                            return p;
+		                }
+	                }
+                }
+		    }
+                
+	    }
+
+        return {};
+    }
+
+    bool getInfoObjectForPathInternal(StringArray& path, const var& parent, Array<var>& matches) const
+    {
+        if(path.size() == 1)
+        {
+            auto pid = path[0];
+
+            if(pid.startsWith("Page ") || parent[mpid::ID].toString() == pid)
+            {
+	            matches.add(parent);
+                return true;
+            }
+        }
+
+        auto thisId = parent[mpid::ID].toString();
+            
+        if(thisId.isEmpty() || thisId == path[0])
+        {
+            if(auto ar = parent[mpid::Children].getArray())
+	        {
+                if(thisId.isNotEmpty() || path[0].startsWith("Page "))
+                {
+                    path.remove(0);
+                }
+
+                auto found = false;
+
+                for(auto& c: *ar)
+                {
+                    found |= getInfoObjectForPathInternal(path, c, matches);
+                    
+                    
+                }
+
+                return found;
+	        }
+        }
+
+        return false;
+    }
+
+    var getInfoObjectForPath(const String& path) const
+    {
+        auto multiMatch = path.containsChar('[');
+        int multiMatchIndex = 0;
+        auto pToUse = path;
+
+        if(multiMatch)
+        {
+	        pToUse = path.upToFirstOccurrenceOf("[", false, false);
+            multiMatchIndex = path.fromLastOccurrenceOf("[", false, false).getIntValue();
+        }
+            
+
+	    auto sa = StringArray::fromTokens(pToUse, ".", "");
+
+        auto pageIndex = sa[0].getTrailingIntValue()-1;
+
+        Array<var> matches;
+
+        if(isPositiveAndBelow(pageIndex, pageListInfo->size()))
+        {
+	        auto page = pageListInfo->getUnchecked(pageIndex);
+            
+            getInfoObjectForPathInternal(sa, page, matches);
+        }
+
+        if(isPositiveAndBelow(multiMatchIndex, matches.size()))
+        {
+	        return matches[multiMatchIndex];
+        }
+
+        return {};
+    }
+
     int getNumPages() const { return pages.size(); }
     bool removeCurrentPage();
     void addListPageWithJSON();
+
+    void cancel()
+    {
+	    cancelButton.triggerClick(sendNotificationAsync);
+    }
 
     void rebuildPagesFromJSON();
 
@@ -327,6 +500,15 @@ public:
         return *p;
     }
 
+    bool useGlobalAppDataDirectory() const
+    {
+#if JUCE_MAC
+        return (bool)getGlobalProperty(mpid::UseGlobalAppData);
+#else
+        return false;
+#endif
+    }
+
     Result getCurrentResult();
     void showFirstPage();
 	void setFinishCallback(const std::function<void()>& f);
@@ -339,6 +521,8 @@ public:
     void setProperty(const Identifier& id, const var& newValue);
     void setStyleData(const MarkdownLayout::StyleData& sd);
     bool navigate(bool forward);
+
+    void onStateDestroy(NotificationType mode = sendNotificationAsync);
 
     String getStringFromModalInput(const String& message, const String& prefilledValue);
 
@@ -362,12 +546,15 @@ public:
 	        g.setFont(GLOBAL_MONOSPACE_FONT());
 		}
 
-        if(currentlyEditedPage != nullptr)
-		{
-			auto b = getLocalArea(currentlyEditedPage, currentlyEditedPage->getLocalBounds()).expanded(2.0f);
-			g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.5f));
-			g.drawRoundedRectangle(b.toFloat(), 3.0f, 1.0f);
-		}
+        for(auto& s: mouseSelector.selection.getItemArray())
+        {
+            if(auto c = findPageBaseForInfoObject(s))
+            {
+	            auto b = getLocalArea(c, c->getLocalBounds()).expanded(2.0f);
+				g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.5f));
+				g.drawRoundedRectangle(b.toFloat(), 3.0f, 1.0f);
+            }
+        }
     }
 #endif
 
@@ -424,21 +611,25 @@ public:
 
     bool nonContainerPopup(const var& infoObject);
 
-    bool showEditor(const var& infoObject);
+    bool showEditor(const Array<var>& infoObjects);
 #endif
 
     void gotoPage(int newIndex);
 
     void logMessage(MessageType messageType, const String& message)
     {
-        auto isMessageThread = MessageManager::getInstanceWithoutCreating()->isThisTheMessageThread();
-        auto n = isMessageThread ? sendNotificationSync : sendNotificationAsync;
-	    getEventLogger().sendMessage(n, messageType, message);
+        getState().logMessage(messageType, message);
     }
 
     LambdaBroadcaster<bool>& getEditModeBroadcaster() { return editModeBroadcaster; }
 
     LambdaBroadcaster<MessageType, String>& getEventLogger() { return getState().eventLogger; }
+
+    void callAdditionalChangeCallback()
+    {
+        if(additionalChangeCallback)
+            additionalChangeCallback();
+    }
 
     
 
@@ -528,11 +719,54 @@ public:
 
     bool useHelpBubble = false;
 
+#if HISE_MULTIPAGE_INCLUDE_EDIT
+
+    LambdaBroadcaster<Array<var>> selectionUpdater;
+
+    struct MouseSelector: public MouseListener,
+						  public LassoSource<var>,
+						  public ChangeListener	
+    {
+        MouseSelector(Dialog& parent);
+
+        ~MouseSelector() override;
+
+        void changeListenerCallback(ChangeBroadcaster* source) override;
+        void findLassoItemsInArea (Array<var>& itemsFound, const Rectangle<int>& area) override;
+
+        SelectedItemSet<var>& getLassoSelection() override
+        {
+	        return selection;
+        }
+
+        void mouseDrag(const MouseEvent& e) override;
+        void mouseUp(const MouseEvent& e) override;
+        void mouseDown(const MouseEvent& event) override;
+
+        Dialog& parent;
+        LassoComponent<var> lasso;
+        uint64 lastHash = 0;
+        SelectedItemSet<var> selection;
+    } mouseSelector;
+#endif
+
+    
+
     void loadStyleFromPositionInfo();
 
     bool& getSkipRebuildFlag() { return skipRebuild; }
 
+    using PlaceholderCreator = std::function<multipage::PlaceholderContentBase*(multipage::Dialog&, const var&)>;
+
+	Array<std::pair<Identifier, PlaceholderCreator>> placeholderFactory;
+
+	void registerPlaceholder(const Identifier& typeId, const PlaceholderCreator& pc);
+
+    PlaceholderContentBase* createDynamicPlaceholder(const var& infoObject);
+
 private:
+
+    std::function<void()> additionalChangeCallback;
 
     bool skipRebuild = false;
 
@@ -562,7 +796,7 @@ private:
     TextButton cancelButton;
     TextButton nextButton;
     TextButton prevButton;
-    State* runThread;
+    WeakReference<State> runThread;
     
     ScopedPointer<PageBase> currentPage;
     Rectangle<int> top, bottom, center;

@@ -121,6 +121,17 @@ void BackendProcessorEditor::removeContainer()
 	container = nullptr;
 }
 
+void BackendProcessorEditor::newHisePresetLoaded()
+{
+	auto rw = GET_BACKEND_ROOT_WINDOW(this);
+
+	if(auto jsp = JavascriptMidiProcessor::getFirstInterfaceScriptProcessor(getBackendProcessor()))
+	{
+		BackendPanelHelpers::ScriptingWorkspace::setGlobalProcessor(rw, jsp);
+		BackendPanelHelpers::showWorkspace(rw, BackendPanelHelpers::Workspace::ScriptingWorkspace, sendNotification);
+	}
+}
+
 
 void BackendProcessorEditor::preloadStateChanged(bool isPreloading)
 {
@@ -314,8 +325,6 @@ void BackendProcessorEditor::clearPreset()
 {
 	setPluginPreviewWindow(nullptr);
 
-	
-
 	clearModuleList();
     container = nullptr;
 	isLoadingPreset = true;
@@ -327,14 +336,8 @@ void BackendProcessorEditor::clearPreset()
 
 	owner->killAndCallOnLoadingThread([rw](Processor* p) 
 	{
-		p->getMainController()->clearPreset(); 
-		auto jsp = dynamic_cast<BackendProcessor*>(p->getMainController())->createInterface(600, 500);
-
-		MessageManager::callAsync([rw, jsp]()
-		{
-			BackendPanelHelpers::ScriptingWorkspace::setGlobalProcessor(rw, jsp);
-			BackendPanelHelpers::showWorkspace(rw, BackendPanelHelpers::Workspace::ScriptingWorkspace, sendNotification);
-		});
+		p->getMainController()->clearPreset(sendNotificationAsync); 
+		dynamic_cast<BackendProcessor*>(p->getMainController())->createInterface(600, 500);
 
 		return SafeFunctionCall::OK;
 	});
@@ -356,6 +359,8 @@ MainTopBar::MainTopBar(FloatingTile* parent) :
 	ComponentWithHelp(parent->getBackendRootWindow()),
 	quickPlayButton(parent->getMainController())
 {
+	parent->getMainController()->getScriptComponentEditBroadcaster()->getLearnBroadcaster().addListener(*this, updateLearnConnection);
+
     {
         static const String iconData = "1231.nT6K8C1XOzhI.Xiuo5BLOQw..FZHKonCfUDaflA5ZgT2fXIOnsCvqXzRIkTRIR6KqEMqoZZW3Jrm4X+CHC.l..H.Oux8tFOdxKC2FOm8bR3BooKRTgCDZTULUICVnHwzkHMMpHvGRSlhtHUAENTY5AEoJZHhhzjFQanxzEKVHMYhHnfhJThvD8HZBGlZLYhTFbrPiJZRGtXQ4nhJSrVPiJCRQXlhrDMYgiAZTQSHgEVd33++ZPiZCTjlbwiHXr3vLCcDYpxJyrxjIiCGOr3xEINLnQYgxjJtPcqywoQQohjkoHLJ7SF7xLLFlyAZTWTgBYhjvbQRDoHIpHX14HfFkjKTHko.MpHXrD.t5Y6uo1IqZp+m62Vy6kIl26I+p5HdtqPugnoYaod3hOx7sKxZeriO9F5N5uBc80I+4xXb6aPatn57A.nMu2.TNDnQ0A0ENMpKSDMo9pWkJhJSQdfREJQDcQRRlGN3BPfvV1Ne4pp5HtLHt0KqwC11xpfCHZTT.fFkjKRXQS2qew64yEhqsOH.nuT14FO39Xi7siWrCmF0DpKlplHu+tdH3GBt398+7xli58KdI28gMd8cHZcesuLi2q+yNuP72KpKt10saokpiNl6022mkt8cdO6N1WxYtqm7gPX6ZmW27x9tap9ipuV53+My3g4p586h8c+A45+zbs9rzvy46Nndc8w6QH8AMiAhe9puZqoaOdtcJ1Gzd7ldJUDS.s6As6wWrw0Zrx2y6O9wJtdLWcs58K6tNAq5Kkwmm+ki3yuZ61iWm5yq2isfOedB79v9i+mDvPjIE.gADDF5y3WrC09paHrgKE2KWnEWctP56Vu4L1d4He4hOmwaKNgvas5cOGeKD8J3zf.71E53itluv6gM+5mzejuE+fYiHFSbcOK2N+KiBP5V0yc7BDHRnFKQvD.P.PBHAffBgUCLPmQzCHPxncQNk0LAyfEP.4e.crDLxWc0WF5xtPFRNdIN.YbvPxg.izdDQ0OFsF.8tW.dHDORrxg.xnII9jvLBOiG.5xHMxKzzW5eIAiQQ7QA.ZNIBVaFFC49JWE68dx3vmK3QlsG5Aj3bx2.sDjDxJZdlbSipcOtlpvZ9ynMyokW04FbbA4elRMTvGenL8E3CcC1rniW8.olNcQqZ0dUAKJL9hS.xVlOGNzeFmcIRRfWmI1G1N1Vyjn7gJEJ8p8wk9CB7Sba93wICBAYSY7dimsAEOtWJWZo79rvXEo9R05vezh1mgnofRMeLSOesGGWvDXiBfcwW2GUhFKkudo5a13pvfbuX6aqPrmRKOIEFvqBkJLRgMfEVBg4pEFi7hdvFSUq+fSEbuEIdO1pZoy9XNhbLXw0uyymhMUKY0XU6dItKXlqLRn9Vyi67m2g.25Xf9Zya2Rlisb4K.AwJVcVvJltxYOsENFgsjJC0NQBh2sQnn3yxAt36ygkRxPiTzxJ8nUkEVyInJQDQZTENGpx7FhTX.Q2CwoilgfdW0miH8zaJM.laTSj7gIvdAzXS0inQOXyAbwLM3qJ9L.w54NEkbcL7QWjAkEH6rxfWl17OfOChcRzDf94aoxO9ydFGMhmNV9Ot7chYIwjtd+o9Opj8qjTxtUd2Usjj+XtTv4uq0nF52r2SNUJqf6lN.";
         
@@ -415,18 +420,6 @@ MainTopBar::MainTopBar(FloatingTile* parent) :
 	pluginPreviewButton->setShape(f.createPath("Plugin Preview"), false, true, true);
 	pluginPreviewButton->addListener(this);
 
-	addAndMakeVisible(scriptingWorkSpaceButton = new HiseShapeButton("Scripting Workspace", this, f));
-	scriptingWorkSpaceButton->setTooltip("Show Scripting Workspace");
-	scriptingWorkSpaceButton->setCommandToTrigger(getRootWindow()->getBackendProcessor()->getCommandManager(), BackendCommandTarget::WorkspaceScript, true);
-
-	addAndMakeVisible(samplerWorkSpaceButton = new HiseShapeButton("Sampler Workspace", this, f));
-	samplerWorkSpaceButton->setTooltip("Show Sampler Workspace");
-	samplerWorkSpaceButton->setCommandToTrigger(getRootWindow()->getBackendProcessor()->getCommandManager(), BackendCommandTarget::WorkspaceSampler, true);
-
-	addAndMakeVisible(customWorkSpaceButton = new HiseShapeButton("Custom Workspace", this, f));
-	customWorkSpaceButton->setTooltip("Show Scripting Workspace");
-	customWorkSpaceButton->setCommandToTrigger(getRootWindow()->getBackendProcessor()->getCommandManager(), BackendCommandTarget::WorkspaceCustom, true);
-	
 	addAndMakeVisible(peakMeter = new ClickablePeakMeter(getRootWindow()->getMainSynthChain()));
 
 	addAndMakeVisible(settingsButton = new ShapeButton("Audio Settings", Colours::white.withAlpha(0.6f), Colours::white.withAlpha(0.8f), Colours::white));
@@ -516,9 +509,58 @@ void MainTopBar::paint(Graphics& g)
 	g.drawText(infoText, b.toFloat(), Justification::right);
 }
 
+
+
 void MainTopBar::paintOverChildren(Graphics& g)
 {
+
 	ComponentWithHelp::paintHelp(g);
+
+	if(currentlyLearnedScriptComponent.isNotEmpty())
+	{
+		static const unsigned char source[] = { 110,109,238,124,158,67,137,193,202,66,108,20,190,136,67,137,193,202,66,98,223,255,131,67,205,12,170,66,8,236,122,67,117,83,141,66,23,217,106,67,137,193,111,66,98,127,106,86,67,94,58,57,66,244,29,62,67,45,178,27,66,231,91,37,67,94,58,27,66,98,4,22,37,
+67,88,57,27,66,33,208,36,67,88,57,27,66,127,138,36,67,94,58,27,66,98,29,218,214,66,217,78,28,66,39,177,82,66,137,129,162,66,156,68,36,66,244,189,12,67,98,2,43,4,66,190,223,53,67,115,104,59,66,219,153,98,67,100,59,155,66,244,13,128,67,98,84,99,213,66,
+223,255,141,67,129,117,21,67,254,84,148,67,166,59,61,67,248,115,144,67,98,104,49,96,67,68,11,141,67,111,82,127,67,18,163,129,67,88,217,136,67,223,111,100,67,108,49,168,158,67,223,111,100,67,98,76,23,158,67,8,44,103,67,74,124,157,67,137,225,105,67,233,
+214,156,67,92,143,108,67,98,80,189,145,67,14,77,141,67,188,244,118,67,174,151,158,67,121,169,68,67,92,127,163,67,98,240,7,17,67,82,136,168,67,186,9,178,66,180,104,160,67,25,4,75,66,184,14,142,67,98,190,159,194,65,111,98,129,67,70,182,211,64,90,100,96,
+67,188,116,195,63,170,17,60,67,98,23,217,182,192,12,98,8,67,129,149,81,65,100,59,163,66,72,225,77,66,250,254,52,66,98,147,88,163,66,231,251,132,65,156,132,245,66,131,192,74,62,193,106,36,67,0,0,0,0,98,162,197,36,67,0,0,0,0,131,32,37,67,0,0,0,0,100,123,
+37,67,0,0,0,0,98,236,17,88,67,143,194,117,62,254,228,132,67,219,249,198,65,115,72,148,67,143,2,131,66,98,221,116,152,67,74,12,153,66,152,222,155,67,100,59,177,66,238,124,158,67,137,193,202,66,99,109,43,103,37,67,141,55,67,67,98,193,138,29,67,141,55,67,
+67,197,0,22,67,16,24,64,67,236,113,16,67,55,137,58,67,98,209,226,10,67,29,250,52,67,84,195,7,67,33,112,45,67,84,195,7,67,182,147,37,67,98,84,195,7,67,117,147,37,67,84,195,7,67,117,147,37,67,84,195,7,67,51,147,37,67,98,84,195,7,67,133,11,21,67,186,41,
+21,67,31,165,7,67,104,177,37,67,31,165,7,67,98,254,244,103,67,31,165,7,67,113,157,192,67,31,165,7,67,113,157,192,67,31,165,7,67,108,113,157,192,67,240,167,160,66,108,80,77,1,68,86,110,37,67,108,113,157,192,67,180,136,122,67,108,113,157,192,67,141,55,
+67,67,98,113,157,192,67,141,55,67,67,12,130,103,67,141,55,67,67,43,103,37,67,141,55,67,67,99,101,0,0 };
+
+		Colour c1 = JUCE_LIVE_CONSTANT_OFF(Colour(0xEE383838));
+		Colour c2 = JUCE_LIVE_CONSTANT_OFF(Colour(0xEE404040));
+
+		g.setGradientFill(ColourGradient(c1, 0.0f, 0.0f, c2, 0.0f, (float)getHeight(), false));
+		g.fillAll();
+
+		Path p;
+		p.loadPathFromData(source, sizeof(source));
+
+		g.setColour(Colour(0xFFBBBBBB));
+		g.setFont(GLOBAL_BOLD_FONT());
+
+		String t;
+
+		t << "Please click any knob with the connection overlay in order to assign it to the UI element " << currentlyLearnedScriptComponent;
+		
+		auto b = getLocalBounds().toFloat();
+		g.drawText(t, b, Justification::centred);
+
+		b = b.reduced(20, 0);
+
+		g.setColour(Colour(SIGNAL_COLOUR));
+
+		PathFactory::scalePath(p, b.removeFromRight(b.getHeight()).reduced(5));
+
+		g.fillPath(p);
+
+		PathFactory::scalePath(p, b.removeFromLeft(b.getHeight()).reduced(5));
+
+		g.fillPath(p);
+
+		return;
+	}
 
 	if (preloadState)
 	{
@@ -532,6 +574,8 @@ void MainTopBar::paintOverChildren(Graphics& g)
 		g.setFont(GLOBAL_BOLD_FONT());
 		
 		auto b = getLocalBounds().toFloat().withSizeKeepingCentre(800.0f, (float)getHeight()).reduced(10.0f, 5.0f);
+
+		
 
 		g.drawText(preloadMessage, b.removeFromBottom(18.0f), Justification::centred);
 
@@ -577,10 +621,6 @@ void MainTopBar::resized()
 	
     layoutButton->setVisible(false);
     
-    scriptingWorkSpaceButton->setVisible(false);
-    samplerWorkSpaceButton->setVisible(false);
-    customWorkSpaceButton->setVisible(false);
-
     auto bWidth = getHeight() * 2;
     
     frontendArea = getLocalBounds().withSizeKeepingCentre(bWidth * 3, getHeight());
@@ -913,7 +953,8 @@ struct ToolkitPopup : public Component,
         sustainButton.setToggleModeWithColourChange(true);
         
 		keyboard.setUseVectorGraphics(true);
-        keyboard.setRange(24, 127);
+        keyboard.setRange(36, 127);
+		keyboard.setShowOctaveNumber(true);
 
         addAndMakeVisible(clockController);
         
@@ -938,7 +979,7 @@ struct ToolkitPopup : public Component,
             auto l = keyboard.getRangeStart() + delta;
             auto h = jmin(127, keyboard.getRangeEnd() + delta);
             
-            if(l > 0)
+            if(l > 0 && l <= 64)
                 keyboard.setRange(l, h);
         }
 	}
@@ -1194,9 +1235,22 @@ void MainTopBar::togglePopup(PopupType t, bool shouldShow)
 				int w = (int)((float)content->getContentWidth()*scaleFactor);
 				int h = (int)((float)content->getContentHeight()*scaleFactor);
 
-				c->setSize(w, h);
-
 				c->setName("Interface Preview");
+
+				content->interfaceSizeBroadcaster.addListener(*c, [mc](Component& oc, int w, int h)
+				{
+					auto scaleFactor = dynamic_cast<GlobalSettingManager*>(mc)->getGlobalScaleFactor();
+
+					oc.getChildComponent(0)->setSize(w, h);
+
+					w = roundToInt((float)w * scaleFactor);
+					h = roundToInt((float)h * scaleFactor);
+
+					oc.setSize(w, h);
+					oc.resized();
+				});
+				
+				
 			}
 
 
@@ -1271,29 +1325,7 @@ void MainTopBar::togglePopup(PopupType t, bool shouldShow)
 void MainTopBar::applicationCommandInvoked(const ApplicationCommandTarget::InvocationInfo& info)
 {
 
-	switch (info.commandID)
-	{
-	case BackendCommandTarget::WorkspaceScript: 
-		mainWorkSpaceButton->setToggleStateAndUpdateIcon(false);
-		scriptingWorkSpaceButton->setToggleStateAndUpdateIcon(true);
-		samplerWorkSpaceButton->setToggleStateAndUpdateIcon(false);
-		customWorkSpaceButton->setToggleStateAndUpdateIcon(false);
-		break;
-	case BackendCommandTarget::WorkspaceSampler:
-		mainWorkSpaceButton->setToggleStateAndUpdateIcon(false);
-		scriptingWorkSpaceButton->setToggleStateAndUpdateIcon(false);
-		samplerWorkSpaceButton->setToggleStateAndUpdateIcon(true);
-		customWorkSpaceButton->setToggleStateAndUpdateIcon(false);
-		break;
-		
-	case BackendCommandTarget::WorkspaceCustom:
-		mainWorkSpaceButton->setToggleStateAndUpdateIcon(false);
-		scriptingWorkSpaceButton->setToggleStateAndUpdateIcon(false);
-		samplerWorkSpaceButton->setToggleStateAndUpdateIcon(false);
-		customWorkSpaceButton->setToggleStateAndUpdateIcon(true);
-		break;
-	}
-
+	
 }
 
 MainTopBar::QuickPlayComponent::QuickPlayComponent(MainController* mc):

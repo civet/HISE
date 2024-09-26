@@ -210,8 +210,25 @@ namespace hise { using namespace juce;
 
 	void MacroControlBroadcaster::addMacroConnectionListener(MacroConnectionListener* l)
 	{
-        ScopedLock sl(listenerLock);
-		macroListeners.addIfNotAlreadyThere(l);
+		{
+			ScopedLock sl(listenerLock);
+			macroListeners.addIfNotAlreadyThere(l);
+		}
+        
+
+#if USE_BACKEND
+		for(int i = 0; i < HISE_NUM_MACROS; i++)
+		{
+			auto md = getMacroControlData(i);
+
+			for(int j = 0; j < md->getNumParameters(); j++)
+			{
+				auto pc = md->getParameter(j);
+
+				l->macroConnectionChanged(i, pc->getProcessor(), pc->getParameter(), true);
+			}
+		}
+#endif
 	}
 
 	void MacroControlBroadcaster::removeMacroConnectionListener(MacroConnectionListener* l)
@@ -329,12 +346,13 @@ MacroControlBroadcaster::MacroControlBroadcaster(ModulatorSynthChain *chain):
 
 
 /** Creates a new Parameter data object. */
-MacroControlBroadcaster::MacroControlledParameterData::MacroControlledParameterData(Processor *p, int  parameter_, const String &parameterName_, NormalisableRange<double> range_, bool readOnly):
+MacroControlBroadcaster::MacroControlledParameterData::MacroControlledParameterData(Processor *p, int  parameter_, const String &parameterName_, const ValueToTextConverter& converter_, NormalisableRange<double> range_, bool readOnly):
     ControlledObject(p->getMainController()),
 	controlledProcessor(p),
 	id(p->getId()),
 	parameter(parameter_),
 	parameterName(parameterName_),
+	textConverter(converter_),
 	range(range_),
 	parameterRange(range_),
 	inverted(false),
@@ -346,6 +364,7 @@ MacroControlBroadcaster::MacroControlledParameterData::MacroControlledParameterD
   id(""),
   parameter(-1),
   parameterName(""),
+  textConverter({}),
   controlledProcessor(nullptr),
   range(0.0, 1.0),
   parameterRange(0.0, 1.0),
@@ -424,6 +443,7 @@ ValueTree MacroControlBroadcaster::MacroControlledParameterData::exportAsValueTr
 	v.setProperty("step", parameterRange.interval, nullptr);
 	v.setProperty("inverted", inverted, nullptr);
 	v.setProperty("readonly", readOnly, nullptr);
+	v.setProperty("converter", textConverter.toString(), nullptr);
 
 	return v;
 }
@@ -444,9 +464,11 @@ void MacroControlBroadcaster::MacroControlledParameterData::restoreFromValueTree
     
     parameterRange.skew = v.getProperty("skew", 1.0);
     parameterRange.interval = v.getProperty("step", 0.0);
+	range.skew = parameterRange.skew;
     inverted = v.getProperty("inverted", false);
     readOnly = v.getProperty("readonly", true);
-    
+	textConverter = ValueToTextConverter::fromString(v.getProperty("converter", ""));
+
     controlledProcessor = findProcessor(getMainController()->getMainSynthChain(), id);
 
     if(controlledProcessor == nullptr)
@@ -761,7 +783,7 @@ bool MacroControlBroadcaster::MacroControlData::hasParameter(Processor *p, int p
 }
 
 
-void MacroControlBroadcaster::MacroControlData::addParameter(Processor *p, int parameterId, const String &parameterName, NormalisableRange<double> range, bool readOnly, bool isUsingCustomData, NotificationType n)
+void MacroControlBroadcaster::MacroControlData::addParameter(Processor *p, int parameterId, const String &parameterName, const ValueToTextConverter& converter, NormalisableRange<double> range, bool readOnly, bool isUsingCustomData, NotificationType n)
 {
     if(p->getMainController()->getMacroManager().isExclusive())
     {
@@ -782,6 +804,7 @@ void MacroControlBroadcaster::MacroControlData::addParameter(Processor *p, int p
     auto nd = new MacroControlledParameterData(p,
                                                parameterId,
                                                parameterName,
+											   converter,
                                                range,
                                                readOnly);
     
@@ -880,7 +903,8 @@ int MacroControlBroadcaster::getMacroControlIndexForProcessorParameter(const Pro
 void MacroControlBroadcaster::addControlledParameter(int macroControllerIndex, 
 							const String &processorId, 
 							int parameterId, 
-							const String &parameterName,
+							const String& parameterName,
+					        const ValueToTextConverter& converter,
 							NormalisableRange<double> range,
 							bool readOnly)
 {
@@ -898,7 +922,7 @@ void MacroControlBroadcaster::addControlledParameter(int macroControllerIndex,
 			}
 		}
 
-		macroControls[macroControllerIndex]->addParameter(p, parameterId, parameterName, range, readOnly);
+		macroControls[macroControllerIndex]->addParameter(p, parameterId, parameterName, converter, range, readOnly);
 
 		p->sendOtherChangeMessage(dispatch::library::ProcessorChangeEvent::Macro);
 		thisAsSynth->sendOtherChangeMessage(dispatch::library::ProcessorChangeEvent::Macro);

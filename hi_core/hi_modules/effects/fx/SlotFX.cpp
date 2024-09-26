@@ -264,6 +264,7 @@ public:
 		ProcessorEditorBody(pe)
 	{
 		getEffect()->effectUpdater.addListener(*this, update, true);
+		getEffect()->errorBroadcaster.addListener(*this, onError);
 
 		auto networkList = getEffect()->getModuleList();
 
@@ -276,10 +277,17 @@ public:
 		addAndMakeVisible(selector);
 
 		selector.setText(getEffect()->currentEffect, dontSendNotification);
-
 		rebuildParameters();
 
 	};
+
+	static void onError(HardcodedMasterEditor& editor, const String& r)
+	{
+		editor.prepareError = r;
+		editor.repaint();
+	}
+
+	String prepareError;
 
 	static void update(HardcodedMasterEditor& ed, String newEffect, bool complexDataChanged, int numParameters)
 	{
@@ -296,6 +304,9 @@ public:
 
 	String getErrorMessage()
 	{
+		if(prepareError.isNotEmpty())
+			return prepareError;
+
 		if (getEffect()->opaqueNode != nullptr && !getEffect()->channelCountMatches)
 		{
 			String e; 
@@ -319,18 +330,9 @@ public:
 			g.setColour(Colours::white.withAlpha(0.5f));
 			g.setFont(GLOBAL_BOLD_FONT());
 
-			Rectangle<float> ta;
-
-			if (currentParameters.isEmpty())
-			{
-				ta = getLocalBounds().toFloat();
-				ta.removeFromLeft(selector.getWidth());
-			}
-			else
-				ta = selector.getBounds().translated(0, 40).toFloat();
-
-			g.drawText("Error!", ta, Justification::centredTop);
-			g.drawText(errorMessage, ta, Justification::centredBottom);
+			auto ta = body.toFloat();
+			
+			g.drawText("ERROR: " + errorMessage, ta, Justification::centred);
 		}
 
 	}
@@ -339,6 +341,9 @@ public:
 	{
 		currentEditors.clear();
 		currentParameters.clear();
+
+		if(!getErrorMessage().isEmpty())
+			return;
 
 		if (auto on = getEffect()->opaqueNode.get())
 		{
@@ -381,6 +386,8 @@ public:
 		updateGui();
 	}
 
+	Rectangle<int> body;
+
 	void resized() override
 	{
 		auto b = getLocalBounds().reduced(Margin);
@@ -392,6 +399,8 @@ public:
 		b.removeFromLeft(Margin);
 
 		selector.setBounds(sb.removeFromTop(28));
+
+		body = b;
 
 		Rectangle<int> currentRow;
 
@@ -454,6 +463,9 @@ HardcodedSwappableEffect::HardcodedSwappableEffect(MainController* mc, bool isPo
 	mc_(mc)
 {
 	tempoSyncer.publicModValue = &modValue;
+
+	
+
 	polyHandler.setTempoSyncer(&tempoSyncer);
 	mc->addTempoListener(&tempoSyncer);
 
@@ -535,7 +547,9 @@ bool HardcodedSwappableEffect::setEffect(const String& factoryId, bool /*unused*
 			}
 		});
 
-		prepareOpaqueNode(newNode);
+		auto ok = prepareOpaqueNode(newNode);
+
+		errorBroadcaster.sendMessage(sendNotificationAsync, ok.getErrorMessage());
 
 		{
 			SimpleReadWriteLock::ScopedWriteLock sl(lock);
@@ -932,10 +946,17 @@ bool HardcodedSwappableEffect::hasHardcodedTail() const
 	return false;
 }
 
-void HardcodedSwappableEffect::prepareOpaqueNode(OpaqueNode* n)
+Result HardcodedSwappableEffect::prepareOpaqueNode(OpaqueNode* n)
 {
+	if(auto rm = dynamic_cast<scriptnode::routing::GlobalRoutingManager*>(asProcessor().getMainController()->getGlobalRoutingManager()))
+		tempoSyncer.additionalEventStorage = &rm->additionalEventStorage;
+
 	if (n != nullptr && asProcessor().getSampleRate() > 0.0 && asProcessor().getLargestBlockSize() > 0)
 	{
+#if USE_BACKEND
+		factory->clearError();
+#endif
+
 		PrepareSpecs ps;
 		ps.numChannels = numChannelsToRender;
 		ps.blockSize = asProcessor().getLargestBlockSize();
@@ -949,10 +970,12 @@ void HardcodedSwappableEffect::prepareOpaqueNode(OpaqueNode* n)
 
 		if (e.error != Error::OK)
 		{
-			jassertfalse;
+			return Result::fail(ScriptnodeExceptionHandler::getErrorMessage(e));
 		}
 #endif
 	}
+
+	return Result::ok();
 }
 
 
@@ -1116,7 +1139,9 @@ void HardcodedMasterFX::prepareToPlay(double sampleRate, int samplesPerBlock)
 
 	SimpleReadWriteLock::ScopedReadLock sl(lock);
 
-	prepareOpaqueNode(opaqueNode.get());
+	auto ok = prepareOpaqueNode(opaqueNode.get());
+
+	errorBroadcaster.sendMessage(sendNotificationAsync, ok.getErrorMessage());
 }
 
 juce::Path HardcodedMasterFX::getSpecialSymbol() const
@@ -1244,9 +1269,9 @@ void HardcodedTimeVariantModulator::calculateBlock(int startSample, int numSampl
 {
     SimpleReadWriteLock::ScopedReadLock sl(lock);
 
-    if(opaqueNode != nullptr)
+    if(opaqueNode != nullptr && channelCountMatches)
     {
-        auto* modData = internalBuffer.getWritePointer(0, startSample);
+		auto* modData = internalBuffer.getWritePointer(0, startSample);
         FloatVectorOperations::clear(modData, numSamples);
         
         ProcessDataDyn d(&modData, numSamples, 1);
@@ -1266,7 +1291,9 @@ void HardcodedTimeVariantModulator::prepareToPlay(double sampleRate, int samples
     TimeVariantModulator::prepareToPlay(sampleRate, samplesPerBlock);
     
     SimpleReadWriteLock::ScopedReadLock sl(lock);
-    prepareOpaqueNode(opaqueNode.get());
+    auto ok = prepareOpaqueNode(opaqueNode.get());
+
+	errorBroadcaster.sendMessage(sendNotificationAsync, ok.getErrorMessage());
 }
 
 hise::ProcessorEditorBody *HardcodedTimeVariantModulator::createEditor(hise::ProcessorEditor *parentEditor)
@@ -1308,7 +1335,7 @@ bool HardcodedTimeVariantModulator::checkHardcodedChannelCount()
     return false;
 }
 
-void HardcodedTimeVariantModulator::prepareOpaqueNode(scriptnode::OpaqueNode *n)
+Result HardcodedTimeVariantModulator::prepareOpaqueNode(scriptnode::OpaqueNode *n)
 {
     if (n != nullptr && asProcessor().getSampleRate() > 0.0 && asProcessor().getLargestBlockSize() > 0)
     {
@@ -1325,10 +1352,12 @@ void HardcodedTimeVariantModulator::prepareOpaqueNode(scriptnode::OpaqueNode *n)
 
         if (e.error != Error::OK)
         {
-            jassertfalse;
+            return Result::fail(ScriptnodeExceptionHandler::getErrorMessage(e));
         }
 #endif
     }
+
+	return Result::ok();
 }
 
 
@@ -1426,7 +1455,9 @@ void HardcodedPolyphonicFX::prepareToPlay(double sampleRate, int samplesPerBlock
 
 	VoiceEffectProcessor::prepareToPlay(sampleRate, samplesToUse);
 	SimpleReadWriteLock::ScopedReadLock sl(lock);
-	prepareOpaqueNode(opaqueNode.get());
+	auto ok = prepareOpaqueNode(opaqueNode.get());
+
+	errorBroadcaster.sendMessage(sendNotificationAsync, ok.getErrorMessage());
 }
 
 void HardcodedPolyphonicFX::startVoice(int voiceIndex, const HiseEvent& e)

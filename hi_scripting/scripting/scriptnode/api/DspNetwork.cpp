@@ -70,6 +70,19 @@ DspNetwork::DspNetwork(hise::ProcessorWithScriptingContent* p, ValueTree data_, 
 
 	tempoSyncer.publicModValue = &networkModValue;
 
+	auto mc_ = p->getMainController_();
+
+	addPostInitFunction([mc_, this]()
+	{
+		if(auto rm = dynamic_cast<scriptnode::routing::GlobalRoutingManager*>(mc_->getGlobalRoutingManager()))
+		{
+			tempoSyncer.additionalEventStorage = &rm->additionalEventStorage;
+			return true;
+		}
+		
+		return false;
+	});
+	
 	polyHandler.setTempoSyncer(&tempoSyncer);
 	getScriptProcessor()->getMainController_()->addTempoListener(&tempoSyncer);
 
@@ -175,18 +188,6 @@ DspNetwork::DspNetwork(hise::ProcessorWithScriptingContent* p, ValueTree data_, 
 
 	setEnableUndoManager(enableUndo);
 
-	idUpdater.setCallback(data, { PropertyIds::ID }, valuetree::AsyncMode::Synchronously, 
-		[this](ValueTree v, Identifier id)
-	{
-		if (auto n = getNodeForValueTree(v))
-		{
-			auto oldId = n->getCurrentId();
-			auto newId = v[PropertyIds::ID].toString();
-
-			changeNodeId(data, oldId, newId, getUndoManager());
-		}
-	});
-
 	exceptionResetter.setTypeToWatch(PropertyIds::Nodes);
 	exceptionResetter.setCallback(data, valuetree::AsyncMode::Synchronously, [this](ValueTree v, bool wasAdded)
 	{
@@ -245,8 +246,6 @@ DspNetwork::~DspNetwork()
 	selectionUpdater = nullptr;
 	nodes.clear();
     nodeFactories.clear();
-	
-	
 
 	getMainController()->removeTempoListener(&tempoSyncer);
 }
@@ -1889,7 +1888,7 @@ struct EmbeddedSnippetCodeProvider: public snex::ui::WorkbenchData::CodeProvider
 
 	bool saveCode(const String& s) override
 	{
-		jassertfalse;
+        ef->getFileDocument().replaceAllContent(s);
 		return true;
 	}
 
@@ -2163,9 +2162,16 @@ String ScriptnodeExceptionHandler::getErrorMessage(Error e)
 	case Error::NoMatchingParent:	 return "Can't find suitable parent node";
 	case Error::RingBufferMultipleWriters: return "Buffer used multiple times";
 	case Error::NodeDebuggerEnabled: return "Node is being debugged";
+	case Error::NoGlobalManager: return "No global routing manager present.";
 	case Error::DeprecatedNode:		 return DeprecationChecker::getErrorMessage(e.actual);
 	case Error::IllegalPolyphony: return "Can't use this node in a polyphonic network";
 	case Error::IllegalMonophony: return "Can't use this node in a monophonic network";
+	case Error::OldFaustVersion:  
+		s << "Your Faust version is too old (";
+		s << String(e.actual / 1000000) << "." << String((e.actual % 1000000) / 1000) << "." << String(e.actual % 1000) << "). ";
+		s << "Min required version: ";
+		s << String(e.expected / 1000000) << "." << String((e.expected % 1000000) / 1000) << "." << String(e.expected % 1000) << ". ";
+		return s;
 	case Error::IllegalFaustNode: return "Faust is disabled. Enable faust and recompile HISE.";
 	case Error::IllegalFaustChannelCount: 
 		s << "Faust node channel mismatch. Expected channels: `" << String(e.expected) << "`";
@@ -2507,9 +2513,16 @@ void ScriptnodeExceptionHandler::validateMidiProcessingContext(NodeBase* b)
 		auto pp = b->getParentNode();
 		auto isInMidiChain = b->getRootNetwork()->isPolyphonic();
 
-		while (pp != nullptr && !isInMidiChain)
+		while (pp != nullptr)
 		{
 			isInMidiChain |= pp->getValueTree()[PropertyIds::FactoryPath].toString().contains("midichain");
+
+			if(pp->getValueTree()[PropertyIds::FactoryPath].toString().contains("no_midi"))
+			{
+				isInMidiChain = false;
+				break;
+			}
+
 			pp = pp->getParentNode();
 		}
 

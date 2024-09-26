@@ -217,7 +217,7 @@ struct MacroPropertyEditor : public Component,
 	};
 
 	MacroPropertyEditor(NodeBase* b, ValueTree data, Identifier childDataId = PropertyIds::Connections) :
-		parameterProperties(b, false, data),
+    parameterProperties(b, false, data, {}),
 		node(b),
 		connectionContent(*this),
 		containerMode(dynamic_cast<NodeContainer*>(b) != nullptr || childDataId == PropertyIds::ModulationTargets),
@@ -454,6 +454,10 @@ public:
 			addButton("add", this, f)
 		{
 			addAndMakeVisible(dragButton);
+
+			dragButton.setTooltip("Enable drag mode to draw connections between the parameters");
+			addButton.setTooltip("Create a new parameter");
+
 			addAndMakeVisible(addButton);
 			dragButton.setToggleModeWithColourChange(true);
 			setSize(32, 40);
@@ -591,7 +595,13 @@ public:
 
 			triggerAsyncUpdate();
 		}
-		void valueTreePropertyChanged(ValueTree&, const Identifier&) override {}
+		void valueTreePropertyChanged(ValueTree&, const Identifier& id) override 
+        {
+            if(id == PropertyIds::ID)
+            {
+                rebuildParameters();
+            }
+        }
 		void valueTreeParentChanged(ValueTree&) override {}
 		
 		void rebuildParameters()
