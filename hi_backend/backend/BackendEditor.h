@@ -67,6 +67,7 @@ class BackendProcessorEditor: public FloatingTileContent,
 							  public Component,
 							  public GlobalScriptCompileListener,
                               public Label::Listener,
+							  public MainController::LockFreeDispatcher::PresetLoadListener,
 							  public MainController::SampleManager::PreloadListener
 {
 public:
@@ -95,7 +96,7 @@ public:
 
 	void removeContainer();
 
-	
+	void newHisePresetLoaded() override;
 
 	void preloadStateChanged(bool isPreloading) override;
 
@@ -340,6 +341,14 @@ public:
 		ComponentWithHelp::openHelp();
 	}
 
+	static void updateLearnConnection(MainTopBar& b, ScriptComponent* c)
+	{
+		auto n = c != nullptr ? c->getName().toString() : String();
+
+		b.currentlyLearnedScriptComponent = n;
+		b.repaint();
+	}
+
 	void buttonClicked(Button* b) override;
 
 	void resized() override;
@@ -355,6 +364,8 @@ public:
 	
 
 private:
+
+	String currentlyLearnedScriptComponent;
 
 	bool preloadState = false;
 	double preloadProgress = 0.0;
@@ -381,8 +392,10 @@ private:
 		  ProcessorPeakMeter(p),
 		  ControlledObject(p->getMainController())
 		{
+			vuMeter->setTooltip("Click to show the Audio Analyser");
 			setRepaintsOnMouseActivity(true);
 			vuMeter->addMouseListener(this, true);
+			
 		}
 
 		void mouseEnter(const MouseEvent& event) override
@@ -431,11 +444,6 @@ private:
     ScopedPointer<ShapeButton> customPopupButton;
     ScopedPointer<ShapeButton> keyboardPopupButton;
 
-	ScopedPointer<HiseShapeButton> mainWorkSpaceButton;
-	ScopedPointer<HiseShapeButton> scriptingWorkSpaceButton;
-	ScopedPointer<HiseShapeButton> samplerWorkSpaceButton;
-	ScopedPointer<HiseShapeButton> customWorkSpaceButton;
-
 	struct QuickPlayComponent: public Component,
 							   public ControlledObject,
 							   public SettableTooltipClient,
@@ -464,6 +472,8 @@ private:
 	} quickPlayButton;
 
     ScopedPointer<Drawable> hiseIcon;
+
+	JUCE_DECLARE_WEAK_REFERENCEABLE(MainTopBar);
 };
 
 

@@ -88,26 +88,9 @@ public:
 		}
 	}
 
-	static dispatch::DispatchType getDispatchType(const var& syncValue, bool getDontForFalse)
-	{
-		using Type = dispatch::DispatchType;
+	static dispatch::DispatchType getDispatchType(const var& syncValue, bool getDontForFalse);
 
-		if ((int)syncValue == SyncMagicNumber)
-			return Type::sendNotificationSync;
-
-		if ((int)syncValue == AsyncMagicNumber)
-			return Type::sendNotificationAsync;
-
-		if ((int)syncValue == AsyncHiPriorityMagicNumber)
-			return Type::sendNotificationAsyncHiPriority;
-
-		return (bool)syncValue ? Type::sendNotificationSync : (getDontForFalse ? Type::dontSendNotification : Type::sendNotificationAsync);
-	}
-
-	static bool isSynchronous(const var& syncValue)
-	{
-		return getDispatchType(syncValue, false) == dispatch::DispatchType::sendNotificationSync;
-	}
+	static bool isSynchronous(const var& syncValue);
 
 	static var getVarFromPoint(Point<float> pos);
 
@@ -127,6 +110,14 @@ public:
 
 	static Justification getJustification(const String& justificationName, Result* r = nullptr);
 
+	static melatonin::ShadowParameters getShadowParameters(const var& shadowData, Result* r = nullptr);
+	
+	static Colour getColourFromVar(const var& value);
+
+	static var convertStyleSheetProperty(const var& value, const String& type);
+	
+	
+
 	static Array<Identifier> getGlobalApiClasses();
 
 	static void loadPathFromData(Path& p, var data);
@@ -138,6 +129,7 @@ public:
 	static String getValueType(const var& v);
 
 	static ValueTree getApiTree();
+	
 
 #endif
 };
@@ -158,11 +150,7 @@ namespace ScriptingObjects
 	{
 	public:
 
-		ScriptBuffer(ProcessorWithScriptingContent* p, int size) :
-			ConstScriptingObject(p, 0)
-		{
-			jassertfalse;
-		};
+		ScriptBuffer(ProcessorWithScriptingContent* p, int size);;
 
 		Identifier getObjectName() const override { return "Buffer"; }
 
@@ -243,11 +231,7 @@ namespace ScriptingObjects
 
 		int getNumChildElements() const override { return 128; }
 
-		DebugInformationBase* getChildElement(int index) override
-		{
-			IndexedValue i(this, index);
-			return new LambdaValueInformation(i, i.getId(), {}, DebugInformation::Type::Constant, getLocation());
-		}
+		DebugInformationBase* getChildElement(int index) override;
 		// ================================================================================================ API METHODS
 
 		/** Fills the MidiList with a number specified with valueToFill. */
@@ -1022,7 +1006,7 @@ namespace ScriptingObjects
 
 		snex::ExternalData::DataType getDataType() const { return type; }
 
-		String getDebugName() const override { return "Script" + snex::ExternalData::getDataTypeName(getDataType()); };
+		String getDebugName() const override { return getObjectName().toString(); };
 		String getDebugValue() const override { return getDebugName(); };
 		
 
@@ -1173,7 +1157,7 @@ namespace ScriptingObjects
 
 		ScriptRingBuffer(ProcessorWithScriptingContent* pwsc, int index, ExternalDataHolder* other=nullptr);
 
-		Identifier getObjectName() const override { return Identifier("ScriptRingBuffer"); }
+		Identifier getObjectName() const override { return Identifier("DisplayBuffer"); }
 
 		// ============================================================================================================
 
@@ -2548,8 +2532,17 @@ namespace ScriptingObjects
 		/** Register a scripting callback to be executed when a OSC message that matches the subAddress is received. */
 		void addOSCCallback(String oscSubAddress, var callback);
 
+		/** Removes a OSC callback for the given address. */
+		bool removeOSCCallback(String oscSubAddress);
+
 		/** Send an OSC message to the output port. */
 		bool sendOSCMessage(String oscSubAddress, var data);
+
+		/** Writes a value into the given slot that can be retrieved using the event ID. */
+		bool setEventData(int eventId, int dataSlot, double value);
+
+		/** Returns the double value that is written to the data slot using setEventData. If the event ID wasn't written, it will return undefined. */
+		var getEventData(int eventId, int dataSlot) const;
 
 		// =============================================================================================
 
@@ -2623,6 +2616,9 @@ namespace ScriptingObjects
 		/** Registers a function that will be executed whenever a value is sent through the cable. */
 		void registerCallback(var callbackFunction, var synchronous);
 
+		/** Deregisteres a callback from the cable. */
+		bool deregisterCallback(var callbackFunction);
+		
 		/** Connects the cable to a macro control. */
 		void connectToMacroControl(int macroIndex, bool macroIsTarget, bool filterRepetitions);
 

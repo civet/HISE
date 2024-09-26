@@ -41,27 +41,10 @@ using namespace juce;
 #if HISE_MULTIPAGE_INCLUDE_EDIT
 void addOnValueCodeEditor(const var& infoObject, Dialog::PageInfo& rootList)
 {
-    rootList.addChild<Button>({
-        { mpid::ID, "UseOnValue" },
-        { mpid::Text, "UseOnValue" },
-        { mpid::Value, infoObject[mpid::UseOnValue]},
-        { mpid::Help, "Whether to use the `element.onValue(value)` function defined in the `Code` property"}
-    });
-
     auto code = infoObject[mpid::Code].toString();
 
-    if(code.isEmpty())
-    {
-	    code << "Console.print(value);";
-        infoObject.getDynamicObject()->setProperty(mpid::Code, code);
-    }
-
-	rootList.addChild<CodeEditor>({
-		{ mpid::ID, "Code" },
-		{ mpid::Text, "Code" },
-		{ mpid::Value, infoObject[mpid::Code] },
-        { mpid::Help, "This can be used to attach a callback to any value change. This is not HiseScript but vanilla JS!  \n> If you want to log something to the console, use `Console.print(message);`." } 
-	});
+    
+    
     
 }
 
@@ -87,58 +70,93 @@ template <typename T> void addBasicComponents(T& obj, Dialog::PageInfo& rootList
         { mpid::Help, "Whether to allow user input for the element" }
     });
 
-    auto& col1 = rootList;
+    
 
-    col1.addChild<TextInput>({
+    auto& vlist = rootList.addChild<List>({
+        { mpid::Text, "Value Properties"},
+        { mpid::ID, "valueList"},
+        { mpid::Foldable, true }
+    });
+
+    auto& tlist = rootList.addChild<List>({
+        { mpid::Text, "Text Properties"},
+        { mpid::ID, "textList"},
+        { mpid::Foldable, true }
+    });
+
+    auto& clist = rootList.addChild<List>({
+        { mpid::Text, "CSS Properties"},
+        { mpid::Foldable, true }
+    });
+
+    vlist.addChild<TextInput>({
 		{ mpid::ID, "InitValue" },
 		{ mpid::Text, "InitValue" },
         { mpid::Value, obj.getPropertyFromInfoObject(mpid::InitValue) },
 		{ mpid::Help, "The initial value for the UI element" }
 	});
 
-    col1.addChild<Button>({
+    
+
+    vlist.addChild<Button>({
         { mpid::ID, "UseInitValue" },
         { mpid::Text, "UseInitValue" },
         { mpid::Value, obj.getPropertyFromInfoObject(mpid::UseInitValue) },
         { mpid::Help, "Whether to initialise the state object with the init value" }
     });
 
+    vlist.addChild<TextInput>({
+		{ mpid::ID, mpid::Code.toString() },
+		{ mpid::Text, mpid::Code.toString() },
+        { mpid::Value, obj.getPropertyFromInfoObject(mpid::Code) },
+        { mpid::Items, "{BIND::functionName}" },
+		{ mpid::Help, "The callback that is executed using the syntax `{BIND::myMethod}`" }
+	});
+
     auto& col = rootList;
 
-    col.addChild<TextInput>({
+    tlist.addChild<TextInput>({
 		{ mpid::ID, "Text" },
 		{ mpid::Text, "Text" },
 		{ mpid::Help, "The label next to the " + T::getStaticId() }
 	});
 
-    rootList.addChild<TextInput>({
+    tlist.addChild<TextInput>({
         { mpid::ID, "Help" },
         { mpid::Text, "Help" },
         { mpid::Multiline, true },
         { mpid::Help, "The markdown content that will be shown when you click on the help button" }
     });
 
-    col.addChild<TextInput>({
+    tlist.addChild<TextInput>({
 		{ mpid::ID, mpid::Tooltip.toString() },
 		{ mpid::Text, mpid::Tooltip.toString() },
 		{ mpid::Help, "The tooltip that will be applied when hovering the element" }
 	});
 
-    col1.addChild<TextInput>({
+    clist.addChild<TextInput>({
 		{ mpid::ID, mpid::Class.toString() },
 		{ mpid::Text, mpid::Class.toString() },
         { mpid::Value, obj.getPropertyFromInfoObject(mpid::Class) },
 		{ mpid::Help, "The CSS class selectors for the UI element" }
 	});
 
-    col1.addChild<TextInput>({
+    clist.addChild<TextInput>({
 		{ mpid::ID, mpid::Style.toString() },
 		{ mpid::Text, mpid::Style.toString() },
         { mpid::Value, obj.getPropertyFromInfoObject(mpid::Style) },
 		{ mpid::Help, "Additional inline properties that will be used by the UI element" }
 	});
 
-    col1.addChild<Button>({
+    clist.addChild<Choice>({
+		{ mpid::ID, mpid::Visibility.toString() },
+		{ mpid::Text, mpid::Visibility.toString() },
+        { mpid::Items, Dialog::PageBase::getVisibilityNames().joinIntoString("\n") },
+        { mpid::Value, obj.getPropertyFromInfoObject(mpid::Visibility) },
+		{ mpid::Help, "Whether to show or hide the element" }
+	});
+
+    clist.addChild<Button>({
 		{ mpid::ID, mpid::NoLabel.toString() },
 		{ mpid::Text, mpid::NoLabel.toString() },
         { mpid::Value, obj.getPropertyFromInfoObject(mpid::NoLabel) },
@@ -170,6 +188,8 @@ LabelledComponent::LabelledComponent(Dialog& r, int width, const var& obj, Compo
         setIsInvisibleWrapper(true);
         updateStyleSheetInfo(true);
 	    Helpers::setFallbackStyleSheet(*c, "flex-grow: 1; height: 32px;width: 100%;");
+
+        changeClass(simple_css::Selector(".no-label"), true);
     }
     
     if(!obj.hasProperty(mpid::Enabled))
@@ -226,6 +246,9 @@ void LabelledComponent::postInit()
 	    initValue = infoObject[mpid::InitValue];
     }
 
+    if(!infoObject.hasProperty(mpid::Code))
+        infoObject.getDynamicObject()->setProperty(mpid::Code, "");
+
 	init();
 
     
@@ -241,6 +264,11 @@ void LabelledComponent::postInit()
 void LabelledComponent::resized()
 {
     FlexboxComponent::resized();
+
+    if(helpButton != nullptr)
+	{
+		setHiseShapeButtonColours(*helpButton);
+	}
 }
 
 #if HISE_MULTIPAGE_INCLUDE_EDIT
@@ -248,36 +276,32 @@ void Button::createEditor(Dialog::PageInfo& rootList)
 {
     addBasicComponents<Button>(*this, rootList, "A Button lets you enable / disable a boolean option or can be grouped together with other tickboxes to create a radio group with an exclusive selection option");
 
-	rootList.addChild<Button>({
+    auto& vlist = rootList.getChild("valueList");
+
+    auto& tlist = rootList.getChild("textList");
+
+	vlist.addChild<Button>({
 		{ mpid::ID, "Required" },
 		{ mpid::Text, "Required" },
 		{ mpid::Help, "If this is enabled, the tickbox must be selected in order to proceed to the next page, otherwise it will show a error message.\n> This is particularly useful for eg. accepting TOC" }
 	});
 
-    auto& col = rootList;
+    
 
-    col.addChild<Choice>({
+    rootList.addChild<Choice>({
         { mpid::ID, "ButtonType" },
         { mpid::Text, "ButtonType" },
         { mpid::Items, "Toggle\nText\nIcon" },
         { mpid::Help, "The appearance of the button. " }
     });
 
-    col.addChild<Choice>({
-        { mpid::ID, "Icon" },
-        { mpid::Text, "Icon" },
-        { mpid::Value, infoObject[mpid::Icon]},
-        { mpid::Items, rootDialog.getState().getAssetReferenceList(Asset::Type::Text) },
-        { mpid::Help, "The SVG data for the icon (only used with `ButtonType == Icon`). Must be a Base64 encoded SVG path." }
-    });
-
-    col.addChild<Button>({
+    vlist.addChild<Button>({
 		{ mpid::ID, "Trigger" },
 		{ mpid::Text, "Trigger" },
 		{ mpid::Help, "If this is enabled, the button will fire the action with the same ID when you click it, otherwise it will store its value (either on/off or radio group index in the global state" }
 	});
 
-    addOnValueCodeEditor(infoObject, rootList);
+    addOnValueCodeEditor(infoObject, vlist);
 }
 #endif
 
@@ -287,8 +311,10 @@ Button::Button(Dialog& r, int width, const var& obj):
 	LabelledComponent(r, width, obj, createButton(obj))
 {
     getComponent<Component>().setWantsKeyboardFocus(false);
-    
-	Helpers::writeClassSelectors(getComponent<juce::Button>(), { ".toggle-button" }, true);
+
+    auto isText = infoObject[mpid::ButtonType].toString() == "Text";
+
+    Helpers::writeClassSelectors(getComponent<juce::Button>(), { (isText ? ".text-button" : ".toggle-button") }, true);
     
 	loadFromInfoObject(obj);
 }
@@ -305,7 +331,7 @@ void Button::buttonClicked(juce::Button* b)
 
 	    Component::callRecursive<Action>(&rootDialog, [thisId](Action* a)
 	    {
-		    if(a->getId() == thisId)
+		    if(a->getId().toString() == thisId.toString())
 		    {
 			    a->perform();
                 return true;
@@ -559,6 +585,8 @@ void Choice::postInit()
 		    case ValueMode::Text: writeState(cb.getText()); break;
 		    case ValueMode::Index: writeState(cb.getSelectedItemIndex()); break;
 		    case ValueMode::Id: writeState(cb.getSelectedId()); break;
+		    case ValueMode::numValueModes: 
+            default: break;
 		    }
 	    }
 
@@ -570,6 +598,8 @@ void Choice::postInit()
     case ValueMode::Text: cb.setText(t.toString(), dontSendNotification); break;
     case ValueMode::Index: cb.setSelectedItemIndex((int)t, dontSendNotification); break;
     case ValueMode::Id: cb.setSelectedId((int)t, dontSendNotification); break;
+    case ValueMode::numValueModes: 
+    default: break;
     }
     
     getComponent<SubmenuComboBox>().refreshTickState();
@@ -584,6 +614,8 @@ Result Choice::checkGlobalState(var globalState)
     case ValueMode::Text:  writeState(cb.getText()); break;
     case ValueMode::Index: writeState(cb.getSelectedItemIndex()); break;
     case ValueMode::Id:    writeState(cb.getSelectedId()); break;
+    case ValueMode::numValueModes:
+    default: break;
     }
     
 	return Result::ok();
@@ -628,117 +660,26 @@ void Choice::createEditor(Dialog::PageInfo& rootList)
     addOnValueCodeEditor(infoObject, rootList);
 }
 
+using EditorType = AllEditor;
 
-void CodeEditor::AllEditor::addRecursive(mcl::TokenCollection::List& tokens, const String& parentId, const var& obj)
+#else
+struct EditorType: public Component
 {
-	auto thisId = parentId;
-
-	if(obj.isMethod())
-		thisId << "(args)";
-
-	auto isState = thisId.startsWith("state");
-	auto isElement = thisId.startsWith("element");
-
-	auto prio = 100;
-
-	if(isState)
-		prio += 10;
-
-	if(isElement)
-		prio += 20;
-
-	auto stateToken = new mcl::TokenCollection::Token(thisId);
-	stateToken->c = isState ? Colour(0xFFBE6093) : isElement ? Colour(0xFF22BE84) : Colour(0xFF88BE14);
-
-	if(isState)
-		stateToken->markdownDescription << "Global state variable  \n> ";
-
-	stateToken->markdownDescription << "Value: `" << obj.toString() << "`";
-
-	auto apiObject = dynamic_cast<ApiObject*>(obj.getDynamicObject());
-
-	stateToken->priority = prio;
-	tokens.add(stateToken);
-
-	if(auto no = obj.getDynamicObject())
-	{
-		for(auto& nv: no->getProperties())
-		{
-			String p = parentId;
-			p << "." << nv.name;
-			addRecursive(tokens, p, nv.value);
-
-			if(apiObject != nullptr)
-				tokens.getLast()->markdownDescription = apiObject->getHelp(nv.name);
-		}
-	}
-	if(auto ar = obj.getArray())
-	{
-		int idx = 0;
-
-		for(auto& nv: *ar)
-		{
-			String p = parentId;
-			p << "[" << String(idx++) << "]";
-			addRecursive(tokens, p, nv);
-		}
-	}
-}
-
-void CodeEditor::AllEditor::TokenProvider::addTokens(mcl::TokenCollection::List& tokens)
-{
-	if(p == nullptr)
-		return;
-
-	auto infoObject = p->findParentComponentOfClass<Dialog>()->getState().globalState;
-
-	DBG(JSON::toString(infoObject));
-
-	if(auto ms = p->findParentComponentOfClass<ComponentWithSideTab>())
-	{
-		auto* state = ms->getMainState();
-
-		if(engine == nullptr)
-			engine = state->createJavascriptEngine();
-
-		for(auto& nv: engine->getRootObjectProperties())
-		{
-			addRecursive(tokens, nv.name.toString(), nv.value);
-		}
-	}
-}
+    EditorType(const String& unused, var unused2) {};
+    String syntax;
+    Result compile() { return Result::fail("not implemented"); }
+	CodeDocument doc;
+};
 #endif
 
-CodeEditor::AllEditor::AllEditor(const String& syntax):
-	codeDoc(doc),
-	editor(new mcl::TextEditor(codeDoc))
-{
-	if(syntax == "CSS")
-	{
-		editor->tokenCollection = new mcl::TokenCollection("CSS");
-		editor->tokenCollection->setUseBackgroundThread(false);
-		editor->setLanguageManager(new simple_css::LanguageManager(codeDoc));
-	}
-	else if(syntax == "HTML")
-	{
-		editor->setLanguageManager(new mcl::XmlLanguageManager());
-	}
-	else
-	{
-		editor->tokenCollection = new mcl::TokenCollection("Javascript");
-		editor->tokenCollection->setUseBackgroundThread(false);
-		editor->tokenCollection->addTokenProvider(new TokenProvider(this));
-	}
-            
-	addAndMakeVisible(editor);
-}
 
 CodeEditor::CodeEditor(Dialog& r, int w, const var& obj):
-	LabelledComponent(r, w, obj, new AllEditor(obj[mpid::Syntax].toString()))
+	LabelledComponent(r, w, obj, new EditorType(obj[mpid::Syntax].toString(), var()))
 {
-	Helpers::writeInlineStyle(getComponent<AllEditor>(), "height: 360px;");
+	Helpers::writeInlineStyle(getComponent<EditorType>(), "height: 360px;");
 	setSize(w, 360);
 }
+
 
 void CodeEditor::postInit()
 {
@@ -746,84 +687,20 @@ void CodeEditor::postInit()
 
 	auto code = getValueFromGlobalState(var()).toString();
 
-	getComponent<AllEditor>().doc.replaceAllContent(code);
+    getComponent<EditorType>().syntax = infoObject[mpid::Syntax].toString();
+
+	getComponent<EditorType>().doc.replaceAllContent(code);
 }
 
-bool CodeEditor::keyPressed(const KeyPress& k)
-{
-	if(k == KeyPress::F5Key)
-	{
-		compile();
-		return true;
-	}
 
-	return false;
-}
 
 Result CodeEditor::compile()
 {
-	auto syntax = infoObject[mpid::Syntax].toString();
-
-	auto& editor = *getComponent<AllEditor>().editor.get();
-
-	auto code = getComponent<AllEditor>().doc.getAllContent();
-
-	auto* state = findParentComponentOfClass<ComponentWithSideTab>()->getMainState();
-
-	if(code.startsWith("${"))
-		code = state->loadText(code, true);
-
-	if(syntax == "CSS")
-	{
-		simple_css::Parser p(code);
-		auto ok = p.parse();
-		editor.clearWarningsAndErrors();
-		editor.setError(ok.getErrorMessage());
-
-		for(const auto& w: p.getWarnings())
-			editor.addWarning(w);
-
-		writeState(code);
-
-		if(ok.wasOk())
-		{
-			if(auto d = state->currentDialog.get())
-			{
-				d->positionInfo.additionalStyle = code;
-				d->loadStyleFromPositionInfo();
-			}
-		}
-		else
-			state->eventLogger.sendMessage(sendNotificationSync, MessageType::Javascript, ok.getErrorMessage());
-            
-		return ok;
-	}
-	else if (syntax == "HTML")
-	{
-		writeState(code);
-
-		if(auto d = state->currentDialog.get())
-		{
-			d->refreshCurrentPage();
-		}
-
-		return Result::ok();
-	}
-	else
-	{
-		writeState(code);
-
-		auto e = state->createJavascriptEngine();
-		auto ok = e->execute(code);
-
-		getComponent<AllEditor>().editor->setError(ok.getErrorMessage());
-
-		if(!ok.wasOk())
-			state->eventLogger.sendMessage(sendNotificationSync, MessageType::Javascript, ok.getErrorMessage());
-
-		return ok;
-	}
+    auto code = getComponent<EditorType>().doc.getAllContent();
+    writeState(code);
+    return getComponent<EditorType>().compile();
 }
+
 
 ColourChooser:: ColourChooser(Dialog& r, int w, const var& obj):
 	LabelledComponent(r, w, obj, new ColourSelector(ColourSelector::ColourSelectorOptions::showColourspace | ColourSelector::showColourAtTop | ColourSelector::showAlphaChannel | ColourSelector::ColourSelectorOptions::editableColour, 2, 0))
@@ -866,8 +743,6 @@ void ColourChooser::changeListenerCallback(ChangeBroadcaster* source)
 
 Result ColourChooser::checkGlobalState(var globalState)
 {
-	
-        
 	return Result::ok();
 }
 
@@ -951,7 +826,13 @@ struct TextInput::Autocomplete: public Component,
         setSize(ed.getWidth() + 20, ItemHeight * 4 + 5 + 20);
         
         setWantsKeyboardFocus(true);
-        parent->getTopLevelComponent()->addChildComponent(this);
+
+        auto top = TopLevelWindowWithOptionalOpenGL::findRoot(parent);
+
+        if(top == nullptr)
+            top = parent->getTopLevelComponent();
+
+        top->addChildComponent(this);
         auto topLeft = ed.getTopLevelComponent()->getLocalArea(&ed, ed.getLocalBounds()).getTopLeft();
         
         setTopLeftPosition(topLeft.getX() - 10, topLeft.getY() + ed.getHeight());
@@ -1163,7 +1044,9 @@ void TextInput::textEditorReturnKeyPressed(TextEditor& e)
 	if(currentAutocomplete != nullptr)
 		currentAutocomplete->setAndDismiss();
 
-    findParentComponentOfClass<Dialog>()->grabKeyboardFocusAsync();
+    
+
+    rootDialog.grabKeyboardFocusAsync();
 
     callOnValueChange("submit");
 }
@@ -1258,12 +1141,27 @@ void TextInput::postInit()
     
     if(editor.isMultiLine())
     {
-	    
+        auto h = jmax(80, (int)infoObject[mpid::Height]);
+        simple_css::FlexboxComponent::Helpers::writeInlineStyle(*this, "height:"+String(h)+"px;");
+        
+        String s = Helpers::getInlineStyle(editor);
+
+    	s << "vertical-align:top;";
+
+        if(infoObject[mpid::NoLabel])
+            s << "height:"+String(h)+"px;";
+        else
+            s << "height:100%;";
+
+	    simple_css::FlexboxComponent::Helpers::writeInlineStyle(editor, s);
+        
     }
     else
     {
 	    editor.setFont(Dialog::getDefaultFont(*this).first);
-		editor.setIndents(8, 8);
+		//editor.setIndents(8, 8);
+
+        
     }
 
     auto text = getValueFromGlobalState("");
@@ -1294,8 +1192,11 @@ void TextInput::postInit()
 
     if(infoObject[mpid::Autofocus])
     {
+        editor.selectAll();
 	    editor.grabKeyboardFocusAsync();
     }
+
+    editor.repaint();
 }
 
 Result TextInput::checkGlobalState(var globalState)
@@ -1380,8 +1281,7 @@ void TextInput::createEditor(Dialog::PageInfo& rootList)
     rootList.addChild<TextInput>({
 		{ mpid::ID, "Height" },
 		{ mpid::Text, "Height" },
-        { mpid::Multiline, true },
-		{ mpid::Help, "The height (in pixels) for the editor (if used in multiline mode)." },
+        { mpid::Help, "The height (in pixels) for the editor (if used in multiline mode)." },
         { mpid::Value, (int)infoObject.getProperty(mpid::Height, 80) }
 	});
     
@@ -1389,6 +1289,7 @@ void TextInput::createEditor(Dialog::PageInfo& rootList)
 		{ mpid::ID, "Items" },
 		{ mpid::Text, "Items" },
         { mpid::Multiline, true },
+        { mpid::Height, 100},
 		{ mpid::Help, "A string with one item per line that will show up in the autocomplete popup." },
         { mpid::Value, autocompleteItems.joinIntoString("\n") }
 	});
@@ -1418,7 +1319,7 @@ Result TextInput::loadFromInfoObject(const var& obj)
 
 	if(obj.hasProperty(mpid::Items))
 	{
-        if(obj[mpid::ID].toString() == "{DYNAMIC}")
+        if(obj[mpid::Items].toString() == "{DYNAMIC}")
         {
 	        useDynamicAutocomplete = true;
         }
@@ -1436,7 +1337,7 @@ void TextInput::showAutocomplete(const String& currentText)
 {
     if(useDynamicAutocomplete)
     {
-        if(auto hd = findParentComponentOfClass<HardcodedDialogWithState>())
+        if(auto hd = findParentComponentOfClass<HardcodedDialogWithStateBase>())
             autocompleteItems = hd->getAutocompleteItems(id);
         else
             autocompleteItems = {};
@@ -1459,9 +1360,11 @@ void TextInput::dismissAutocomplete()
 {
 	stopTimer();
 #if JUCE_DEBUG
-    currentAutocomplete->setVisible(false);
+    if(currentAutocomplete != nullptr)
+		currentAutocomplete->setVisible(false);
 #else
-	Desktop::getInstance().getAnimator().fadeOut(currentAutocomplete, 150);
+    if(currentAutocomplete != nullptr)
+		Desktop::getInstance().getAnimator().fadeOut(currentAutocomplete, 150);
 #endif
 	currentAutocomplete = nullptr;
 }
@@ -1533,7 +1436,26 @@ struct BetterFileSelector: public simple_css::FlexboxComponent,
                 FileChooser fc("Select directory", currentFile, wc, true);
 
 	            if(fc.browseForDirectory())
-                    setCurrentFile(fc.getResult(), sendNotificationAsync);
+                {
+                    auto dir = fc.getResult();
+                    
+                    while((dir.getNumberOfChildFiles(File::findFiles) > 0 || dir.containsSubDirectories()) && save)
+                    {
+                        if(NativeMessageBox::showOkCancelBox(MessageBoxIconType::QuestionIcon, "Use existing directory", "The directory you've selected is not empty. Press OK to continue anyway or cancel to choose an empty directory"))
+                            break;
+                                  
+                        if(fc.browseForDirectory())
+                        {
+                            dir = fc.getResult();
+                        }
+                        else
+                        {
+                            return;
+                        }
+                    }
+                    
+                    setCurrentFile(dir, sendNotificationAsync);
+                }
             }
             else
             {
@@ -1646,21 +1568,17 @@ Result FileSelector::checkGlobalState(var globalState)
 {
     auto& fileSelector = getComponent<BetterFileSelector>();
 	auto f = fileSelector.getCurrentFile();
-
+    
     if(f == File() && !fileSelector.fileLabel.isEmpty())
     {
-	    f = File(fileSelector.fileLabel.getText());
-
-        if(isDirectory && !f.isDirectory())
-        {
-            auto i = rootDialog.createModalPopup<MarkdownText>({
-                { mpid::Text, "Do you want to create the directory  \n> " + String(f.getFullPathName()) }
-            });
-            
-	        rootDialog.showModalPopup(true, i);
-        }
+	    f = File(fileSelector.fileLabel.getText());    
     }
-
+    
+    if(isDirectory && !f.isDirectory() && f != File())
+    {
+        f.createDirectory();
+    }
+    
 	if(f != File() && !f.isRoot() && (f.isDirectory() || f.existsAsFile()))
 	{
         writeState(f.getFullPathName());
@@ -1693,7 +1611,7 @@ File FileSelector::getInitialFile(const var& path) const
 {
 	if(path.isString())
 	{
-        auto t = MarkdownText::getString(path.toString(), rootDialog);
+        auto t = MarkdownText::getString(path.toString(), rootDialog.getState());
 		return File(t);
 	}
 	if(path.isInt() || path.isInt64())
@@ -1733,7 +1651,7 @@ void Table::createEditor(Dialog::PageInfo& rootList)
 	rootList.addChild<TextInput>({
 		{ mpid::ID, mpid::Items.toString() },
 		{ mpid::Text, mpid::Items.toString() },
-		{ mpid::Help, "The list of rows - one per line using comma for separating cells" },
+		{ mpid::Help, "The list of rows - one per line using `|` for separating cells" },
 		{ mpid::Multiline, true },
 		{ mpid::Height, 80 },
 		{ mpid::Value, infoObject[mpid::Items] }
@@ -1745,17 +1663,40 @@ void Table::createEditor(Dialog::PageInfo& rootList)
 		{ mpid::Help, "How the table stores the selected item (either the zero based index of the selected row or the `[column, row]` position of the clicked cell" },
 		{ mpid::Items, "Row\nGrid\nFirstColumnText" },
 		{ mpid::Value, infoObject[mpid::ValueMode] },
-		{ mpid::UseOnValue, 0 }
+		
 	});
 
     rootList.addChild<factory::Button>(DefaultProperties::getForSetting(infoObject, mpid::Multiline,
         "Allows selection of multiple rows / cells"));
 
+    rootList.addChild<TextInput>({
+		{ mpid::ID, mpid::EmptyText.toString() },
+		{ mpid::Text, mpid::EmptyText.toString() },
+		{ mpid::Value, infoObject[mpid::EmptyText] },
+        { mpid::Help, "The text that will be displayed if no table content is present." } 
+	});
+
+    rootList.addChild<TextInput>({
+		{ mpid::ID, mpid::Code.toString() },
+		{ mpid::Text, mpid::Code.toString() },
+        { mpid::Value, infoObject[mpid::Code] },
+        { mpid::Items, "{BIND::functionName}" },
+		{ mpid::Help, "The callback that is executed using the syntax `{BIND::myMethod}`" }
+	});
+
 	rootList.addChild<TextInput>({
 		{ mpid::ID, "FilterFunction" },
 		{ mpid::Text, "FilterFunction" },
 		{ mpid::Value, infoObject[mpid::FilterFunction] },
-        { mpid::Help, "A function in the root namespace that will be called to filter the items." } 
+        { mpid::Items, "{BIND::functionName}" },
+        { mpid::Help, "A function that will be called to filter the items" } 
+	});
+
+    rootList.addChild<Button>({
+		{ mpid::ID, mpid::SelectOnClick.toString() },
+		{ mpid::Text, mpid::SelectOnClick.toString() },
+		{ mpid::Value, infoObject[mpid::SelectOnClick] },
+        { mpid::Help, "Whether to fire the value callback on a single mouse click or double click / return key only." } 
 	});
 
 	rootList.addChild<TextInput>({
@@ -1788,6 +1729,14 @@ void TagList::createEditor(Dialog::PageInfo& rootList)
 		{ mpid::Text, "ID" },
 		{ mpid::Value, infoObject[mpid::ID].toString() },
 		{ mpid::Help, "The ID for the element (used as key in the state `var`." }
+	});
+
+    rootList.addChild<TextInput>({
+		{ mpid::ID, mpid::Code.toString() },
+		{ mpid::Text, mpid::Code.toString() },
+        { mpid::Value, infoObject[mpid::Code] },
+        { mpid::Items, "{BIND::functionName}" },
+		{ mpid::Help, "The callback that is executed using the syntax `{BIND::myMethod}`" }
 	});
 
 	rootList.addChild<TextInput>({

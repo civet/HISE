@@ -57,7 +57,9 @@ showChains(false)
     addButton->setToggleStateAndUpdateIcon(false);
 	
 	addCustomButton(addButton);
-	
+
+	window->getBackendProcessor()->getLockFreeDispatcher().addPresetLoadListener(this);
+
 	
 #if 0
 	addAndMakeVisible(foldButton = new ShapeButton("Fold all", Colours::white.withAlpha(0.6f), Colours::white, Colours::white));
@@ -73,12 +75,17 @@ showChains(false)
 #endif
 
 	setOpaque(true);
+
+	newHisePresetLoaded();
 }
 
 PatchBrowser::~PatchBrowser()
 {
 	if(rootWindow != nullptr)
+	{
+		rootWindow->getBackendProcessor()->getLockFreeDispatcher().removePresetLoadListener(this);
 		rootWindow->getModuleListNofifier().removeProcessorChangeListener(this);
+	}
 
 	addButton = nullptr;
 }
@@ -369,7 +376,7 @@ struct GlobalCableCollection : public SearchableListComponent::Collection,
 	};
 
 	GlobalCableCollection(var m, MainController* mc) :
-		Collection(),
+		Collection(0),
 		ControlledObject(mc),
 		SimpleTimer(mc->getGlobalUIUpdater()),
 		manager(dynamic_cast<scriptnode::routing::GlobalRoutingManager*>(m.getObject())),
@@ -393,6 +400,8 @@ struct GlobalCableCollection : public SearchableListComponent::Collection,
 			addAndMakeVisible(items.getLast());
 		}
 	};
+
+	String getSearchTermForCollection() const override { return "GlobalCables"; }
 
 	static void rebuildList(GlobalCableCollection& c, scriptnode::routing::GlobalRoutingManager::SlotBase::SlotType t, StringArray idList)
 	{
@@ -487,7 +496,7 @@ SearchableListComponent::Collection * PatchBrowser::createCollection(int index)
 
 	jassert(index < synths.size());
 
-	return new PatchCollection(synths[index], hierarchies[index], showChains);
+	return new PatchCollection(index, synths[index], hierarchies[index], showChains);
 
 }
 
@@ -586,6 +595,7 @@ void PatchBrowser::paint(Graphics &g)
         }
     }
     
+#if HISE_PAINT_GLOBAL_MOD_CONNECTIONS
     struct GlobalModCablePin
     {
         Processor* p = nullptr;
@@ -656,6 +666,7 @@ void PatchBrowser::paint(Graphics &g)
         
         x += 2.0f;
     }
+#endif
 }
 
 void PatchBrowser::paintOverChildren(Graphics& g)
@@ -700,8 +711,10 @@ void PatchBrowser::toggleFoldAll()
 void PatchBrowser::toggleShowChains()
 {
 	SUSPEND_GLOBAL_DISPATCH(rootWindow->getBackendProcessor(), "toggle patch browser edit mode");
-
+	
 	showChains = !showChains;
+
+	addButton->setToggleStateAndUpdateIcon(showChains);
 	rebuildModuleList(true);
     repaint();
 }
@@ -775,6 +788,23 @@ void PatchBrowser::rebuilt()
 	refreshPopupState();
 }
 
+void PatchBrowser::newHisePresetLoaded()
+{
+	Processor::Iterator<Processor> iter(rootWindow->getBackendProcessor()->getMainSynthChain());
+
+	int counter = 0;
+
+	while(iter.getNextProcessor())
+		counter++;
+
+	auto shouldBeEditable = counter <= 6;
+
+	if(showChains != shouldBeEditable)
+	{
+		toggleShowChains();
+	}
+}
+
 // ====================================================================================================================
 
 PatchBrowser::ModuleDragTarget::ModuleDragTarget(Processor* p_) :
@@ -824,6 +854,9 @@ idUpdater(p->getMainController()->getRootDispatcher(), *this, BIND_MEMBER_FUNCTI
 	
 	closeButton.onClick = [this]()
 	{
+		auto brw = GET_BACKEND_ROOT_WINDOW((&closeButton));
+		brw->getRootFloatingTile()->clearAllPopups();
+
 		auto p = getProcessor();
 		auto c = dynamic_cast<Component*>(this);
 
@@ -862,11 +895,18 @@ idUpdater(p->getMainController()->getRootDispatcher(), *this, BIND_MEMBER_FUNCTI
     
 	bypassed = getProcessor()->isBypassed();
 
+	getProcessor()->addDeleteListener(this);
 	getProcessor()->addNameAndColourListener(&idUpdater, dispatch::sendNotificationAsync);
 }
 
 PatchBrowser::ModuleDragTarget::~ModuleDragTarget()
 {
+	if(getProcessor() == nullptr)
+	{
+		return;
+	}
+
+	getProcessor()->removeDeleteListener(this);
 	getProcessor()->removeBypassListener(this);
 	getProcessor()->removeNameAndColourListener(&idUpdater);
 }
@@ -1153,17 +1193,19 @@ void PatchBrowser::ModuleDragTarget::drawDragStatus(Graphics &g, Rectangle<float
 
 // ====================================================================================================================
 
-PatchBrowser::PatchCollection::PatchCollection(ModulatorSynth *synth, int hierarchy_, bool showChains) :
-ModuleDragTarget(synth),
-hierarchy(hierarchy_)
+PatchBrowser::PatchCollection::PatchCollection(int index, ModulatorSynth *synth, int hierarchy_, bool showChains) :
+  Collection(index),
+  ModuleDragTarget(synth),
+  hierarchy(hierarchy_),
+  id(synth->getId())
 {
 	addAndMakeVisible(peak);
 	addAndMakeVisible(idLabel);
-	addAndMakeVisible(foldButton = new ShapeButton("Fold Overview", Colour(0xFF222222), Colours::white.withAlpha(0.4f), Colour(0xFF222222)));
+	addAndMakeVisible(foldButton = new ShapeButton("Fold Overview", Colour(0xFF222222), Colour(0xFF888888), Colour(0xFF222222)));
 
 	foldButton->setVisible(true);
 
-    setTooltip("Show " + synth->getId() + " editor");
+    setTooltip(synth->getId() + ", Type: " + synth->getType().toString());
     
 	idLabel.setFont(GLOBAL_BOLD_FONT().withHeight(JUCE_LIVE_CONSTANT_OFF(16.0f)));
 
@@ -1292,9 +1334,8 @@ void PatchBrowser::PatchCollection::paint(Graphics &g)
 
     g.setGradientFill(ColourGradient(JUCE_LIVE_CONSTANT_OFF(Colour(0xff303030)), 0.0f, 0.0f,
                                      JUCE_LIVE_CONSTANT_OFF(Colour(0xff212121)), 0.0f, (float)b.getHeight(), false));
-    
 
-    
+	auto isRoot = synth == synth->getMainController()->getMainSynthChain();
     
 	auto iconSpace2 = b.reduced(7.0f);
 
@@ -1305,13 +1346,17 @@ void PatchBrowser::PatchCollection::paint(Graphics &g)
 
 	auto iconSpace = iconSpace2.removeFromLeft(iconSpace2.getHeight());
 
+	if(isRoot && createButton.isVisible())
+	{
+		iconSpace2.removeFromLeft(7);
+	}
+	
 
+	g.fillRoundedRectangle(iconSpace2.reduced(2.0f), 2.0f);
     
-    g.fillRoundedRectangle(iconSpace2.reduced(2.0f), 2.0f);
-    
-    g.setColour(Colours::white.withAlpha(0.1f));
-    g.drawRoundedRectangle(iconSpace2.reduced(2.0f), 1.0f, 1.0f);
-    
+	g.setColour(Colours::white.withAlpha(0.1f));
+	g.drawRoundedRectangle(iconSpace2.reduced(2.0f), 1.0f, 1.0f);
+
 	auto c = synth->getIconColour();
 
 	if (c.isTransparent() && getProcessor()->getMainController()->getMainSynthChain() != getProcessor())
@@ -1320,16 +1365,21 @@ void PatchBrowser::PatchCollection::paint(Graphics &g)
 	if (getProcessor()->isBypassed())
 		c = c.withMultipliedAlpha(0.4f);
 
-	g.setGradientFill(ColourGradient(c.withMultipliedBrightness(1.1f), 0.0f, 7.0f,
+	if(!isRoot)
+	{
+		g.setGradientFill(ColourGradient(c.withMultipliedBrightness(1.1f), 0.0f, 7.0f,
 		c.withMultipliedBrightness(0.9f), 0.0f, 35.0f, false));
 
-	g.fillRoundedRectangle(iconSpace.reduced(2.0f), 2.0f);
+		g.fillRoundedRectangle(iconSpace.reduced(2.0f), 2.0f);
 
-	iconArea = iconSpace.toNearestInt();
+		iconArea = iconSpace.toNearestInt();
 
-	g.setColour(Colour(0xFF222222));
+		g.setColour(Colour(0xFF222222));
 
-	g.drawRoundedRectangle(iconSpace.reduced(2.0f), 2.0f,  1.0f);
+		g.drawRoundedRectangle(iconSpace.reduced(2.0f), 2.0f,  1.0f);
+	}
+
+	
 
     if (isMouseOver(false) || (gotoWorkspace != nullptr && gotoWorkspace->isMouseOver(true)))
     {
@@ -1504,7 +1554,7 @@ lastId(String()),
 hierarchy(hierarchy_),
 lastMouseDown(0)
 {
-    setTooltip("Show " + p->getId() + " editor");
+    setTooltip(p->getId() + ", Type: " + p->getType());
     
 	addAndMakeVisible(closeButton);
 	addAndMakeVisible(createButton);
@@ -1805,9 +1855,23 @@ void PatchBrowser::PatchItem::paint(Graphics& g)
 
 	g.setColour(Colour(0xFF222222));
 
+	if(auto rv = dynamic_cast<snex::Types::VoiceResetter*>(p.get()))
+	{
+		if(!rv->isVoiceResetActive())
+			g.setColour(Colour(0x44222222));
+
+		g.setFont(GLOBAL_BOLD_FONT());
+		g.drawText("!", iconSpace.translated(0.0f, -1.0f), Justification::centred);
+		g.drawEllipse(iconSpace.reduced(JUCE_LIVE_CONSTANT_OFF(3.0f)), 1.5f);
+
+		g.setColour(Colour(0xFF222222));
+	}
+
 	g.drawRoundedRectangle(iconSpace, 2.0f, 2.0f);
 
 	g.setColour(ProcessorHelpers::is<Chain>(p.get()) ? Colours::black.withAlpha(0.6f) : Colours::black);
+
+	
 
 	auto ds = getDragState();
 
@@ -2111,20 +2175,36 @@ PatchBrowser::MiniPeak::~MiniPeak()
 
 void PatchBrowser::MiniPeak::mouseDown(const MouseEvent& e)
 {
+	auto root = GET_BACKEND_ROOT_WINDOW(this)->getRootFloatingTile();
+
+	
+
 	if (type == ProcessorType::Audio)
 	{
 		if(auto rp = dynamic_cast<RoutableProcessor*>(p.get()))
-			rp->editRouting(this);
+		{
+			if(root->setTogglePopupFlag(*this, clicked))
+			{
+				rp->editRouting(this);
+			}
+		}
+			
 	}
     if(type == ProcessorType::Midi)
     {
-        auto pl = dynamic_cast<MidiProcessor*>(p.get())->createEventLogComponent();
-        GET_BACKEND_ROOT_WINDOW(this)->getRootFloatingTile()->showComponentInRootPopup(pl, getParentComponent(), { 100, 35 }, false);
+		if(root->setTogglePopupFlag(*this, clicked))
+		{
+			auto pl = dynamic_cast<MidiProcessor*>(p.get())->createEventLogComponent();
+			root->showComponentInRootPopup(pl, getParentComponent(), { 100, 35 }, false);
+		}
     }
 	if (type == ProcessorType::Mod)
 	{
-		auto pl = new PlotterPopup(p);
-		GET_BACKEND_ROOT_WINDOW(this)->getRootFloatingTile()->showComponentInRootPopup(pl, getParentComponent(), { 100, 35 }, false);
+		if(root->setTogglePopupFlag(*this, clicked))
+		{
+			auto pl = new PlotterPopup(p);
+			root->showComponentInRootPopup(pl, getParentComponent(), { 100, 35 }, false);
+		}
 	}
 }
 
@@ -2487,7 +2567,7 @@ void AutomationDataBrowser::AutomationCollection::paint(Graphics& g)
 AutomationDataBrowser::AutomationCollection::AutomationCollection(MainController* mc, AutomationData::Ptr data_, int index_) :
 	ControlledObject(mc),
 	SimpleTimer(mc->getGlobalUIUpdater()),
-	Collection(),
+	Collection(1),
 	data(data_),
 	NEW_AUTOMATION_WITH_COMMA(listener(mc->getRootDispatcher(), *this, [this](int, double){ this->repaint();}))
 	index(index_)

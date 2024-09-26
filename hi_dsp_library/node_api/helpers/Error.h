@@ -87,10 +87,12 @@ struct Error: public ErrorC
         IllegalCompilation,
         IllegalFaustNode,
         IllegalFaustChannelCount,
+        OldFaustVersion,
         CloneMismatch,
         IllegalMod,
         UnscaledModRangeMismatch,
         UncompiledThirdPartyNode,
+        NoGlobalManager,
         numErrorCodes
     };
     

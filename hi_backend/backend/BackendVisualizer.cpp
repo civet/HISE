@@ -338,7 +338,6 @@ void MainTopBar::ClickablePeakMeter::PopupComponent::performCommand(ToolbarComma
 			currentEditor = infos[0][(int)currentMode]->createEditor(infos[1][(int)currentMode]->rbo);
 
 			addAndMakeVisible(currentEditor);
-			auto tb = contentArea;
 			currentEditor->setBounds(contentArea.withSizeKeepingCentre(currentEditor->getWidth(), currentEditor->getHeight()));
 		}
 	}
@@ -1077,7 +1076,7 @@ String MainTopBar::ClickablePeakMeter::PopupComponent::getHoverText(bool isX, fl
 			}
 			else
 			{
-				s << MidiMessage::getMidiNoteName(roundToInt(hoverValue), true, true, 2);
+				s << MidiMessage::getMidiNoteName(roundToInt(hoverValue), true, true, 3);
 			}
 
 			return s;
@@ -1836,7 +1835,7 @@ void MainTopBar::ClickablePeakMeter::PopupComponent::EnvInfo::calculate(const Au
 	
 	span<float, 2> frame;
 
-	dynamics::envelope_follower follower[2];
+	dynamics::envelope_follower<1> follower[2];
 
 	follower[0].setAttack(0.0);
 	follower[0].setRelease(12.0);

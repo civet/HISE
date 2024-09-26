@@ -518,6 +518,21 @@ public:
 	int getMidiInputLockValue(const Identifier& id) const;
 	void toggleMidiInputLock(const Identifier& propertyId, int lockValue);
 
+	void setDisplayGroupFollowsRRGroup(bool shouldFollow)
+	{
+		if(shouldFollow != displayGroupFollowsRRGroup)
+		{
+			displayGroupFollowsRRGroup = shouldFollow;
+
+			if(shouldFollow)
+				setDisplayedGroup(getCurrentRRGroup()-1, true, {}, sendNotificationAsync);
+		}
+	}
+
+	bool isDisplayGroupFollowingRRGroup() const { return displayGroupFollowsRRGroup; }
+
+	bool displayGroupFollowsRRGroup = false;
+
 	CriticalSection &getSamplerLock() {	return lock; }
 
 	SimpleReadWriteLock& getIteratorLock() { return iteratorLock; };
@@ -751,7 +766,9 @@ public:
 	double getCurrentTimestretchRatio() const;
 
 	PolyHandler& getSyncVoiceHandler() { return syncVoiceHandler; }
-	
+
+	void refreshReleaseStartFlag();
+
 private:
 
 	scriptnode::PolyHandler syncVoiceHandler;
@@ -824,6 +841,7 @@ private:
 	bool crossfadeGroups;
 	bool purged;
 	bool deactivateUIUpdate;
+	bool soundsHaveReleaseStart = false;
 	int rrGroupAmount;
 	//int currentRRGroupIndex;
 

@@ -37,7 +37,7 @@ namespace hise {
     X(semicolon,     ";")        X(dot,          ".")       X(comma,        ",") \
     X(openParen,     "(")        X(closeParen,   ")")       X(openBrace,    "{")    X(closeBrace, "}") \
     X(openBracket,   "[")        X(closeBracket, "]")       X(colon,        ":")    X(question,   "?") \
-    X(typeEquals,    "===")      X(equals,       "==")      X(assign,       "=") \
+    X(typeEquals,    "===")      X(equals,       "==")      X(arrow,        "=>")   X(assign,       "=")     \
     X(typeNotEquals, "!==")      X(notEquals,    "!=")      X(logicalNot,   "!") \
     X(plusEquals,    "+=")       X(plusplus,     "++")      X(plus,         "+") \
     X(minusEquals,   "-=")       X(minusminus,   "--")      X(minus,        "-") \
@@ -1451,6 +1451,9 @@ struct HiseJavascriptEngine::TokenProvider::ObjectMethodToken : public TokenWith
 		s << MarkdownLink::Helpers::getSanitizedFilename(methodTree["name"].toString()) << "/";
 
 		link = { File(), s };
+		link.setType(MarkdownLink::Type::Folder);
+
+		markdownDescription << "  \n[Doc Reference](https://docs.hise.audio/" + link.toString(MarkdownLink::FormattedLinkHtml) + ")";
 	}
 
 	
@@ -1509,11 +1512,16 @@ struct HiseJavascriptEngine::TokenProvider::ApiToken : public TokenWithDot
 
 		String s;
 		s << "scripting/scripting-api/";
-		s << MarkdownLink::Helpers::getSanitizedFilename(classId);
+		s << MarkdownLink::Helpers::getSanitizedFilename(id.toString());
 		s << "#";
 		s << MarkdownLink::Helpers::getSanitizedFilename(mTree["name"].toString()) << "/";
 
 		link = { File(), s };
+
+		link.setType(MarkdownLink::Type::Folder);
+
+		markdownDescription << "  \n[Doc Reference](https://docs.hise.audio/" + link.toString(MarkdownLink::FormattedLinkHtml) + ")";
+
 	}
 
 	MarkdownLink getLink() const override
@@ -1590,7 +1598,11 @@ struct HiseJavascriptEngine::TokenProvider::DebugInformationToken : public Token
 		
 		if (isGlobalClass)
 		{
-			markdownDescription << "Global API class `" << s << "`  \n> Press F1 to open the documentation";
+			if(link.isValid())
+			{
+				link.setType(MarkdownLink::Type::Folder);
+				markdownDescription << " [Doc Reference](https://docs.hise.audio/"  + link.toString(MarkdownLink::FormattedLinkHtml) + ")";
+			}
 		}
 		else
 		{
@@ -1676,11 +1688,10 @@ struct TokenHelpers
 		if (auto slaf = dynamic_cast<ScriptingObjects::ScriptedLookAndFeel*>(ptr->getObject()))
 		{
 			auto l = ScriptingObjects::ScriptedLookAndFeel::getAllFunctionNames();
-
+			
 			for (auto id : l)
 				tokens.add(new LookAndFeelToken(ptr->getTextForName(), id));
-
-			return true;
+			
 		}
 
 

@@ -97,6 +97,10 @@ void GlobalScriptCompileBroadcaster::restoreIncludedScriptFilesFromSnippet(const
 #if USE_BACKEND
 	auto mc = dynamic_cast<MainController*>(this);
 	auto scriptRootFolder = mc->getActiveFileHandler()->getSubDirectory(FileHandlerBase::Scripts);
+
+	if(!scriptRootFolder.isDirectory())
+		return;
+
 	auto snexRootFolder = BackendDllManager::getSubFolder(mc, BackendDllManager::FolderSubType::CodeLibrary);
 
 	auto restoreFromChild = [&](const Identifier& id, const File& rootDirectory)
@@ -488,6 +492,8 @@ ExternalScriptFile::ExternalScriptFile(const File& file):
 	resourceType(ResourceType::FileBased),
 	currentResult(Result::ok())
 {
+	lastEditTime = getFile().getLastModificationTime();
+
 #if USE_BACKEND
 	content.replaceAllContent(file.loadFileAsString());
 	content.setSavePoint();

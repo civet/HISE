@@ -38,6 +38,7 @@ namespace simple_css
 using namespace juce;
 
 struct Animator;
+struct CSSRootComponent;
 
 struct StyleSheet: public ReferenceCountedObject
 {
@@ -54,7 +55,10 @@ struct StyleSheet: public ReferenceCountedObject
 		bool operator==(const Collection& other) const { return list.getFirst() == other.list.getFirst(); }
 		bool operator!=(const Collection& other) const { return !(*this == other); }
 
-		operator bool() const { return !list.isEmpty(); }
+		operator bool() const
+		{
+			return useIsolatedCollections ? !isolatedStyleSheetFileNames.isEmpty() : !list.isEmpty();
+		}
 
 		void setAnimator(Animator* a);
 
@@ -83,6 +87,39 @@ struct StyleSheet: public ReferenceCountedObject
 			clearCache();
 		}
 
+		void addIsolatedCollection(Component* c, const String& fileName, const Collection& other)
+		{
+			setUseIsolatedCollections(true);
+			addCollectionForComponent(c, other);
+
+			if(fileName.isNotEmpty())
+			{
+				for(auto& f: isolatedStyleSheetFileNames)
+				{
+					if(f.first == c)
+					{
+						f.second = fileName;
+						return;
+					}
+				}
+
+				isolatedStyleSheetFileNames.add({ c, fileName});
+			}
+			else
+			{
+				for(const auto& f: isolatedStyleSheetFileNames)
+				{
+					if(f.first == c)
+					{
+						isolatedStyleSheetFileNames.remove(&f);
+						return;
+					}
+				}
+			}
+		}
+
+		void updateIsolatedCollection(const String& fileName, const Collection& other);
+
 		void addCollectionForComponent(Component* c, const Collection& other);
 
 		struct DataProvider
@@ -95,8 +132,19 @@ struct StyleSheet: public ReferenceCountedObject
 
 		Result performAtRules(DataProvider* d);
 
+		/** If this is true, then getForComponent() will look only in the child collection for matches. */
+		void setUseIsolatedCollections(bool shouldUseIsolatedCollections)
+		{
+			useIsolatedCollections = shouldUseIsolatedCollections;
+		}
+		
 	private:
 
+		static bool sameOrParent(Component* possibleParent, Component* componentToLookFor);
+
+		bool useIsolatedCollections = false;
+		
+		Array<std::pair<Component::SafePointer<Component>, String>> isolatedStyleSheetFileNames;
 		Array<std::pair<Component::SafePointer<Component>, List>> childCollections;
 
 		bool createStackTrace = true;
@@ -112,9 +160,13 @@ struct StyleSheet: public ReferenceCountedObject
             String debugLog;
         };
         
-		Array<std::pair<Selector, StyleSheet::Ptr>> cachedMapForAllStates;
+		Array<std::pair<std::pair<Component::SafePointer<Component>, Selector>, StyleSheet::Ptr>> cachedMapForAllStates;
 		Array<CachedStyleSheet> cachedMaps;
-		
+
+		Animator* animator = nullptr;
+
+		Array<std::pair<String, Font>> customFonts;
+
 		List list;
 	};
 
@@ -136,6 +188,22 @@ struct StyleSheet: public ReferenceCountedObject
 
 	void copyPropertiesFromParent(Ptr parent);
 
+	void copyVarProperties(Ptr other)
+	{
+		if(other->varProperties != nullptr)
+		{
+			if(varProperties == nullptr)
+			{
+				varProperties = other->varProperties->clone();
+			}
+			else
+			{
+				for(const auto& nv: other->varProperties->getProperties())
+					varProperties->setProperty(nv.name, nv.value);
+			}
+		}
+	}
+
 	NonUniformBorderData getNonUniformBorder(Rectangle<float> totalArea, PseudoState stateFlag) const;
 	Path getBorderPath(Rectangle<float> totalArea, PseudoState stateFlag) const;
 
@@ -155,7 +223,7 @@ struct StyleSheet: public ReferenceCountedObject
 	Rectangle<float> getPseudoArea(Rectangle<float> sourceArea, int currentState, PseudoElementType area) const;
 	Rectangle<float> truncateBeforeAndAfter(Rectangle<float> sourceArea, int currentState) const;
 
-	void setupComponent(Component* c, int currentState);
+	void setupComponent(CSSRootComponent* cssRoot, Component* c, int currentState);
 
 	Justification getJustification(PseudoState currentState, int defaultXFlag=Justification::horizontallyCentred, int defaultYFlag=Justification::verticallyCentred) const;
     float getOpacity(int state) const;

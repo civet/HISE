@@ -7,134 +7,6 @@ namespace multipage {
 namespace library {
 using namespace juce;
 
-inline var SnippetBrowser::loadSnippet(const var::NativeFunctionArgs& args)
-{
-    if(args.numArguments != 2)
-        return var();
-
-	auto snippet = args.arguments[0].toString();
-    auto category = args.arguments[1].toString();
-
-    auto am = bpe->getBackendProcessor()->getAssetManager();
-    am->initialise();
-	BackendCommandTarget::Actions::loadSnippet(bpe, snippet);
-	auto root = bpe->getRootFloatingTile();
-
-    
-
-    auto catIndex = SnippetBrowserHelpers::getCategoryNames().indexOf(category);
-
-    if(catIndex != -1)
-    {
-        auto c = (SnippetBrowserHelpers::Category)catIndex;
-	    auto foldState = hise::SnippetBrowserHelpers::getFoldConfiguration(c);
-
-		root->forEach<FloatingTileContent>([&](FloatingTileContent* t)
-		{
-			auto s = t->getParentShell()->getLayoutData().getKeyPressId();
-
-			if(s.isValid() && foldState.find(s) != foldState.end())
-			{
-				auto x = foldState[s];
-				t->getParentShell()->setFolded(x);
-			}
-					
-			return false;
-		});
-    
-		bpe->currentCategory = c;
-    }
-    
-    bpe->setCurrentlyActiveProcessor();
-	
-	return var();
-}
-
-
-StringArray BroadcasterWizard::getAutocompleteItems(const Identifier& textEditorId)
-{
-    using SourceIndex = CustomResultPage::SourceIndex;
-    
-    auto chain = findParentComponentOfClass<BackendRootWindow>()->getBackendProcessor()->getMainSynthChain();
-    auto sp = ProcessorHelpers::getFirstProcessorWithType<ProcessorWithScriptingContent>(chain);
-    
-    if(textEditorId == Identifier("moduleIds"))
-    {
-        auto attachType = (SourceIndex)(int)getProperty("attachType");
-        
-        switch(attachType)
-        {
-            case SourceIndex::ComplexData:
-                return ProcessorHelpers::getAllIdsForType<ProcessorWithExternalData>(chain);
-            case SourceIndex::EqEvents:
-                return ProcessorHelpers::getAllIdsForType<CurveEq>(chain);
-            case SourceIndex::ModuleParameters:
-            {
-                auto sa = ProcessorHelpers::getAllIdsForType<Processor>(chain);
-                sa.removeDuplicates(false);
-                sa.sort(true);
-                return sa;
-            }
-			case SourceIndex::RoutingMatrix:
-                return ProcessorHelpers::getAllIdsForType<RoutableProcessor>(chain);
-        }
-    }
-    if(textEditorId == Identifier("moduleParameterIndexes"))
-    {
-        auto firstId = getProperty("moduleIds")[0].toString().trim();
-        
-        if(auto p = ProcessorHelpers::getFirstProcessorWithName(chain, firstId))
-        {
-            StringArray sa;
-            int numParameters = p->getNumParameters();
-            for(int i = 0; i < numParameters; i++)
-                sa.add(p->getIdentifierForParameterIndex(i).toString());
-
-            return sa;
-        }
-    }
-    if(textEditorId == Identifier("componentIds") ||
-       textEditorId == Identifier("targetComponentIds"))
-    {
-        StringArray sa;
-        
-        int numComponents = sp->getScriptingContent()->getNumComponents();
-
-        for(int i = 0; i < numComponents; i++)
-        {
-            sa.add(sp->getScriptingContent()->getComponent(i)->getId());
-        }
-
-        return sa;
-    }
-    if(textEditorId == Identifier("propertyType") ||
-       textEditorId == Identifier("targetPropertyType"))
-    {
-        auto pToUse = textEditorId == Identifier("propertyType") ? "componentIds" : "targetComponentIds";
-
-        auto n = getProperty(pToUse);
-
-        StringArray sa;
-
-        if(n.isArray())
-        {
-	        auto name = n[0].toString().trim();
-
-	        if(auto sc = sp->getScriptingContent()->getComponentWithName(name.trim()))
-	        {
-		        auto numIds = sc->getNumIds();
-
-	            for(int i = 0; i < numIds; i++)
-		            sa.add(sc->getIdFor(i).toString());
-	        }
-        }
-
-        return sa;
-    }
-    
-    return {};
-}
-
 
 CustomResultPage::CustomResultPage(Dialog& r, const var& obj):
     PlaceholderContentBase(r, obj),
@@ -151,15 +23,16 @@ var CustomResultPage::getArgs(SourceIndex source, const String& noneArgs)
     {
     case SourceIndex::None:                 return noneArgs;
     case SourceIndex::ComplexData:          return "processor, index, value";
-    case SourceIndex::ComponentProperties: return "component, property, value";
-    case SourceIndex::ComponentVisibility: return "component, isVisible";
-    case SourceIndex::ContextMenu: return "component, index";
-    case SourceIndex::EqEvents: return "eventType, value";
-    case SourceIndex::ModuleParameters: return "processor, parameter, value";
-    case SourceIndex::MouseEvents: return "component, event";
-    case SourceIndex::ProcessingSpecs: return "sampleRate, blockSize";
-    case SourceIndex::RadioGroup: return "radioGroupIndex";
-    case SourceIndex::RoutingMatrix: return "module";
+    case SourceIndex::ComponentProperties:  return "component, property, value";
+    case SourceIndex::ComponentValue:       return "component, value";
+    case SourceIndex::ComponentVisibility:  return "component, isVisible";
+    case SourceIndex::ContextMenu:          return "component, index";
+    case SourceIndex::EqEvents:             return "eventType, value";
+    case SourceIndex::ModuleParameters:     return "processor, parameter, value";
+    case SourceIndex::MouseEvents:          return "component, event";
+    case SourceIndex::ProcessingSpecs:      return "sampleRate, blockSize";
+    case SourceIndex::RadioGroup:           return "radioGroupIndex";
+    case SourceIndex::RoutingMatrix:        return "module";
     case SourceIndex::numSourceIndexTypes: break;
     default: ;
     }
@@ -195,7 +68,7 @@ String CustomResultPage::createFunctionBodyIfAnonymous(const String& functionNam
 void CustomResultPage::appendLine(String& x, const var& state, const String& suffix,
     const Array<var>& args, Array<StringProcessor> sp)
 {
-    x << state["id"].toString() << suffix << "(";
+    x << getVariableName() << suffix << "(";
 
     int idx = 0;
 
@@ -223,6 +96,8 @@ void CustomResultPage::appendLine(String& x, const var& state, const String& suf
                 
 	            v = JSON::toString(var(list), true);
             }
+            else if (pr == StringProcessor::FirstItemAsString)
+                v = a[0].toString().quoted();
             else if(pr == StringProcessor::JoinToStringWithNewLines)
                 v = Dialog::joinVarArrayToNewLineString(a).replace("\n", "\\n").quoted();
         }
@@ -282,6 +157,10 @@ String CustomResultPage::getTargetLine(TargetIndex target, const var& state)
                    { state["targetComponentIds"], state["targetMetadata"], functionBody},
                    { StringProcessor::None,       StringProcessor::None,   StringProcessor::Unquote});
         break;
+    case TargetIndex::ModuleParameter:
+        appendLine(x, state, ".addModuleParameterSyncer",
+                   { state["targetModuleId"], state["targetModuleParameter"], state["targetMetadata"] },
+                   { StringProcessor::FirstItemAsString, StringProcessor::FirstItemAsString, StringProcessor::None });
     case TargetIndex::numTargetIndexTypes: break;
     default: ;
     }
@@ -309,8 +188,11 @@ String CustomResultPage::getAttachLine(SourceIndex source, const var& state)
                        state["attachMetadata"]
                    });
         break;
+    case SourceIndex::ComponentValue:
+        appendLine(x, state, ".attachToComponentValue", { state["componentIds"], state["attachMetadata"]});
+        break;
     case SourceIndex::ComponentVisibility:
-        appendLine(x, state, ".attachToComponentProperties", { state["componentIds"],
+        appendLine(x, state, ".attachToComponentVisibility", { state["componentIds"],
                        state["attachMetadata"]
                    });
         break;
@@ -390,45 +272,69 @@ String CustomResultPage::getAttachLine(SourceIndex source, const var& state)
     return x;
 }
 
+String CustomResultPage::getVariableName() const
+{
+    auto br = findParentComponentOfClass<EncodedBroadcasterWizard>();
+    
+    auto cid = Dialog::getGlobalState(*const_cast<CustomResultPage*>(this), "id", var()).toString();
+    
+    if(br->customId.isNotEmpty())
+        cid = br->customId;
+
+    return cid;
+}
+
 void CustomResultPage::postInit()
 {
     gs = Dialog::getGlobalState(*this, {}, var());
     String b;
 
+    auto listenersOnly = findParentComponentOfClass<EncodedBroadcasterWizard>()->addListenersOnly;
+
     String nl = "\n";
 
-    b << "// Broadcaster definition" << nl;
-    b << "const var " << Dialog::getGlobalState(*this, "id", var()).toString() << " = Engine.createBroadcaster({" << nl;
-
-    auto sourceIndex = (SourceIndex)(int)gs["attachType"];
-
-    auto noneArgs = gs["noneArgs"].toString();
-
-    b << "  " << String("id").quoted() << ": " << gs["id"].toString().quoted();
-    b << ",\n  " << String("args").quoted() << ": " << JSON::toString(Dialog::parseCommaList(getArgs(sourceIndex, noneArgs)), true);
-
-    if(gs["tags"].toString().isNotEmpty())
-        b << ",\n  " << String("tags").quoted() << ": " << JSON::toString(gs["tags"], true);
-
-    if(gs["comment"].toString().isNotEmpty())
-        b << ",\n  " << String("comment").quoted() << ": " << gs["tags"].toString();
-
-    if((int)gs["colour"])
-        b << ",\n  " << String("colour").quoted() << ": " << gs["colour"].toString();
-            
-    b << nl << "});" << nl << nl;
-
-    if(sourceIndex != SourceIndex::None)
+    if(!listenersOnly)
     {
-        b << "// attach to event Type" << nl;
-        b << getAttachLine(sourceIndex, gs);
-    }
+	    b << "// Broadcaster definition" << nl;
+	    b << "const var " << getVariableName() << " = Engine.createBroadcaster({" << nl;
 
+	    auto sourceIndex = (SourceIndex)(int)gs["attachType"];
+	    auto noneArgs = gs["noneArgs"].toString();
+
+	    b << "  " << String("id").quoted() << ": " << gs["id"].toString().quoted();
+	    b << ",\n  " << String("args").quoted() << ": " << JSON::toString(Dialog::parseCommaList(getArgs(sourceIndex, noneArgs)), true);
+
+	    if(gs["tags"].toString().isNotEmpty())
+	        b << ",\n  " << String("tags").quoted() << ": " << JSON::toString(gs["tags"], true);
+
+	    if(gs["comment"].toString().isNotEmpty())
+	        b << ",\n  " << String("comment").quoted() << ": " << gs["comment"].toString().quoted();
+
+	    if((int)gs["colour"])
+	        b << ",\n  " << String("colour").quoted() << ": " << gs["colour"].toString();
+	            
+	    b << nl << "});" << nl << nl;
+
+	    if(sourceIndex != SourceIndex::None)
+	    {
+	        b << "// attach to event Type" << nl;
+	        b << getAttachLine(sourceIndex, gs);
+	    }
+    }
+    
     auto targetIndex = (TargetIndex)(int)gs["targetType"];
 
     if(targetIndex != TargetIndex::None)
     {
-        b << nl << "// attach first listener" << nl;
+        if(listenersOnly)
+        {
+	        b << nl << "// attach additional listener" << nl;
+        }
+        else
+        {
+	        b << nl << "// attach first listener" << nl;
+        }
+        
         b << getTargetLine(targetIndex, gs);
     }
 
